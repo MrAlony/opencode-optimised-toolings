@@ -1,6 +1,6 @@
 {
   "name": "opencode-optimised-toolings",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Portable, production-grade OpenCode custom tooling distribution with filesystem, terminal, CBM, web, stealth, Tor, and SearXNG integration.",
@@ -10,7 +10,9 @@
     "packages/terminal",
     "packages/cbm",
     "packages/web",
-    "packages/stealth"
+    "packages/stealth",
+    "packages/selfpatch",
+    "packages/tui"
   ],
   "files": [
     "index.js",
@@ -30,6 +32,8 @@
     "packages/cbm/SKILL.md",
     "packages/web",
     "packages/stealth",
+    "packages/selfpatch",
+    "packages/tui",
     "scripts",
     "services/searxng",
     "services/tor/README.md",
@@ -40,6 +44,7 @@
     "test": "node scripts/test-all.mjs",
     "test:root": "node --test test/*.test.mjs",
     "test:live": "node test/live-all-tools.mjs",
+    "test:patch:e2e": "node packages/selfpatch/test/network/e2e-patch.test.mjs",
     "install:opencode": "node scripts/install.mjs",
     "uninstall:opencode": "node scripts/uninstall.mjs",
     "doctor": "node scripts/doctor.mjs",
@@ -53,6 +58,12 @@
     "linkedom": "^0.18.12",
     "pdf-parse": "^1.1.1",
     "turndown": "^7.2.1",
-    "undici": "^7.13.0"
+    "undici": "^7.13.0",
+    "@opentui/solid": "0.4.5",
+    "solid-js": "1.9.12",
+    "tar": "^7.4.3"
+  },
+  "devDependencies": {
+    "bun": "1.3.14"
   }
 }

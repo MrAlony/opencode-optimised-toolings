@@ -3,6 +3,7 @@ import { EnhancedTerminalPlugin } from "./packages/terminal/index.js";
 import cbmPlugin from "./packages/cbm/dist/index.js";
 import { WebToolingPlugin } from "./packages/web/index.js";
 import { StealthToolingPlugin } from "./packages/stealth/index.js";
+import { SelfPatchPlugin } from "./packages/selfpatch/index.js";
 
 function combineHooks(parts) {
   const output = { tool: {} };
@@ -27,6 +28,7 @@ export const OptimisedToolingsPlugin = async (input) => combineHooks(await Promi
   cbmPlugin(input),
   WebToolingPlugin(input),
   StealthToolingPlugin(input),
+  SelfPatchPlugin(input),
 ]));
 
 export default OptimisedToolingsPlugin;

@@ -11,7 +11,14 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_BATCH_OUTPUT_BYTES = 192 * 1024;
 const WINDOWS_PROCESS_QUERY_TIMEOUT_MS = 5_000;
 const WINDOWS_DESCENDANT_MARKER = "__OC_DESCENDANTS__";
+const WINDOWS_COMMAND_END = "__OC_COMMAND_END__";
 const START_SETTLE_MS = process.platform === "win32" ? 1_000 : 250;
+// The Windows wrapper spends ~1s enumerating descendants (for the detached-child
+// marker) before it exits, so a command that failed during startup can close
+// just past the settlement deadline. Give close a bounded extra window before
+// declaring the process started, so early exits are reported as failures and
+// their records are never leaked as running.
+const START_SETTLE_TAIL_MS = process.platform === "win32" ? 1_500 : 400;
 const DEFAULT_READINESS_TIMEOUT_MS = 5_000;
 const MAX_READINESS_TIMEOUT_MS = 30_000;
 const STOP_CONFIRM_TIMEOUT_MS = 2_000;
@@ -28,7 +35,7 @@ function getShell() {
 
 function shellCommand(command) {
   if (process.platform !== "win32") return command;
-  return `& { ${command} }; $ocExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }; $ocAll = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId); $ocPending = @([int]$PID); $ocSeen = @{}; $ocDesc = @(); while ($ocPending.Count -gt 0) { $ocParent = [int]$ocPending[0]; if ($ocPending.Count -eq 1) { $ocPending = @() } else { $ocPending = @($ocPending[1..($ocPending.Count - 1)]) }; foreach ($ocItem in $ocAll | Where-Object { [int]$_.ParentProcessId -eq $ocParent }) { $ocPid = [int]$ocItem.ProcessId; if (-not $ocSeen.ContainsKey($ocPid)) { $ocSeen[$ocPid] = $true; $ocDesc += $ocPid; $ocPending += $ocPid } } }; [Console]::Out.WriteLine('${WINDOWS_DESCENDANT_MARKER}' + (($ocDesc | ConvertTo-Json -Compress) -replace '\\s','')); exit $ocExit`;
+  return `& { ${command} }; [Console]::Out.WriteLine('${WINDOWS_COMMAND_END}'); $ocExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }; $ocAll = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId); $ocPending = @([int]$PID); $ocSeen = @{}; $ocDesc = @(); while ($ocPending.Count -gt 0) { $ocParent = [int]$ocPending[0]; if ($ocPending.Count -eq 1) { $ocPending = @() } else { $ocPending = @($ocPending[1..($ocPending.Count - 1)]) }; foreach ($ocItem in $ocAll | Where-Object { [int]$_.ParentProcessId -eq $ocParent }) { $ocPid = [int]$ocItem.ProcessId; if (-not $ocSeen.ContainsKey($ocPid)) { $ocSeen[$ocPid] = $true; $ocDesc += $ocPid; $ocPending += $ocPid } } }; [Console]::Out.WriteLine('${WINDOWS_DESCENDANT_MARKER}' + (($ocDesc | ConvertTo-Json -Compress) -replace '\\s','')); exit $ocExit`;
 }
 
 function quotedExecutableRepair(command, output) {
@@ -38,25 +45,33 @@ function quotedExecutableRepair(command, output) {
   return `& ${command.trimStart()}`;
 }
 
+function looksLikePowerShellParseError(text) {
+  if (process.platform !== "win32") return false;
+  return /(?:^|\r?\n)\s*At line:\s*\d+\s+char:\s*\d+\s*\r?\n\s*\+ |Unexpected token [^\r\n]* in expression or statement|CategoryInfo\s*:\s*ParserError|FullyQualifiedErrorId\s*:\s*UnexpectedToken/.test(text);
+}
+
 function transientSpawnFailure(errorCode) {
   return typeof errorCode === "string" && TRANSIENT_SPAWN_CODES.has(errorCode.toUpperCase());
 }
 
 function extractWindowsDescendants(text) {
-  if (process.platform !== "win32") return { output: text, pids: [] };
+  if (process.platform !== "win32") return { output: text, pids: [], commandEnded: false };
   const pattern = new RegExp(`(?:\\r?\\n)?${WINDOWS_DESCENDANT_MARKER}(\\[[^\\r\\n]*\\]|\\d+|null)(?:\\r?\\n)?`, "g");
+  const commandEnded = text.includes(WINDOWS_COMMAND_END);
   const pids = [];
-  const output = text.replace(pattern, (_match, json) => {
-    try {
-      const parsed = JSON.parse(json);
-      for (const value of Array.isArray(parsed) ? parsed : parsed == null ? [] : [parsed]) {
-        const pid = Number(value);
-        if (Number.isInteger(pid) && pid > 0) pids.push(pid);
-      }
-    } catch {}
-    return "";
-  });
-  return { output, pids: [...new Set(pids)] };
+  const output = text
+    .replace(new RegExp(`(?:\\r?\\n)?${WINDOWS_COMMAND_END}(?:\\r?\\n)?`, "g"), "")
+    .replace(pattern, (_match, json) => {
+      try {
+        const parsed = JSON.parse(json);
+        for (const value of Array.isArray(parsed) ? parsed : parsed == null ? [] : [parsed]) {
+          const pid = Number(value);
+          if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+        }
+      } catch {}
+      return "";
+    });
+  return { output, pids: [...new Set(pids)], commandEnded };
 }
 
 function getSession(context) {
@@ -216,6 +231,9 @@ async function currentWindowsDescendants(rootPid) {
 
 async function refreshTrackedProcess(rec) {
   if (process.platform !== "win32" || rec.exitCode !== null || rec.rootExitCode === null) return;
+  const now = Date.now();
+  if (rec.lastRefreshAt !== undefined && now - rec.lastRefreshAt < 400) return;
+  rec.lastRefreshAt = now;
   const processes = await queryWindowsProcesses();
   const live = new Set(processes.map((item) => Number(item.ProcessId)));
   rec.trackedPids = rec.trackedPids.filter((pid) => live.has(pid));
@@ -407,7 +425,7 @@ function startProc(command, cwd, id, label) {
   });
   let resolveClosed;
   const closed = new Promise((resolvePromise) => { resolveClosed = resolvePromise; });
-  const rec = { id, label, command, executedCommand: command, cwd, pid: proc.pid, proc, chunks: [], bytes: 0, truncated: false, exitCode: null, rootExitCode: null, trackedPids: [], startTime: Date.now(), spawnError: null, spawnErrorCode: null, closed };
+  const rec = { id, label, command, executedCommand: command, cwd, pid: proc.pid, proc, chunks: [], bytes: 0, truncated: false, exitCode: null, rootExitCode: null, trackedPids: [], startTime: Date.now(), spawnError: null, spawnErrorCode: null, closed, commandEnded: false };
   const capture = { get bytes() { return rec.bytes; }, set bytes(v) { rec.bytes = v; }, get truncated() { return rec.truncated; }, set truncated(v) { rec.truncated = v; } };
   proc.stdout?.on("data", (data) => appendBounded(rec.chunks, data, capture));
   proc.stderr?.on("data", (data) => appendBounded(rec.chunks, data, capture));
@@ -419,16 +437,39 @@ function startProc(command, cwd, id, label) {
     rec.exitCode = -1;
     resolveClosed();
   });
-  proc.on("close", async (code) => {
+  proc.on("close", (code) => {
     rec.rootExitCode = code ?? 0;
-    if (process.platform === "win32") {
-      const captured = extractWindowsDescendants(Buffer.concat(rec.chunks).toString("utf8"));
-      rec.chunks = captured.output ? [Buffer.from(captured.output)] : [];
-      rec.bytes = Buffer.byteLength(captured.output);
-      rec.trackedPids = [...new Set([...captured.pids, ...await currentWindowsDescendants(rec.pid)])];
+    if (process.platform !== "win32") {
+      if (rec.trackedPids.length === 0) rec.exitCode = rec.rootExitCode;
+      resolveClosed();
+      return;
     }
+    const captured = extractWindowsDescendants(Buffer.concat(rec.chunks).toString("utf8"));
+    rec.commandEnded = rec.commandEnded || captured.commandEnded;
+    rec.chunks = captured.output ? [Buffer.from(captured.output)] : [];
+    rec.bytes = Buffer.byteLength(captured.output);
+    // The wrapper's marker snapshot is authoritative for detached children.
+    // Record the exit without waiting for a slow live process-table query, so a
+    // process that exited during startup is never reported as running.
+    rec.trackedPids = [...new Set(captured.pids)];
     if (rec.trackedPids.length === 0) rec.exitCode = rec.rootExitCode;
     resolveClosed();
+    // Refine the tracked set in the background against a fresh live snapshot:
+    // prune stale marker pids that already died and adopt live descendants the
+    // marker missed, without delaying exit settlement.
+    queryWindowsProcesses()
+      .then(async (processes) => {
+        const live = new Set(processes.map((item) => Number(item.ProcessId)));
+        const descendants = descendantPids(processes, rec.pid);
+        const combined = [...new Set([...rec.trackedPids.filter((pid) => live.has(pid)), ...descendants])];
+        rec.trackedPids = combined;
+        if (rec.trackedPids.length === 0 && rec.rootExitCode !== null && rec.exitCode === null) {
+          rec.exitCode = rec.rootExitCode;
+        } else if (rec.trackedPids.length > 0 && rec.exitCode !== null) {
+          rec.exitCode = null;
+        }
+      })
+      .catch(() => {});
   });
   procs.set(id, rec);
   return rec;
@@ -452,7 +493,15 @@ function portReady(port) {
 }
 
 async function readinessSatisfied(rec, op) {
-  if (op.ready_output && outputOf(rec, 64_000).includes(op.ready_output)) return { ready: true, evidence: `captured output contains ${JSON.stringify(op.ready_output)}` };
+  if (op.ready_output) {
+    const output = outputOf(rec, 64_000);
+    // The Windows wrapper can echo the command line inside a PowerShell parse
+    // error before the wrapper's close event fires. Ignore readiness matches
+    // while a parse error is present so a broken start is not reported as
+    // ready; the settle loop then observes the non-zero close and triggers
+    // startup repair.
+    if (!looksLikePowerShellParseError(output) && output.includes(op.ready_output)) return { ready: true, evidence: `captured output contains ${JSON.stringify(op.ready_output)}` };
+  }
   if (op.ready_port && await portReady(op.ready_port)) return { ready: true, evidence: `127.0.0.1:${op.ready_port} accepted a TCP connection` };
   if (op.ready_url) {
     try {
@@ -466,15 +515,59 @@ async function readinessSatisfied(rec, op) {
 
 async function awaitStartup(rec, op) {
   const hasReadiness = Boolean(op.ready_output || op.ready_port || op.ready_url);
+  const detectCommandEnd = () => {
+    if (rec.commandEnded) return;
+    rec.commandEnded = Buffer.concat(rec.chunks).toString("utf8").includes(WINDOWS_COMMAND_END);
+  };
   const requested = op.startup_timeout_ms ?? (hasReadiness ? DEFAULT_READINESS_TIMEOUT_MS : START_SETTLE_MS);
   const timeoutMs = Math.min(Math.max(Math.floor(requested), START_SETTLE_MS), MAX_READINESS_TIMEOUT_MS);
   const deadline = Date.now() + timeoutMs;
   do {
     await settleRecord(rec, Math.min(100, Math.max(0, deadline - Date.now())));
-    if (rec.exitCode !== null) return { ready: false, exited: true, timeoutMs, evidence: "" };
+    if (rec.exitCode !== null) return { ready: false, exited: true, timeoutMs, evidence: `the command exited with code ${rec.exitCode} during the ${timeoutMs}ms startup settlement` };
+    // A wrapper that already closed with a non-zero exit means the command
+    // itself failed, even if a transient CIM-captured child still lingers.
+    // Treat that as an early exit instead of reporting the process as started.
+    if (rec.rootExitCode !== null && rec.rootExitCode !== 0) return { ready: false, exited: true, timeoutMs, evidence: `the command exited with code ${rec.rootExitCode} during the ${timeoutMs}ms startup settlement` };
     const readiness = await readinessSatisfied(rec, op);
     if (readiness.ready) return { ready: true, exited: false, timeoutMs, evidence: readiness.evidence };
-    if (!hasReadiness && Date.now() >= deadline) return { ready: true, exited: false, timeoutMs, evidence: `process remained alive through the ${timeoutMs}ms startup settlement` };
+    // A wrapper that closed with code 0 means the command completed; if no
+    // tracked child remains alive the process has stopped, otherwise the
+    // child continues and the process is considered started.
+    if (rec.rootExitCode === 0) {
+      if (rec.trackedPids.length === 0 && rec.exitCode === null) rec.exitCode = 0;
+      return rec.exitCode === null
+        ? { ready: true, exited: false, timeoutMs, evidence: `command completed within the ${timeoutMs}ms startup settlement with a tracked child process still running` }
+        : { ready: false, exited: true, timeoutMs, evidence: `the command exited with code ${rec.exitCode} during the ${timeoutMs}ms startup settlement` };
+    }
+    if (!hasReadiness && Date.now() >= deadline) {
+      detectCommandEnd();
+      if (!rec.commandEnded) {
+        // The command is still running inside the wrapper (no end sentinel
+        // yet), so the process is genuinely alive: declare it started without
+        // paying any tail penalty.
+        return { ready: true, exited: false, timeoutMs, evidence: `process remained alive through the ${timeoutMs}ms startup settlement` };
+      }
+      // The command already finished and the wrapper is only writing its
+      // descendant marker. Wait up to a bounded tail for the decisive close
+      // event (or a non-zero wrapper exit) so early exits are reported as
+      // failures instead of started processes.
+      const tailDeadline = Date.now() + START_SETTLE_TAIL_MS;
+      while (Date.now() < tailDeadline) {
+        await settleRecord(rec, Math.min(100, Math.max(0, tailDeadline - Date.now())));
+        if (rec.exitCode !== null) return { ready: false, exited: true, timeoutMs, evidence: `the command exited with code ${rec.exitCode} during the ${timeoutMs}ms startup settlement` };
+        if (rec.rootExitCode !== null && rec.rootExitCode !== 0) return { ready: false, exited: true, timeoutMs, evidence: `the command exited with code ${rec.rootExitCode} during the ${timeoutMs}ms startup settlement` };
+        const tailReadiness = await readinessSatisfied(rec, op);
+        if (tailReadiness.ready) return { ready: true, exited: false, timeoutMs, evidence: tailReadiness.evidence };
+        if (rec.rootExitCode === 0) {
+          if (rec.trackedPids.length === 0 && rec.exitCode === null) rec.exitCode = 0;
+          return rec.exitCode === null
+            ? { ready: true, exited: false, timeoutMs, evidence: "command completed with a tracked child process still running" }
+            : { ready: false, exited: true, timeoutMs, evidence: `the command exited with code ${rec.exitCode} during the ${timeoutMs}ms startup settlement` };
+        }
+      }
+      return { ready: true, exited: false, timeoutMs, evidence: `process remained alive through the ${timeoutMs}ms startup settlement (and a ${START_SETTLE_TAIL_MS}ms exit-confirmation window)` };
+    }
   } while (Date.now() < deadline);
   return { ready: false, exited: false, timeoutMs, evidence: "readiness condition was not observed before the bounded startup deadline" };
 }

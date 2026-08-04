@@ -114,6 +114,7 @@ try {
     queries: [{ query: "OpenCode official documentation", max_results: 3 }], max_concurrency: 1, output_budget_bytes: 16_384,
   }, context("live-stealth-search")), (output) => /STEALTH SEARCH RESULT: SUCCESS/.test(output) && /https?:\/\//.test(output));
   await check("stealth_rotate_tor", () => plugin.tool.stealth_rotate_tor.execute({}, context("live-stealth-rotate")), (output) => /STEALTH TOR ROTATION: SUCCESS/.test(output) && /250 OK/.test(output) && /Browser context rebuilt: yes/.test(output));
+  await check("toolings", () => plugin.tool.toolings.execute({ action: "status" }, context("live-toolings")), (output) => /Self-patch status: (dev-mode|no-opencode|idle|ok|unsupported-version|error)/.test(output) && /OpenCode version:/.test(output));
 } finally {
   if (cbmProject) {
     try { await plugin.tool.cbm_project.execute({ action: "delete", project: cbmProject, repo_path: "", mode: "fast" }, context("live-cbm-project-delete")); } catch {}

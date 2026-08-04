@@ -9,6 +9,8 @@ const commands = [
   [process.execPath, [npmCli, "run", "test", "-w", "packages/cbm"]],
   [process.execPath, [npmCli, "run", "test", "-w", "packages/web"]],
   [process.execPath, [npmCli, "run", "test", "-w", "packages/stealth"]],
+  [process.execPath, [npmCli, "run", "test", "-w", "packages/selfpatch"]],
+  [process.execPath, [npmCli, "run", "test", "-w", "packages/tui"]],
   [process.execPath, [npmCli, "run", "test:root"]],
   [process.execPath, ["--check", "index.js"]],
 ];

@@ -1,0 +1,15 @@
+{
+  "name": "@sparkly/toolings-tui",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenCode TUI companion for the unified tooling: patch-progress status, toasts, rich renderers for all custom tools, and a toolings status command.",
+  "main": "index.tsx",
+  "exports": {
+    ".": "./index.tsx",
+    "./*": "./*"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
