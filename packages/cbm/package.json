@@ -1,6 +1,6 @@
 {
   "name": "oc-cbm",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "OpenCode CBM plugin with freshness-verified, relevance-filtered investigations and bounded project lifecycle management",
   "type": "module",
   "main": "dist/index.js",

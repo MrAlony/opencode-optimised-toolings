@@ -167,6 +167,32 @@ function transient(status, error) {
   return Boolean(error) || status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
+export async function disposeDispatcher(dispatcher) {
+  if (!dispatcher) return;
+
+  const close = typeof dispatcher.close === 'function' ? dispatcher.close.bind(dispatcher) : null;
+  const destroy = typeof dispatcher.destroy === 'function' ? dispatcher.destroy.bind(dispatcher) : null;
+
+  if (close) {
+    try {
+      await Promise.resolve(close());
+      return;
+    } catch {
+      // Some runtimes expose an incompatible or partially implemented close().
+      // Fall through to destroy() when available so cleanup never masks the fetch result.
+    }
+  }
+
+  if (destroy) {
+    try { await Promise.resolve(destroy()); } catch {}
+  }
+}
+
+async function cancelUnusedBody(response) {
+  if (!response?.body || response.bodyUsed || response.body.locked !== false) return;
+  try { await Promise.resolve(response.body.cancel()); } catch {}
+}
+
 async function fetchOne(spec, signal) {
   const timeoutMs = clamp(spec.timeout_ms, 1_000, 120_000, DEFAULT_TIMEOUT_MS);
   const maxBytes = clamp(spec.max_source_bytes, 16 * 1024, MAX_SOURCE_BYTES, 2 * 1024 * 1024);
@@ -238,8 +264,8 @@ async function fetchOne(spec, signal) {
       }
       throw error;
     } finally {
-      if (response?.body?.locked === false && !response.bodyUsed) await response.body.cancel().catch(() => {});
-      if (dispatcher) await dispatcher.close().catch(() => {});
+      await cancelUnusedBody(response);
+      await disposeDispatcher(dispatcher);
     }
   }
 }

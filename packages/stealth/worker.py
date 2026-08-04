@@ -35,6 +35,20 @@ _browser_lock = asyncio.Lock()
 _last_newnym = 0.0
 
 
+def configure_utf8_stdio() -> None:
+    """Keep the JSON-lines protocol Unicode-safe on Windows and legacy locales."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
+configure_utf8_stdio()
+
+
 def port_open(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=0.5): return True
@@ -179,23 +193,59 @@ async def fetch_item(spec: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc: return {"ok": False, "url": raw_url, "error": str(exc), "content": ""}
 
 
+DDG_SEARCH_ENDPOINTS = (
+    "https://html.duckduckgo.com/html/",
+    "https://lite.duckduckgo.com/lite/",
+    "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/html",
+)
+
+
+def parse_search_results(html: str, maximum: int) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.select_one("form#challenge-form"): return []
+    rows = []
+    for link in soup.select("a.result__a, a.result-link"):
+        href = str(link.get("href", ""))
+        if not href or "y.js" in href or "ad_provider=" in href: continue
+        parsed = urllib.parse.urlparse(href)
+        actual = urllib.parse.unquote(urllib.parse.parse_qs(parsed.query).get("uddg", [href])[0])
+        parent = link.find_parent("div", class_="result") or link.find_parent("tr") or link.parent
+        snippet = parent.select_one(".result__snippet, .result-snippet") if parent else None
+        title = link.get_text(" ", strip=True)
+        if not title or not actual: continue
+        rows.append(f"{len(rows)+1}. {title}\n   {actual}\n   {snippet.get_text(' ', strip=True) if snippet else ''}")
+        if len(rows) >= maximum: break
+    return rows
+
+
 async def search_item(spec: dict[str, Any]) -> dict[str, Any]:
     query = str(spec.get("query", "")).strip(); maximum = max(1, min(int(spec.get("max_results") or 10), 20))
     if not query: return {"ok": False, "query": query, "error": "Query must not be empty.", "content": ""}
+    errors = []
     try:
         import httpx
-        ensure_tor(); url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
-        async with httpx.AsyncClient(proxy=f"socks5://127.0.0.1:{SOCKS_PORT}", follow_redirects=True, timeout=60, headers={"User-Agent": UA}) as client:
-            response = await client.get(url); response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser"); rows = []
-        for link in soup.select("a.result__a"):
-            href = link.get("href", "")
-            if "y.js" in href or "ad_provider=" in href: continue
-            parsed = urllib.parse.urlparse(href); actual = urllib.parse.parse_qs(parsed.query).get("uddg", [href])[0]
-            parent = link.find_parent("div", class_="result") or link.parent; snippet = parent.select_one(".result__snippet") if parent else None
-            rows.append(f"{len(rows)+1}. {link.get_text(strip=True)}\n   {actual}\n   {snippet.get_text(strip=True) if snippet else ''}")
-            if len(rows) >= maximum: break
-        return {"ok": True, "query": query, "content": "\n\n".join(rows) or "No results found (DuckDuckGo may have challenged the request)."}
+        ensure_tor()
+        headers = {
+            "User-Agent": UA,
+            "Accept-Language": "en-US,en;q=0.8",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": "https://html.duckduckgo.com/",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+        }
+        async with httpx.AsyncClient(proxy=f"socks5://127.0.0.1:{SOCKS_PORT}", follow_redirects=True, timeout=60, headers=headers) as client:
+            for url in DDG_SEARCH_ENDPOINTS:
+                try:
+                    response = await client.post(url, data={"q": query, "b": "", "kl": "wt-wt"})
+                    response.raise_for_status()
+                    rows = parse_search_results(response.text, maximum)
+                    if rows: return {"ok": True, "query": query, "backend": url, "content": "\n\n".join(rows)}
+                    errors.append(f"{url}: no parseable results or a challenge page was returned")
+                except Exception as exc:
+                    errors.append(f"{url}: {exc}")
+        return {"ok": False, "query": query, "error": "All bounded DuckDuckGo Tor routes failed. " + " | ".join(errors), "content": ""}
     except Exception as exc: return {"ok": False, "query": query, "error": str(exc), "content": ""}
 
 

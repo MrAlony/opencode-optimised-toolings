@@ -88,6 +88,64 @@ test("source inventory mirrors backend exclusions for legacy tools directories",
   }
 });
 
+test("Git-aware inventory remains scoped to a requested monorepo subdirectory", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+  const directory = await mkdtemp(`${process.env.TEMP || process.cwd()}\\oc-cbm-monorepo-`);
+  const packageRoot = `${directory}\\packages\\cbm`;
+  try {
+    execFileSync("git", ["init", "-q", directory]);
+    await mkdir(`${packageRoot}\\src`, { recursive: true });
+    await mkdir(`${directory}\\packages\\other`, { recursive: true });
+    await writeFile(`${packageRoot}\\src\\active.ts`, "export const active = true;\n");
+    await writeFile(`${directory}\\packages\\other\\outside.ts`, "export const outside = true;\n");
+    const result = compareIndexedStructure(packageRoot, ["src/active.ts"]);
+    assert.equal(result.status, "consistent");
+    assert.equal(result.currentCount, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("source inventory excludes local environments, ignored backups, and generated settings", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+  const directory = await mkdtemp(`${process.env.TEMP || process.cwd()}\\oc-cbm-ignore-`);
+  try {
+    execFileSync("git", ["init", "-q", directory]);
+    await mkdir(`${directory}\\src`, { recursive: true });
+    await mkdir(`${directory}\\packages\\worker\\.venv\\lib`, { recursive: true });
+    await mkdir(`${directory}\\config`, { recursive: true });
+    await writeFile(`${directory}\\.gitignore`, "**/.venv/\nconfig/backup-*\n**/settings.local.yml\n");
+    await writeFile(`${directory}\\src\\active.ts`, "export const active = true;\n");
+    await writeFile(`${directory}\\packages\\worker\\.venv\\lib\\generated.py`, "generated = True\n");
+    await writeFile(`${directory}\\config\\backup-agents.md`, "ignored backup\n");
+    await writeFile(`${directory}\\settings.local.yml`, "secret_key: local\n");
+    const result = compareIndexedStructure(directory, ["src/active.ts"]);
+    assert.equal(result.status, "consistent");
+    assert.equal(result.currentCount, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("structural verification ignores data-only and minified assets but retains implementation files", async () => {
+  const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+  const directory = await mkdtemp(`${process.env.TEMP || process.cwd()}\\oc-cbm-structural-content-`);
+  try {
+    await mkdir(`${directory}\\src`, { recursive: true });
+    await mkdir(`${directory}\\static`, { recursive: true });
+    await writeFile(`${directory}\\src\\implementation.ts`, "export function execute() { return true; }\n");
+    await writeFile(`${directory}\\src\\currencies.py`, "CURRENCIES = {\"USD\": \"Dollar\"}\n");
+    await writeFile(`${directory}\\static\\bundle.min.js`, "const generated=1;\n");
+    const result = compareIndexedStructure(directory, ["src/implementation.ts"]);
+    assert.equal(result.status, "consistent");
+    assert.equal(result.currentCount, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("structural verification detects missing current and removed indexed files", async () => {
   const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
   const directory = await mkdtemp(`${process.env.TEMP || process.cwd()}\\oc-cbm-structure-`);

@@ -1,7 +1,8 @@
 import { tool } from "@opencode-ai/plugin/tool";
 import type { ToolContext } from "@opencode-ai/plugin/tool";
 import { invokeCbm } from "./cbm.js";
-import { existsSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import { assessIndexedFreshness, getProjectRoot, isGitRepo, projectNameFromRoot, recordIndexedFingerprint } from "./state.js";
 
@@ -33,7 +34,8 @@ type IndexRepair = {
 
 const activeIndexes = new Map<string, Promise<IndexRepair>>();
 const INDEXABLE_EXTENSIONS = new Set([".c", ".cc", ".cpp", ".cs", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".kt", ".kts", ".md", ".php", ".py", ".rb", ".rs", ".svelte", ".swift", ".ts", ".tsx", ".vue"]);
-const INVENTORY_SKIP_DIRECTORIES = new Set([".git", ".hg", ".svn", ".cache", ".next", "build", "coverage", "dist", "node_modules", "target", "tools"]);
+const INVENTORY_SKIP_DIRECTORIES = new Set([".git", ".hg", ".svn", ".cache", ".next", ".venv", "__pycache__", "build", "coverage", "dist", "node_modules", "target", "tools", "venv"]);
+const INVENTORY_SKIP_FILE_PATTERNS = [/^config\/backup-/i, /(?:^|\/)settings\.local\.ya?ml$/i, /(?:^|\/)secrets\.local\.json$/i];
 const MAX_STRUCTURAL_FILES = 20_000;
 const MAX_STRUCTURAL_DIFFERENCES = 40;
 
@@ -121,7 +123,54 @@ function normalizeInventoryPath(value: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
+function isIndexableInventoryPath(path: string): boolean {
+  const normalized = normalizeInventoryPath(path);
+  if (!INDEXABLE_EXTENSIONS.has(extname(normalized).toLowerCase())) return false;
+  if (/\.min\.(?:c?js|css)$/i.test(normalized)) return false;
+  const segments = normalized.split("/");
+  if (segments.some((segment) => INVENTORY_SKIP_DIRECTORIES.has(segment))) return false;
+  return !INVENTORY_SKIP_FILE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function hasStructuralDeclarations(rootPath: string, path: string): boolean {
+  const extension = extname(path).toLowerCase();
+  let source: string;
+  try { source = readFileSync(join(rootPath, path), "utf8").slice(0, 512 * 1024); }
+  catch { return true; }
+
+  if (extension === ".md") return /^#{1,6}\s+\S/m.test(source);
+  if (extension === ".py") return /^\s*(?:async\s+def|def|class)\s+[A-Za-z_]/m.test(source);
+  if ([".js", ".jsx", ".ts", ".tsx", ".svelte", ".vue"].includes(extension)) {
+    return /(?:^|[\n;}])\s*(?:export\s+|import\s+|(?:async\s+)?function\s+[A-Za-z_$]|class\s+[A-Za-z_$]|interface\s+[A-Za-z_$]|type\s+[A-Za-z_$]|enum\s+[A-Za-z_$]|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=)/m.test(source);
+  }
+  if ([".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".java", ".kt", ".kts", ".go", ".php", ".rb", ".rs", ".swift"].includes(extension)) {
+    return /\b(?:class|interface|struct|enum|trait|impl|fn|func|function|def|module|namespace|record)\s+[A-Za-z_]|\b[A-Za-z_][\w:<>,*&\s]+\s+[A-Za-z_]\w*\s*\([^;{}]*\)\s*\{/m.test(source);
+  }
+  return true;
+}
+
+function collectGitIndexableFiles(rootPath: string): string[] | null {
+  try {
+    const output = execFileSync("git", ["-C", rootPath, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 10_000,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return [...new Set(output.split("\0").filter(Boolean).map(normalizeInventoryPath).filter(isIndexableInventoryPath).filter((path) => hasStructuralDeclarations(rootPath, path)))].sort();
+  } catch {
+    return null;
+  }
+}
+
 export function collectIndexableFiles(rootPath: string): { files: string[]; complete: boolean; reason: string } {
+  const gitFiles = collectGitIndexableFiles(rootPath);
+  if (gitFiles) {
+    if (gitFiles.length > MAX_STRUCTURAL_FILES) return { files: gitFiles.slice(0, MAX_STRUCTURAL_FILES), complete: false, reason: `Git-aware source inventory exceeded the ${MAX_STRUCTURAL_FILES}-file verification limit` };
+    return { files: gitFiles, complete: true, reason: "Git-aware source inventory completed using tracked and non-ignored files" };
+  }
+
   const files: string[] = [];
   let complete = true;
   let reason = "bounded source inventory completed";
@@ -135,7 +184,10 @@ export function collectIndexableFiles(rootPath: string): { files: string[]; comp
       if (entry.isDirectory() && INVENTORY_SKIP_DIRECTORIES.has(entry.name)) continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
-      else if (entry.isFile() && INDEXABLE_EXTENSIONS.has(extname(entry.name).toLowerCase())) files.push(normalizeInventoryPath(relative(rootPath, path)));
+      else if (entry.isFile()) {
+        const relativePath = normalizeInventoryPath(relative(rootPath, path));
+        if (isIndexableInventoryPath(relativePath) && hasStructuralDeclarations(rootPath, relativePath)) files.push(relativePath);
+      }
       if (files.length > MAX_STRUCTURAL_FILES) { complete = false; reason = `source inventory exceeded the ${MAX_STRUCTURAL_FILES}-file verification limit`; return; }
       if (!complete) return;
     }
@@ -147,11 +199,10 @@ export function collectIndexableFiles(rootPath: string): { files: string[]; comp
 export function compareIndexedStructure(rootPath: string, indexedPaths: string[]): StructuralVerification {
   const current = collectIndexableFiles(rootPath);
   if (!current.complete) return { status: "unverifiable", reason: current.reason, currentCount: current.files.length, indexedCount: indexedPaths.length, missingCurrentFiles: [], staleIndexedFiles: [] };
-  const currentSet = new Set(current.files);
   const indexed = [...new Set(indexedPaths.map(normalizeInventoryPath).filter(Boolean))].sort();
   const indexedSet = new Set(indexed);
   const missingCurrentFiles = current.files.filter((path) => !indexedSet.has(path)).slice(0, MAX_STRUCTURAL_DIFFERENCES);
-  const staleIndexedFiles = indexed.filter((path) => INDEXABLE_EXTENSIONS.has(extname(path).toLowerCase()) && !existsSync(join(rootPath, path))).slice(0, MAX_STRUCTURAL_DIFFERENCES);
+  const staleIndexedFiles = indexed.filter((path) => isIndexableInventoryPath(path) && !existsSync(join(rootPath, path))).slice(0, MAX_STRUCTURAL_DIFFERENCES);
   if (missingCurrentFiles.length || staleIndexedFiles.length) {
     return {
       status: "inconsistent",
@@ -520,16 +571,18 @@ function joinBudgeted(sections: string[], limit = INVESTIGATION_LIMIT): string {
 }
 
 export const project = tool({
-  description: "Consolidated CBM project/index management. Use action=list before filesystem discovery to see whether a repository is already indexed; action=index performs one explicit bounded index; status and delete cover maintenance without exposing separate management tools.",
+  description: "Consolidated CBM project/index management. Listing and status are read-only. Creating a new index is never automatic: action=index requires an explicit user request plus user_authorized=true. Context, investigation, and memory may refresh only projects that are already indexed.",
   args: {
     action: s.enum(["list", "index", "status", "delete"]),
     project: s.string().optional(),
     repo_path: s.string().optional(),
     mode: s.enum(["fast", "moderate", "full"]).optional().default("fast"),
+    user_authorized: s.boolean().optional().default(false),
   },
   async execute(args: any, context: ToolContext) {
     if (args.action === "list") return formatProjectList(await safeInvoke("list_projects", {}, context) || "No projects indexed yet.");
     if (args.action === "index") {
+      if (args.user_authorized !== true) return "STOP. action=index requires user_authorized=true, which may be set only when the user explicitly requested creation or refresh of this CBM index.";
       if (!args.repo_path) return "STOP. action=index requires repo_path.";
       let path: string;
       try { path = getProjectRoot(args.repo_path); } catch (error) { return `STOP. Invalid project directory: ${error instanceof Error ? error.message : String(error)}`; }

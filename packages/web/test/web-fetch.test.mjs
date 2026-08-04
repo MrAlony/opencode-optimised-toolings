@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { fetchBatch, formatFetchBatch, isPrivateAddress, resetFetchCache } from "../lib/fetch-core.js";
+import { disposeDispatcher, fetchBatch, formatFetchBatch, isPrivateAddress, resetFetchCache } from "../lib/fetch-core.js";
 
 async function server(handler) {
   const instance = createServer(handler);
@@ -10,6 +10,29 @@ async function server(handler) {
   await once(instance, "listening");
   return { instance, origin: `http://127.0.0.1:${instance.address().port}` };
 }
+
+test("disposes dispatchers across Node, Bun, and Undici capability shapes", async () => {
+  const calls = [];
+
+  await disposeDispatcher({ close: async () => { calls.push("async-close"); } });
+  await disposeDispatcher({ close: () => { calls.push("sync-close"); } });
+  await disposeDispatcher({ destroy: () => { calls.push("destroy-only"); } });
+  await disposeDispatcher({
+    close: () => { calls.push("close-throws"); throw new Error("unsupported close"); },
+    destroy: async () => { calls.push("destroy-fallback"); },
+  });
+  await disposeDispatcher({});
+  await disposeDispatcher(null);
+
+  assert.deepEqual(calls, ["async-close", "sync-close", "destroy-only", "close-throws", "destroy-fallback"]);
+});
+
+test("dispatcher cleanup errors never replace a completed fetch result", async () => {
+  await assert.doesNotReject(() => disposeDispatcher({
+    close: () => { throw new Error("close failed"); },
+    destroy: () => { throw new Error("destroy failed"); },
+  }));
+});
 
 test("blocks private and reserved destinations by default", async () => {
   for (const address of ["127.0.0.1", "10.0.0.1", "169.254.169.254", "192.0.2.1", "198.51.100.1", "203.0.113.1", "::1", "::ffff:127.0.0.1"]) assert.equal(isPrivateAddress(address), true, address);

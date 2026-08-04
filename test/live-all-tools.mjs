@@ -80,7 +80,7 @@ try {
 
   cbmProject = projectNameFromPath(fixture);
   await check("cbm_project", async () => {
-    const indexed = await plugin.tool.cbm_project.execute({ action: "index", project: "", repo_path: fixture, mode: "fast" }, context("live-cbm-project-index"));
+    const indexed = await plugin.tool.cbm_project.execute({ action: "index", project: "", repo_path: fixture, mode: "fast", user_authorized: true }, context("live-cbm-project-index"));
     const status = await plugin.tool.cbm_project.execute({ action: "status", project: cbmProject, repo_path: "", mode: "fast" }, context("live-cbm-project-status"));
     return `${indexed}\n\n${status}`;
   }, (output) => /INDEX READINESS/.test(output) && /CBM INDEX RESULT/.test(output) && /CBM INDEX STATUS/.test(output) && !/INDEX REFRESH FAILED/.test(output));

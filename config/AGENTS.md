@@ -173,10 +173,10 @@ Starts processes that keep running and **returns immediately** so you can keep w
 
 ## CBM: the highest-leverage tool for indexed projects
 
-For any project that is (or can be) indexed into the CBM knowledge graph, **CBM is your most call-efficient way to understand a codebase** — one CBM call can answer questions that would otherwise cost dozens of reads, greps, and traces. When working on an indexed project, reach for CBM FIRST instead of manually crawling files.
+For a project that is already indexed in the CBM knowledge graph, **CBM is your most call-efficient way to understand a codebase** — one CBM call can answer questions that would otherwise cost dozens of reads, greps, and traces. When working on an indexed project, reach for CBM FIRST instead of manually crawling files.
 
-**Setup (once per repo):**
-- Use `cbm_project(action="list")` to see what is indexed. If absent, use `cbm_project(action="index", repo_path="...", mode="fast")`. Status and deletion are also grouped under `cbm_project`. If indexed, skip filesystem crawling and query CBM immediately.
+**Index-creation boundary:**
+- Use `cbm_project(action="list")` to see what is already indexed. Never create a new CBM index merely because it would be useful. `cbm_project(action="index")` is allowed only when the user explicitly requested indexing or reindexing that repository; set `user_authorized=true` only in that case. If absent and the user did not explicitly request indexing, use `fs_explore` and precise filesystem tools instead. Status and deletion remain explicit maintenance actions.
 
 **Why CBM saves massive amounts of tool calls — use these instead of manual exploration:**
 - `cbm_context` always returns index-readiness evidence, source-fingerprint freshness, graph/source structural consistency, architecture, packages, entry points, routes, hotspots, graph schema, and current change blast radius together. The agent cannot request a low-information subset. **Start here on an unfamiliar indexed project.** If an existing index is stale, lacks a freshness baseline, or its graph file inventory disagrees with current indexable source files, the same `cbm_context` call performs bounded internal repair and structural re-verification. Persistent mismatch fails closed with exact missing/removed paths instead of returning stale architecture; do not spend another agent-visible tool call preparing it.
@@ -184,7 +184,7 @@ For any project that is (or can be) indexed into the CBM knowledge graph, **CBM 
 - Optional read-only Cypher in `cbm_investigate` adds custom graph information but never replaces the mandatory context package.
 - `cbm_memory` groups ADR management and runtime-trace ingestion when persistent design or observed-call information is needed.
 
-**CBM operating rule:** On an indexed project, use `cbm_context` once and one complete `cbm_investigate` request rather than a long sequence of read/grep calls. Source-fingerprint validation, graph/source structural validation, and bounded repair occur internally within the existing call. If structural repair still cannot produce a consistent graph, CBM fails closed and names the mismatched paths; use precise filesystem evidence for that gap rather than trusting stale graph output. Do not add a separate `cbm_project(status/index)` round trip unless the project is absent or explicit maintenance was requested.
+**CBM operating rule:** On an already indexed project, use `cbm_context` once and one complete `cbm_investigate` request rather than a long sequence of read/grep calls. Source-fingerprint validation, graph/source structural validation, and bounded repair of that existing index occur internally within the same call. These query tools never create an index for an unknown project. If structural repair still cannot produce a consistent graph, CBM fails closed and names the mismatched paths; use precise filesystem evidence for that gap rather than trusting stale graph output. Do not add a separate status/reindex round trip for an existing project; new index creation still requires the user's explicit request.
 
 **Enforcement:** Blind filesystem crawling of an indexed project is a tool-selection failure. Before broad repository grep/glob/read work, use `cbm_project(action="list")` if index status is unknown. After two filesystem discovery calls, check CBM; after three, stop broad explore/grep loops and switch to CBM unless the repository is not indexable. After CBM identifies exact files or symbols, use batch filesystem reads only for precise edit or verification source.
 

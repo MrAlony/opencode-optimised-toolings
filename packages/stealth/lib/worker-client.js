@@ -3,6 +3,20 @@ import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { stealthConfig, packageRoot } from "./config.js";
 
+export function workerEnvironment(base = process.env, config = {}) {
+  const env = {
+    ...base,
+    PYTHONUNBUFFERED: "1",
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+    OPENCODE_STEALTH_RUNTIME: config.runtimeRoot,
+    OPENCODE_TOR_SOCKS_PORT: String(config.socksPort),
+    OPENCODE_TOR_CONTROL_PORT: String(config.controlPort),
+  };
+  if (config.tor) env.OPENCODE_TOR_EXECUTABLE = config.tor;
+  return env;
+}
+
 export class StealthWorkerClient {
   constructor() { this.child = null; this.pending = new Map(); this.sequence = 0; this.stderr = []; this.starting = null; }
 
@@ -12,8 +26,7 @@ export class StealthWorkerClient {
     this.starting = (async () => {
       const config = stealthConfig();
       if (!config.python) throw new Error("Stealth Python environment is unavailable. Run `npm run setup` from the tooling repository.");
-      const env = { ...process.env, PYTHONUNBUFFERED: "1", OPENCODE_STEALTH_RUNTIME: config.runtimeRoot, OPENCODE_TOR_SOCKS_PORT: String(config.socksPort), OPENCODE_TOR_CONTROL_PORT: String(config.controlPort) };
-      if (config.tor) env.OPENCODE_TOR_EXECUTABLE = config.tor;
+      const env = workerEnvironment(process.env, config);
       const child = spawn(config.python, [resolve(packageRoot, "worker.py")], { cwd: packageRoot, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       this.child = child;
       const lines = createInterface({ input: child.stdout });

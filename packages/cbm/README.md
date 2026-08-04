@@ -4,7 +4,7 @@ An OpenCode plugin wrapping Codebase-Memory-MCP with a deliberately small, high-
 
 ## Public tools
 
-- `cbm_project` — list, index, check status, or delete indexed projects.
+- `cbm_project` — list, index, check status, or delete indexed projects. Creating or explicitly reindexing requires a direct user request and `user_authorized=true`.
 - `cbm_context` — fixed repository baseline containing architecture, graph schema, and current change blast radius.
 - `cbm_investigate` — fixed investigation package containing architecture, structured graph search, indexed-code search, automatic relevant source snippets, and a call-chain trace. Optional read-only Cypher can add information but cannot remove mandatory sections.
 - `cbm_memory` — grouped ADR and runtime-trace maintenance.
@@ -14,8 +14,8 @@ The underlying CBM capabilities remain available internally, but agents are not 
 ## Recommended workflow
 
 1. `cbm_project(action="list")`
-2. If absent: `cbm_project(action="index", repo_path="...", mode="fast")`
-3. `cbm_context(project="...")` for the repository baseline.
+2. If absent, use filesystem tools unless the user explicitly requested indexing. Only with that request: `cbm_project(action="index", repo_path="...", mode="fast", user_authorized=true)`.
+3. `cbm_context(project="...")` for the baseline of an already indexed repository.
 4. `cbm_investigate(project="...", query="full feature or bug intent")` for focused work.
 5. Move to implementation and verification instead of restarting broad filesystem exploration.
 
@@ -38,7 +38,7 @@ Build with `npm install` and `npm run build`, then restart OpenCode.
 - Query deadline: 30 seconds (`OC_CBM_QUERY_TIMEOUT_MS`)
 - Query results verify both the indexed-root fingerprint and the graph/source file inventory before presenting architecture as current. A structural mismatch triggers at most two bounded in-call refresh attempts; persistent mismatches fail closed with exact missing or removed paths instead of returning stale graph evidence.
 - Structural verification mirrors backend directory exclusions, including dependency/generated directories and directories literally named `tools`. The active consolidated implementation lives at `src/consolidated.ts`, outside that backend-reserved directory.
-- Stale, unknown-baseline, or otherwise unverified indexes automatically run one bounded fast refresh before the requested query.
+- Stale, unknown-baseline, or otherwise unverified existing indexes automatically run one bounded fast refresh before the requested query. Context, investigation, and memory never create an index for an unknown project.
 - Concurrent requests for the same canonical root share one refresh operation; stale graph data is never used as a fallback after refresh failure.
 - Missing source roots are separated in project listings and never deleted automatically.
 - Git and non-Git directories can be indexed; Git blast-radius analysis is explicitly `not_applicable` for non-Git roots.
