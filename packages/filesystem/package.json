@@ -1,0 +1,14 @@
+{
+  "name": "oc-fs-tooling",
+  "version": "2.2.0",
+  "description": "Plain-language, evidence-rich OpenCode filesystem tools with adaptive reads, structured search/exploration evidence, and safe ordered atomic-write edit recovery.",
+  "main": "index.js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.17.18"
+  }
+}

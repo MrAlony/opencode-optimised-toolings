@@ -1,0 +1,14 @@
+{
+  "name": "oc-enhanced-terminal",
+  "version": "2.7.0",
+  "description": "Self-healing, batch-oriented shell and background process tools with bounded same-call recovery and high-information lifecycle output for OpenCode.",
+  "main": "index.js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.17.18"
+  }
+}

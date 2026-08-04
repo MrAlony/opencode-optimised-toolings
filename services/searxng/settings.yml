@@ -1,0 +1,22 @@
+# Shareable template only. `npm run setup` creates ignored settings.local.yml
+# with a cryptographically random secret key and loopback-only binding.
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "SearXNG Local (OpenCode Optimised Toolings)"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  port: 18999
+  bind_address: "127.0.0.1"
+  secret_key: "GENERATED_LOCALLY_DO_NOT_USE_THIS_TEMPLATE_VALUE"
+  limiter: false
+  public_instance: false
+  image_proxy: false

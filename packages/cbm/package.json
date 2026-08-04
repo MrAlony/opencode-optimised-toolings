@@ -1,0 +1,42 @@
+{
+  "name": "oc-cbm",
+  "version": "0.5.3",
+  "description": "OpenCode CBM plugin with freshness-verified, relevance-filtered investigations and bounded project lifecycle management",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "watch": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.17.18",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "cbm",
+    "codebase-memory",
+    "mcp",
+    "code-intelligence"
+  ],
+  "license": "MIT"
+}

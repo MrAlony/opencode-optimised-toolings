@@ -1,0 +1,17 @@
+{
+  "name": "@opencode-optimised/web",
+  "version": "2.0.0",
+  "description": "Batch web search and SSRF-aware multi-URL extraction tools for OpenCode.",
+  "main": "index.js",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@opencode-ai/plugin": "^1.17.20",
+    "linkedom": "^0.18.12",
+    "pdf-parse": "^1.1.1",
+    "turndown": "^7.2.1",
+    "undici": "^7.13.0"
+  }
+}

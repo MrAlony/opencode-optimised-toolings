@@ -1,0 +1,58 @@
+{
+  "name": "opencode-optimised-toolings",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Portable, production-grade OpenCode custom tooling distribution with filesystem, terminal, CBM, web, stealth, Tor, and SearXNG integration.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/filesystem",
+    "packages/terminal",
+    "packages/cbm",
+    "packages/web",
+    "packages/stealth"
+  ],
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "config/AGENTS.md",
+    "config/agents",
+    "config/secrets.example.json",
+    "packages/filesystem",
+    "packages/terminal",
+    "packages/cbm/src",
+    "packages/cbm/dist",
+    "packages/cbm/package.json",
+    "packages/cbm/tsconfig.json",
+    "packages/cbm/README.md",
+    "packages/cbm/SKILL.md",
+    "packages/web",
+    "packages/stealth",
+    "scripts",
+    "services/searxng",
+    "services/tor/README.md",
+    "test"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/cbm",
+    "test": "node scripts/test-all.mjs",
+    "test:root": "node --test test/*.test.mjs",
+    "test:live": "node test/live-all-tools.mjs",
+    "install:opencode": "node scripts/install.mjs",
+    "uninstall:opencode": "node scripts/uninstall.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "verify:shareable": "node scripts/verify-shareable.mjs",
+    "services": "node scripts/services.mjs",
+    "setup": "node scripts/setup.mjs"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@opencode-ai/plugin": "^1.17.20",
+    "linkedom": "^0.18.12",
+    "pdf-parse": "^1.1.1",
+    "turndown": "^7.2.1",
+    "undici": "^7.13.0"
+  }
+}
