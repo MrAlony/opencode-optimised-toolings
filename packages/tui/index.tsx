@@ -22,12 +22,18 @@ import { DiscoveryView } from "./components/discovery.jsx"
 import { WebView } from "./components/web.jsx"
 import { StealthView } from "./components/stealth.jsx"
 import { CbmView } from "./components/cbm.jsx"
-import { ClockProvider, createClock, createSessionStore, createSkin } from "./components/runtime.jsx"
+import { ClockProvider, createClock, createSessionStore, createSkin, openSession } from "./components/runtime.jsx"
 import { HomeDeck, PromptContext, StatusBar, WorkspaceInspector } from "./components/ide-surfaces.jsx"
 import { SessionSwitcher } from "./components/session-switcher.jsx"
 import { ToolingStatusView } from "./components/tooling-status.jsx"
+import { createProjectStore } from "./components/project-store.jsx"
+import { Palette } from "./components/palette.jsx"
+import { Workbench } from "./components/workbench.jsx"
+import { workbenchCommands } from "./lib/command-registry.js"
 
 type Tokens = ReturnType<typeof createTokens>
+
+const WORKBENCH_ROUTE = "alonix-workbench"
 
 type RenderProps = {
   input: Record<string, unknown>
@@ -105,6 +111,7 @@ const tui: TuiPlugin = async (api, options) => {
     const tokens = createSkin(api, { motion })
     const clock = createClock(motion)
     const store = createSessionStore(api)
+    const projects = createProjectStore(api)
     const [toolingState, setToolingState] = createSignal(readStateSync(statePath))
     const [registered, setRegistered] = createSignal(0)
     const tooling = createMemo(() => {
@@ -118,9 +125,9 @@ const tui: TuiPlugin = async (api, options) => {
         registration: { ...registration, registered: active },
       }
     })
-    return { tokens, clock, store, toolingState, setToolingState, setRegistered, tooling, disposeRoot }
+    return { tokens, clock, store, projects, toolingState, setToolingState, setRegistered, tooling, disposeRoot }
   })
-  const { tokens, clock, store, toolingState, setToolingState, setRegistered, tooling } = scope
+  const { tokens, clock, store, projects, toolingState, setToolingState, setRegistered, tooling } = scope
 
   // Register rich renderers through the patched core's api.toolRenderers.
   const extended = api as TuiPluginApi & {
@@ -159,6 +166,145 @@ const tui: TuiPlugin = async (api, options) => {
       )
     })
     store.refresh()
+  }
+
+  const openWorkbench = () => {
+    try {
+      api.route.navigate(WORKBENCH_ROUTE)
+    } catch {
+      // The route is unavailable on an unpatched host; the switcher still works.
+      openSwitcher()
+    }
+  }
+
+  const openSessionTab = (sessionID: string) => {
+    const row = projects.sessionRows().find((item) => item.id === sessionID)
+    if (row) {
+      projects.openTab({
+        id: row.id,
+        title: row.title,
+        projectID: row.projectID,
+        projectName: row.projectName,
+        directory: row.directory,
+      })
+    }
+    openSession(api, sessionID)
+  }
+
+  /** Controller handed to palette commands so they stay declarative. */
+  const controller = {
+    openWorkbench,
+    openPalette: () => openPalette(),
+    refresh: () => {
+      projects.refresh()
+      store.refresh()
+    },
+    closeActiveTab: () => {
+      const active = projects.workbench.activeID
+      if (active) projects.closeTab(active)
+    },
+    togglePinActiveTab: () => {
+      const active = projects.workbench.activeID
+      if (active) projects.togglePinTab(active)
+    },
+    closeOtherTabs: () => projects.closeOtherTabs(),
+    openActiveSession: () => {
+      const active = projects.workbench.activeID
+      if (active) openSession(api, active)
+    },
+    newSession: async () => {
+      const created = await projects.createSession({})
+      if (created?.id) openSessionTab(created.id)
+    },
+    chooseProjectForNewSession: () => openPalette("#"),
+  }
+
+  const openPalette = (initialQuery = "") => {
+    api.ui.dialog.setSize("large")
+    api.ui.dialog.replace(() => {
+      const dimensions = useTerminalDimensions()
+      return (
+        <ClockProvider clock={clock}>
+          <Palette
+            tokens={tokens}
+            dimensions={dimensions}
+            initialQuery={initialQuery}
+            loading={() => projects.loading}
+            sessions={() => projects.sessionRows()}
+            projects={() => projects.projectRows()}
+            commands={() =>
+              workbenchCommands({
+                tabCount: projects.workbench.tabs.length,
+                activeSessionID: projects.workbench.activeID,
+              })
+            }
+            onClose={() => api.ui.dialog.clear()}
+            onRun={(action) => {
+              api.ui.dialog.clear()
+              if (action.kind === "session") {
+                openSessionTab(action.targetID)
+                return
+              }
+              if (action.kind === "project") {
+                // Opening a project means resuming its most recent session, or
+                // starting a fresh one in that directory when it has none.
+                const first = action.project?.sessions?.[0]
+                if (first) {
+                  openSessionTab(first.id)
+                  return
+                }
+                void projects
+                  .createSession({ directory: action.project?.worktree })
+                  .then((created) => {
+                    if (created?.id) openSessionTab(created.id)
+                  })
+                  .catch(() => {
+                    api.ui.toast({
+                      variant: "error",
+                      title: "Could not start a session",
+                      message: `No session could be created in ${action.project?.worktree ?? "that project"}.`,
+                    })
+                  })
+                return
+              }
+              action.run?.(controller)
+            }}
+          />
+        </ClockProvider>
+      )
+    })
+    projects.refresh()
+  }
+
+  // Full-screen workbench route. Registration is best effort: an unpatched or
+  // older host simply keeps the dialog surfaces.
+  try {
+    const disposeRoute = api.route.register([
+      {
+        name: WORKBENCH_ROUTE,
+        render: () => (
+          <ClockProvider clock={clock}>
+            <Workbench
+              api={api}
+              tokens={tokens}
+              store={projects}
+              onPalette={() => openPalette()}
+              onOpenSession={(sessionID: string) => projects.activateTab(sessionID)}
+              onCyclePane={(delta: number, available: string[]) => projects.cyclePane(delta, available)}
+              onExplorerIndex={(index: number) => projects.setExplorerIndex(index)}
+              onExit={() => {
+                const active = projects.workbench.activeID
+                if (active) openSession(api, active)
+                else api.route.navigate("home")
+              }}
+            />
+          </ClockProvider>
+        ),
+      },
+    ])
+    if (typeof disposeRoute === "function") api.lifecycle.onDispose(disposeRoute)
+  } catch {
+    // route.register is plugin-context only; ignore otherwise.
   }
 
   try {
@@ -215,6 +361,30 @@ const tui: TuiPlugin = async (api, options) => {
 
   api.keymap.registerLayer({
     commands: [
+      {
+        name: "alonix-ide.palette",
+        title: "Alonix palette (sessions, projects, actions)",
+        category: "Workbench",
+        namespace: "palette",
+        slashName: "alonix",
+        run: () => openPalette(),
+      },
+      {
+        name: "alonix-ide.workbench",
+        title: "Open the Alonix workbench",
+        category: "Workbench",
+        namespace: "palette",
+        slashName: "alonix-workbench",
+        run: openWorkbench,
+      },
+      {
+        name: "alonix-ide.projects",
+        title: "Switch project",
+        category: "Workbench",
+        namespace: "palette",
+        slashName: "alonix-projects",
+        run: () => openPalette("#"),
+      },
       {
         name: "alonix-ide.sessions",
         title: "Alonix session switcher",
