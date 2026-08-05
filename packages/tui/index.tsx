@@ -29,6 +29,7 @@ import { ToolingStatusView } from "./components/tooling-status.jsx"
 import { createProjectStore } from "./components/project-store.jsx"
 import { Palette } from "./components/palette.jsx"
 import { Workbench } from "./components/workbench.jsx"
+import { ProjectAdd } from "./components/project-add.jsx"
 import { workbenchCommands } from "./lib/command-registry.js"
 
 type Tokens = ReturnType<typeof createTokens>
@@ -126,6 +127,7 @@ const tui: TuiPlugin = async (api, options) => {
       }
     })
     const [workbenchView, setWorkbenchView] = createSignal<"activity" | "changes" | "plan">("activity")
+    const [workbenchMode, setWorkbenchMode] = createSignal<"work" | "monitor">("work")
     return {
       tokens,
       clock,
@@ -137,11 +139,13 @@ const tui: TuiPlugin = async (api, options) => {
       tooling,
       workbenchView,
       setWorkbenchView,
+      workbenchMode,
+      setWorkbenchMode,
       disposeRoot,
     }
   })
   const { tokens, clock, store, projects, toolingState, setToolingState, setRegistered, tooling } = scope
-  const { workbenchView, setWorkbenchView } = scope
+  const { workbenchView, setWorkbenchView, workbenchMode, setWorkbenchMode } = scope
 
   // Register rich renderers through the patched core's api.toolRenderers.
   const extended = api as TuiPluginApi & {
@@ -253,6 +257,47 @@ const tui: TuiPlugin = async (api, options) => {
     else api.route.navigate("home")
   }
 
+  /**
+   * Add a project by choosing a directory.
+   *
+   * OpenCode registers a project the first time a session runs in its
+   * directory, so "adding" means starting work there. The session is created
+   * only on this explicit confirmation, matching the host, which creates a
+   * session on prompt submission rather than speculatively.
+   */
+  const openAddProject = () => {
+    api.ui.dialog.setSize("large")
+    api.ui.dialog.replace(() => (
+      <ClockProvider clock={clock}>
+        <ProjectAdd
+          api={api}
+          tokens={tokens}
+          initialDirectory={(() => {
+            try {
+              return api.state.path?.worktree || api.state.path?.directory || ""
+            } catch {
+              return ""
+            }
+          })()}
+          projects={() => projects.projectRows()}
+          onClose={() => api.ui.dialog.clear()}
+          onAdd={async (directory: string) => {
+            const created = await projects.createSession({ directory })
+            api.ui.dialog.clear()
+            if (created?.id) {
+              openSessionTab(created.id)
+              api.ui.toast({
+                variant: "success",
+                title: "Project added",
+                message: `Started a session in ${directory}`,
+              })
+            }
+          }}
+        />
+      </ClockProvider>
+    ))
+  }
+
   const openPalette = (initialQuery = "") => {
     // xlarge keeps titles readable; the palette sizes its columns to match.
     api.ui.dialog.setSize("xlarge")
@@ -329,6 +374,9 @@ const tui: TuiPlugin = async (api, options) => {
               tick={clock}
               view={workbenchView}
               onView={setWorkbenchView}
+              mode={workbenchMode}
+              onMode={setWorkbenchMode}
+              onAddProject={openAddProject}
               onPalette={() => openPalette()}
               onNewSession={() => void controller.newSession()}
               onOpenChat={openChat}
@@ -420,6 +468,26 @@ const tui: TuiPlugin = async (api, options) => {
         namespace: "palette",
         slashName: "alonix-projects",
         run: () => openPalette("#"),
+      },
+      {
+        name: "alonix-ide.project.add",
+        title: "Add a project",
+        category: "Workbench",
+        namespace: "palette",
+        slashName: "alonix-add-project",
+        run: openAddProject,
+      },
+      {
+        name: "alonix-ide.monitor",
+        title: "Watch sessions side by side",
+        category: "Workbench",
+        namespace: "palette",
+        slashName: "alonix-monitor",
+        run: () => {
+          setWorkbenchMode("monitor")
+          if (projects.panes.ids.length === 0) projects.autoFillPanes()
+          openWorkbench()
+        },
       },
       {
         name: "alonix-ide.sessions",

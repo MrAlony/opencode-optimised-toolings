@@ -24,7 +24,19 @@ import {
   toggleCollapsed,
   togglePinTab,
 } from "../lib/workbench.js"
+import {
+  addPane,
+  autoFill,
+  createPanes,
+  cyclePaneFocus,
+  focusPaneAt,
+  reconcilePanes,
+  removePane,
+  serializePanes,
+  soloPane,
+} from "../lib/panes.js"
 
+const PANES_KEY = "alonix_monitor_panes"
 const WORKBENCH_KEY = "alonix_workbench_state"
 const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
 const REFRESH_DEBOUNCE_MS = 150
@@ -95,6 +107,7 @@ export function createProjectStore(api) {
     sessions: [],
     pinnedProjects: normalizeIds(readKv(api, PINNED_PROJECTS_KEY, [])),
     workbench: createWorkbench(readKv(api, WORKBENCH_KEY, {})),
+    panes: createPanes(readKv(api, PANES_KEY, {})),
     loading: false,
     error: "",
     loadedAt: 0,
@@ -221,11 +234,19 @@ export function createProjectStore(api) {
     const ids = store.sessions.map((session) => session.id)
     const next = reconcileTabs(store.workbench, ids)
     if (next !== store.workbench) commitWorkbench(next)
+    // A monitored session that no longer exists must leave the grid too.
+    const panes = reconcilePanes(store.panes, ids)
+    if (panes !== store.panes) commitPanes(panes)
   })
 
   function commitWorkbench(next) {
     setStore("workbench", next)
     writeKv(api, WORKBENCH_KEY, serializeWorkbench(next))
+  }
+
+  function commitPanes(next) {
+    setStore("panes", next)
+    writeKv(api, PANES_KEY, serializePanes(next))
   }
 
   return {
@@ -246,6 +267,9 @@ export function createProjectStore(api) {
     },
     get workbench() {
       return store.workbench
+    },
+    get panes() {
+      return store.panes
     },
     get pinnedProjects() {
       return store.pinnedProjects
@@ -310,15 +334,46 @@ export function createProjectStore(api) {
       writeKv(api, PINNED_PROJECTS_KEY, next)
     },
 
+    addPane(sessionID) {
+      commitPanes(addPane(store.panes, sessionID))
+    },
+    removePane(sessionID) {
+      commitPanes(removePane(store.panes, sessionID))
+    },
+    focusPaneAt(index) {
+      commitPanes(focusPaneAt(store.panes, index))
+    },
+    focusPane(sessionID) {
+      commitPanes(addPane(store.panes, sessionID))
+    },
+    cyclePaneFocus(delta) {
+      commitPanes(cyclePaneFocus(store.panes, delta))
+    },
+    soloPane(sessionID) {
+      commitPanes(soloPane(store.panes, sessionID))
+    },
+    /** Fill the monitor with whatever is most worth watching right now. */
+    autoFillPanes(limit) {
+      commitPanes(autoFill(store.panes, sessionRows(), limit))
+    },
+
     /**
      * Create a session in an explicit directory. This is what makes the
      * workbench genuinely multi-project: the host would otherwise only ever
      * create sessions in its own launch directory.
+     *
+     * The host itself only creates a session when a prompt is submitted, so
+     * this is reserved for an explicit user action. Calling it speculatively
+     * litters the list with empty sessions.
      */
     async createSession({ directory, title } = {}) {
       const body = title ? { title } : {}
       const query = directory ? { directory } : {}
       const result = await api?.client?.session?.create?.({ body, query })
+      if (result?.error) {
+        const detail = result.error?.message ?? JSON.stringify(result.error)
+        throw new Error(`Could not create a session: ${detail}`)
+      }
       const created = result?.data
       if (created?.id) refresh()
       return created ?? null

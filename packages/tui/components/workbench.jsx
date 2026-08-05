@@ -24,11 +24,13 @@ import { tabsWithSlots } from "../lib/workbench.js"
 import { fileKind, healthLabel, healthTone, splitPath, workspaceSnapshot } from "../lib/workspace.js"
 import { DiffStat, EmptyState, Gauge, KeyHints, Panel, Rule, SectionLabel, StatLine, StatusDot } from "./ide-kit.jsx"
 import { ActivityLine, Button, ClickRow, SegmentedControl, Tab, Toolbar } from "./controls.jsx"
+import { Monitor } from "./monitor.jsx"
+import { SessionRail } from "./session-rail.jsx"
 
 const HINTS = [
   { key: "ctrl+p", label: "search" },
   { key: "1-9", label: "tab" },
-  { key: "tab", label: "pane" },
+  { key: "^m", label: "monitor" },
   { key: "^w", label: "close" },
   { key: "click", label: "anything" },
   { key: "esc", label: "chat" },
@@ -343,6 +345,9 @@ function SessionView(props) {
           <Button tokens={tokens()} glyph={GLYPH.plus} onPress={() => props.onNewSession()}>
             New
           </Button>
+          <Button tokens={tokens()} glyph={GLYPH.dot} shortcut="^m" onPress={() => props.onWatch?.()}>
+            Watch
+          </Button>
           <Button tokens={tokens()} shortcut="^w" onPress={() => props.onCloseTab()}>
             Close
           </Button>
@@ -380,7 +385,7 @@ function DetailPane(props) {
         <Panel tokens={tokens()} title="Running" glyph={GLYPH.dot} tone="accent" meta={String(props.running.length)}>
           <For each={props.running.slice(0, 6)}>
             {(session) => (
-              <ClickRow tokens={tokens()} onSelect={() => props.onOpenSession(session)}>
+              <ClickRow tokens={tokens()} onSelect={() => props.onWatch?.(session)}>
                 <text wrapMode="none" selectable={false}>
                   <span style={{ fg: tokens().accent }}>{GLYPH.dot}</span>
                   <span style={{ fg: tokens().text }}>
@@ -489,6 +494,12 @@ export function Workbench(props) {
       closeActive()
       return
     }
+    if (event?.ctrl && name === "m") {
+      const mode = props.mode?.() ?? "work"
+      if (mode !== "monitor" && active()) store.addPane(active().id)
+      props.onMode?.(mode === "monitor" ? "work" : "monitor")
+      return
+    }
     if (action === "next-pane" || action === "prev-pane") {
       const available = ["main"]
       if (layout().showExplorer) available.unshift("explorer")
@@ -525,7 +536,10 @@ export function Workbench(props) {
       width={dimensions().width}
       height={dimensions().height}
       flexDirection="column"
-      backgroundColor={tokens().canvas}
+      // A full-screen route must fully occlude the terminal behind it. Themes
+      // may set a translucent background, which would otherwise let the old
+      // screen show through and read as a rendering fault.
+      backgroundColor={tokens().canvasOpaque ?? tokens().canvas}
       focusable
       focused
       onKeyDown={handleKey}
@@ -543,6 +557,18 @@ export function Workbench(props) {
         <Button tokens={tokens()} tone="accent" glyph={GLYPH.plus} shortcut="^n" onPress={() => props.onNewSession?.()}>
           New
         </Button>
+        <Button tokens={tokens()} glyph={GLYPH.square} onPress={() => props.onAddProject?.()}>
+          Add project
+        </Button>
+        <SegmentedControl
+          tokens={tokens()}
+          value={props.mode?.() ?? "work"}
+          onChange={(value) => props.onMode?.(value)}
+          items={[
+            { value: "work", label: "Work" },
+            { value: "monitor", label: "Monitor", count: store.panes.ids.length || undefined },
+          ]}
+        />
         <box flexGrow={1} />
         <Show when={summary().running > 0}>
           <text fg={tokens().accent} wrapMode="none" selectable={false}>
@@ -574,6 +600,21 @@ export function Workbench(props) {
           />
         </Show>
 
+        <Show when={(props.mode?.() ?? "work") === "monitor"}>
+          <Monitor
+            api={props.api}
+            tokens={tokens}
+            panes={store.panes}
+            sessions={() => store.sessionRows()}
+            width={layout().main + (layout().showDetail ? layout().detail : 0)}
+            height={Math.max(6, dimensions().height - 4)}
+            onFocus={(id) => store.focusPane(id)}
+            onClose={(id) => store.removePane(id)}
+            onAutoFill={() => store.autoFillPanes()}
+          />
+        </Show>
+
+        <Show when={(props.mode?.() ?? "work") !== "monitor"}>
         <box flexDirection="column" flexGrow={1} minWidth={0}>
           <box flexDirection="row" flexShrink={0} height={1} backgroundColor={tokens().panel}>
             <Show
@@ -618,10 +659,15 @@ export function Workbench(props) {
             onNewSession={() => props.onNewSession?.()}
             onCloseTab={closeActive}
             onOpenChat={() => props.onOpenChat?.(active()?.id ?? null)}
+            onWatch={() => {
+              if (active()) store.addPane(active().id)
+              props.onMode?.("monitor")
+            }}
           />
         </box>
+        </Show>
 
-        <Show when={layout().showDetail}>
+        <Show when={layout().showDetail && (props.mode?.() ?? "work") !== "monitor"}>
           <DetailPane
             api={props.api}
             tokens={tokens()}
@@ -630,6 +676,25 @@ export function Workbench(props) {
             running={running()}
             sessionID={active()?.id ?? null}
             onOpenSession={(session) => openSession(session, null)}
+            onWatch={(session) => {
+              store.addPane(session.id)
+              props.onMode?.("monitor")
+            }}
+          />
+        </Show>
+
+        {/* The rail is always present so switching never needs a command. */}
+        <Show when={layout().showExplorer}>
+          <SessionRail
+            api={props.api}
+            tokens={tokens}
+            width={Math.min(30, Math.max(20, Math.round(layout().width * 0.18)))}
+            background={tokens().panel}
+            sessions={() => store.sessionRows()}
+            onOpen={(session) => {
+              if ((props.mode?.() ?? "work") === "monitor") store.addPane(session.id)
+              else openSession(session, null)
+            }}
           />
         </Show>
       </box>

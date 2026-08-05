@@ -22,11 +22,52 @@ function fromHexString(text) {
   if (!match) return null
   let body = match[1]
   if (body.length === 3) body = body[0] + body[0] + body[1] + body[1] + body[2] + body[2]
-  return {
+  const rgb = {
     r: Number.parseInt(body.slice(0, 2), 16),
     g: Number.parseInt(body.slice(2, 4), 16),
     b: Number.parseInt(body.slice(4, 6), 16),
   }
+  if (body.length === 8) rgb.a = Number.parseInt(body.slice(6, 8), 16) / 255
+  return rgb
+}
+
+/**
+ * Alpha of any supported colour, defaulting to fully opaque.
+ *
+ * Themes that let the terminal show through set a low or zero alpha. A
+ * full-screen surface must know this: painting such a background leaves the
+ * content underneath visible, which reads as a rendering fault rather than a
+ * deliberate effect.
+ */
+export function alphaOf(value) {
+  if (value === null || value === undefined) return 1
+  if (typeof value === "string") {
+    const parsed = fromHexString(value)
+    return parsed && parsed.a !== undefined ? parsed.a : 1
+  }
+  if (typeof value === "object") {
+    const alpha = Number(value.a ?? value.alpha)
+    if (!Number.isFinite(alpha)) return 1
+    // Normalised floats and 0-255 bytes are both accepted.
+    return Math.max(0, Math.min(1, alpha > 1.0000001 ? alpha / 255 : alpha))
+  }
+  return 1
+}
+
+/** True when a colour would let content behind it show through. */
+export function isTranslucent(value, threshold = 0.99) {
+  return alphaOf(value) < threshold
+}
+
+/**
+ * Force an opaque colour, compositing a translucent one over `base`.
+ *
+ * Used for full-screen surfaces that must fully occlude whatever they cover.
+ */
+export function opaque(value, base = "#000000") {
+  const alpha = alphaOf(value)
+  if (alpha >= 0.99) return toHex(value, base)
+  return mix(base, value, alpha, base)
 }
 
 /**
@@ -220,6 +261,14 @@ export function createTokens(theme, options = {}) {
   const canvas = pick(source, "background", FALLBACK_THEME.background)
   const ink = isDark(canvas) ? "#ffffff" : "#000000"
   const panel = pick(source, "backgroundPanel", elevate(canvas, 1, ink))
+
+  // Alpha must come from the original value; `pick` has already discarded it.
+  const rawCanvas = source.background ?? FALLBACK_THEME.background
+  const rawPanel = source.backgroundPanel ?? panel
+  const canvasAlpha = alphaOf(rawCanvas)
+  // Composite a translucent canvas over a solid base of the theme's own
+  // polarity, so a light theme never resolves toward black.
+  const canvasBase = opaque(rawCanvas, isDark(canvas) ? "#0b0d12" : "#f7f9fc")
   const element = pick(source, "backgroundElement", elevate(panel, 1, ink))
   const menu = pick(source, "backgroundMenu", elevate(element, 1, ink))
   const text = pick(source, "text", FALLBACK_THEME.text)
@@ -235,6 +284,14 @@ export function createTokens(theme, options = {}) {
     ink,
 
     canvas,
+    // Opaque variants for full-screen surfaces. A theme that lets the terminal
+    // show through must not make a route look broken, so routes paint these.
+    //
+    // Alpha is read from the raw theme value: `pick` normalises to #rrggbb and
+    // would otherwise report every colour as opaque.
+    canvasOpaque: canvasBase,
+    panelOpaque: opaque(rawPanel, canvasBase),
+    translucent: canvasAlpha < 0.99,
     panel,
     surface: element,
     raised: menu,
