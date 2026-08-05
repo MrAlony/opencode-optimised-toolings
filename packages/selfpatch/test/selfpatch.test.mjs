@@ -159,16 +159,30 @@ test("v1.18.13 patch carries tool renderers through every TUI API boundary", () 
   assert.match(adapters.replacements.map((item) => item.replace).join("\n"), /return registerPluginToolRenderer/)
 })
 
-test("v1.18.13 patch cannot replace native project, session, prompt, route, or keymap behavior", () => {
+test("v1.18.13 patch is limited to renderer plumbing and authoritative tool-lifecycle recovery", () => {
   const paths = patchManifest.files.map((file) => file.path)
   assert.deepEqual(paths.sort(), [
     "packages/opencode/src/plugin/tui/runtime.ts",
+    "packages/opencode/src/session/prompt.ts",
     "packages/plugin/src/tui.ts",
     "packages/tui/src/plugin/adapters.tsx",
     "packages/tui/src/routes/session/index.tsx",
   ].sort())
   const source = JSON.stringify(patchManifest)
   for (const forbidden of ["app_left", "TuiProject", "TuiWorkspace", "setDirectory", "projectTransition", "session.get({ sessionID", "packages/tui/src/context/sdk.tsx", "packages/tui/src/context/sync.tsx", "packages/tui/src/app.tsx"]) assert.equal(source.includes(forbidden), false, `forbidden host behavior: ${forbidden}`)
+})
+
+test("v1.18.13 patch terminalizes only unfinished tools at a newly owned loop boundary", () => {
+  const prompt = patchManifest.files.find((file) => file.path === "packages/opencode/src/session/prompt.ts")
+  assert.ok(prompt, "session prompt lifecycle recovery must be patched")
+  const source = prompt.replacements.map((item) => item.replace).join("\n")
+  assert.match(source, /part\.state\.status !== "pending" && part\.state\.status !== "running"/)
+  assert.match(source, /status: "error"/)
+  assert.match(source, /interrupted: true/)
+  assert.match(source, /recovered: true/)
+  assert.match(source, /if \(step === 0\)/)
+  assert.match(source, /sessions\.updatePart\(part\)/)
+  assert.doesNotMatch(source, /setTimeout|setInterval|Date\.now\(\)\s*-/)
 })
 
 test("v1.18.13 renderer registry is reactive and disposal-safe", () => {

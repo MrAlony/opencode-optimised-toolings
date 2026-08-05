@@ -3,7 +3,9 @@
 // ToolPart before the GenericTool fallback, plus the public api.toolRenderers
 // registration surface. The registry is reactive: ToolPart display re-evaluates
 // whenever renderers register, so parts mounted during early/reconnected
-// render paths are not stuck as "generic".
+// render paths are not stuck as "generic". It also recovers persisted pending or
+// running tool parts when a new session-loop generation proves their former
+// in-memory runner no longer exists.
 export const manifest = {
   version: "1.18.13",
   create: [
@@ -199,6 +201,88 @@ export type TuiDispose = () => void | Promise<void>`,
       },
     },
     slots,`,
+        },
+      ],
+    },
+    {
+      path: "packages/opencode/src/session/prompt.ts",
+      beforeSha256: "79519fc90f6cac8ee992a7d772474e257758bcff44a2fe3b402bb1803ef72c3e",
+      replacements: [
+        {
+          name: "orphaned unfinished tool recovery helper",
+          search: `function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
+  // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
+  // They are not pending work and must not trigger an assistant-prefill request.
+  return part.state.status === "error" && part.state.metadata?.interrupted === true
+}`,
+          replace: `function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
+  // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
+  // They are not pending work and must not trigger an assistant-prefill request.
+  return part.state.status === "error" && part.state.metadata?.interrupted === true
+}
+
+function recoverOrphanedToolParts(messages: SessionV1.WithParts[], now: number) {
+  const recovered: SessionV1.ToolPart[] = []
+  const next = messages.map((message) => ({
+    ...message,
+    parts: message.parts.map((part) => {
+      if (part.type !== "tool" || (part.state.status !== "pending" && part.state.status !== "running")) return part
+      const state = part.state
+      const updated = {
+        ...part,
+        state: {
+          status: "error",
+          error: "Tool execution interrupted before completion",
+          input: state.input,
+          metadata: {
+            ...(state.status === "running" ? state.metadata : undefined),
+            interrupted: true,
+            recovered: true,
+          },
+          time: {
+            start: state.status === "running" ? state.time.start : now,
+            end: now,
+          },
+        },
+      } satisfies SessionV1.ToolPart
+      recovered.push(updated)
+      return updated
+    }),
+  }))
+  return { messages: next, recovered }
+}`,
+        },
+        {
+          name: "recover unfinished tools at new runner boundary",
+          search: `          let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+
+          const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)`,
+          replace: `          let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+
+          // SessionRunState executes this effect only for a newly owning runner.
+          // On its first iteration, unfinished persisted parts therefore belong to
+          // a generation whose in-memory finalizer can no longer complete them.
+          if (step === 0) {
+            const recovery = recoverOrphanedToolParts(msgs, Date.now())
+            if (recovery.recovered.length > 0) {
+              yield* Effect.forEach(recovery.recovered, (part) => sessions.updatePart(part), {
+                concurrency: "unbounded",
+                discard: true,
+              })
+              yield* Effect.logWarning("recovered orphaned unfinished tools", {
+                "session.id": sessionID,
+                count: recovery.recovered.length,
+                calls: recovery.recovered.map((part) => ({ tool: part.tool, callID: part.callID })),
+              })
+              msgs = recovery.messages
+            }
+          }
+
+          const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)`,
         },
       ],
     },
