@@ -1,14 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
 import { parseWebFetch, parseWebSearch, inputItems } from "../lib/inspect.js"
-import { Activity, DetailLines, lifecycleOf, MetaGrid, PreviewList, RawEvidence, resolvedStatus, Section, statusLabel } from "./kit.jsx"
+import { Activity, ContentPane, InspectorCard, lifecycleOf, MetaGrid, PreviewList, RawEvidence, resolvedStatus, statusLabel } from "./kit.jsx"
 
 function FetchDetails(props) {
-  return <>{props.items.map((item) => <Section title={`URL ${item.number} · ${item.titleText || item.title}`} skin={props.skin} color={item.status === "FAILED" ? props.skin.error : props.skin.success}><MetaGrid skin={props.skin} entries={[["outcome", item.outcome], ["final URL", item.finalUrl], ["cache", item.cache], ["duration", item.duration], ["content", item.content], ["completeness", item.completeness], ["error", item.error]]} /><DetailLines skin={props.skin} lines={item.extracted.split(/\r?\n/)} limit={18} color={props.skin.text} tail={false} /></Section>)}</>
+  return <>{props.items.map((item) => <InspectorCard title={`URL ${item.number} · ${item.titleText || item.title}`} skin={props.skin} status={item.status} meta={item.outcome} subtitle={item.finalUrl && item.finalUrl !== item.title ? item.finalUrl : null}><MetaGrid skin={props.skin} entries={[["cache", item.cache], ["duration", item.duration], ["content", item.content], ["completeness", item.completeness], ["error", item.error]]} />{item.extracted ? <ContentPane title="Extracted content" skin={props.skin} lines={item.extracted.split(/\r?\n/)} limit={18} tail={false} /> : null}</InspectorCard>)}</>
 }
 
 function SearchDetails(props) {
-  return <>{props.items.map((item) => <Section title={`Query ${item.number} · ${item.title}`} skin={props.skin} color={item.status === "FAILED" ? props.skin.error : props.skin.success} meta={item.outcome}><MetaGrid skin={props.skin} entries={[["cache", item.cache], ["backend attempts", item.attempts.join(" · ")]]} />{item.results.slice(0, 8).map((result) => <Section title={result.title} skin={props.skin} meta={result.source}><text fg={props.skin.accent}>{result.url}</text><text fg={props.skin.text}>{result.snippet}</text></Section>)}</Section>)}</>
+  return <>{props.items.map((item) => <InspectorCard title={`Query ${item.number} · ${item.title}`} skin={props.skin} status={item.status} meta={item.outcome}><MetaGrid skin={props.skin} entries={[["cache", item.cache], ["backend attempts", item.attempts.join(" · ")]]} />{item.results.slice(0, 8).map((result, index) => <InspectorCard title={`${index + 1}. ${result.title}`} skin={props.skin} status="SUCCESS" meta={result.source} subtitle={result.url} nested><text fg={props.skin.text}>{result.snippet}</text></InspectorCard>)}</InspectorCard>)}</>
 }
 
 export function WebView(props) {

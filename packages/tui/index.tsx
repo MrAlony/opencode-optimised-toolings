@@ -29,6 +29,17 @@ const palette = {
   success: "#5faf5f",
   error: "#d75f5f",
   warning: "#d7af5f",
+  surface: "#202124",
+  surfaceHover: "#292b30",
+  successSurface: "#1f2822",
+  successSurfaceHover: "#26342a",
+  errorSurface: "#2b2022",
+  errorSurfaceHover: "#38272a",
+  warningSurface: "#2b271e",
+  warningSurfaceHover: "#393225",
+  accentSurface: "#202631",
+  accentSurfaceHover: "#283247",
+  inset: "#191a1d",
 }
 
 function ink(map, name, fallback) {
@@ -47,6 +58,17 @@ function skinOf(theme) {
     success: ink(map, "success", palette.success),
     error: ink(map, "error", palette.error),
     warning: ink(map, "warning", palette.warning),
+    surface: ink(map, "backgroundElement", ink(map, "backgroundPanel", palette.surface)),
+    surfaceHover: ink(map, "backgroundMenu", palette.surfaceHover),
+    successSurface: ink(map, "backgroundSuccess", palette.successSurface),
+    successSurfaceHover: ink(map, "backgroundSuccessHover", palette.successSurfaceHover),
+    errorSurface: ink(map, "backgroundError", palette.errorSurface),
+    errorSurfaceHover: ink(map, "backgroundErrorHover", palette.errorSurfaceHover),
+    warningSurface: ink(map, "backgroundWarning", palette.warningSurface),
+    warningSurfaceHover: ink(map, "backgroundWarningHover", palette.warningSurfaceHover),
+    accentSurface: ink(map, "backgroundPrimary", palette.accentSurface),
+    accentSurfaceHover: ink(map, "backgroundPrimaryHover", palette.accentSurfaceHover),
+    inset: ink(map, "background", palette.inset),
   }
 }
 

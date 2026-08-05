@@ -35,6 +35,13 @@ export function statusLabel(status, lifecycle) {
   return "partial"
 }
 
+export function statusSurface(status, skin, active = false) {
+  if (status === "SUCCESS") return active ? skin.successSurfaceHover : skin.successSurface
+  if (status === "FAILED") return active ? skin.errorSurfaceHover : skin.errorSurface
+  if (status === "RUNNING" || status === "PENDING") return active ? skin.accentSurfaceHover : skin.accentSurface
+  return active ? skin.warningSurfaceHover : skin.warningSurface
+}
+
 export function StatusGlyph(props) {
   const frames = ["◌", "◔", "◑", "◕"]
   const [frame, setFrame] = createSignal(0)
@@ -83,9 +90,9 @@ export function Activity(props) {
       marginTop={props.compact ? 0 : 1}
       paddingLeft={1}
       paddingRight={1}
-      paddingTop={0}
-      paddingBottom={open() ? 1 : 0}
-      backgroundColor={active() ? props.skin.panel : undefined}
+      paddingTop={1}
+      paddingBottom={1}
+      backgroundColor={statusSurface(props.status, props.skin, active())}
       onMouseOver={() => setActive(true)}
       onMouseOut={() => setActive(false)}
       onMouseUp={toggle}
@@ -133,7 +140,40 @@ export function Section(props) {
   return (
     <box flexDirection="column" gap={0}>
       <text fg={props.color ?? props.skin.accent}><b>{props.title}</b>{props.meta ? <span style={{ fg: props.skin.muted }}>  {props.meta}</span> : null}</text>
-      <box paddingLeft={1} flexDirection="column" gap={0}>{props.children}</box>
+      <box paddingLeft={1} paddingTop={props.tight ? 0 : 1} flexDirection="column" gap={0}>{props.children}</box>
+    </box>
+  )
+}
+
+export function InspectorCard(props) {
+  const tone = props.status ?? "PARTIAL SUCCESS"
+  return (
+    <box
+      flexDirection="column"
+      flexShrink={0}
+      backgroundColor={props.backgroundColor ?? (props.nested ? props.skin.surface : props.skin.inset)}
+      paddingTop={1}
+      paddingBottom={1}
+      paddingLeft={1}
+      paddingRight={1}
+      gap={1}
+    >
+      <box flexDirection="row" gap={1}>
+        <StatusGlyph status={tone} skin={props.skin} pending={props.pending === true} />
+        <text flexGrow={1} fg={props.color ?? statusTone(tone, props.skin)}><b>{props.title}</b></text>
+        {props.meta ? <text fg={props.skin.muted}>{props.meta}</text> : null}
+      </box>
+      {props.subtitle ? <text fg={props.skin.muted}>{props.subtitle}</text> : null}
+      <box paddingLeft={2} flexDirection="column" gap={1}>{props.children}</box>
+    </box>
+  )
+}
+
+export function ContentPane(props) {
+  return (
+    <box flexDirection="column" backgroundColor={props.skin.surface} paddingTop={1} paddingBottom={1} paddingLeft={1} paddingRight={1}>
+      {props.title ? <text fg={props.skin.muted}><b>{props.title}</b></text> : null}
+      <DetailLines skin={props.skin} lines={props.lines} limit={props.limit ?? 18} width={props.width} tail={props.tail} color={props.color ?? props.skin.text} />
     </box>
   )
 }

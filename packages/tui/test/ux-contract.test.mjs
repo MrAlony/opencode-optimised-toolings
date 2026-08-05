@@ -16,6 +16,9 @@ test("activity rows preserve Solid reactivity and remount details on every expan
   assert.match(kit, /focusable=\{expandable\(\)\}/)
   assert.match(kit, /stopPropagation/)
   assert.match(kit, /marginTop=\{props\.compact \? 0 : 1\}/)
+  assert.match(kit, /paddingTop=\{1\}/)
+  assert.match(kit, /paddingBottom=\{1\}/)
+  assert.match(kit, /backgroundColor=\{statusSurface\(props\.status, props\.skin, active\(\)\)\}/)
 })
 
 test("execution lifecycle is authoritative before result parsing", async () => {
@@ -39,8 +42,13 @@ test("all tool families have dedicated inspectors and compact item previews", as
   }
 })
 
-test("expanded inspectors bound evidence and retain structured diagnostics", async () => {
+test("expanded inspectors use separated status-aware cards and bounded content panes", async () => {
   const kit = await source("components/kit.jsx")
+  assert.match(kit, /export function InspectorCard/)
+  assert.match(kit, /export function ContentPane/)
+  assert.match(kit, /props\.nested \? props\.skin\.surface : props\.skin\.inset/)
+  assert.match(kit, /pending=\{props\.pending === true\}/)
+  assert.doesNotMatch(kit.slice(kit.indexOf("export function InspectorCard"), kit.indexOf("export function ContentPane")), /tone === "RUNNING"/)
   assert.match(kit, /export function PreviewList/)
   assert.match(kit, /props\.limit \?\? 4/)
   assert.match(kit, /export function RawEvidence/)
@@ -51,7 +59,24 @@ test("expanded inspectors bound evidence and retain structured diagnostics", asy
   assert.match(edit, /Transaction safety/)
   const web = await source("components/web.jsx")
   assert.match(web, /backend attempts/)
-  assert.match(web, /completeness/)
+  assert.match(web, /Extracted content/)
+  assert.match(web, /<InspectorCard/)
+  assert.match(web, /nested>/)
+  const editNested = await source("components/edit-many.jsx")
+  assert.match(editNested, /Exact replacement.*nested>/s)
+  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx"]) {
+    const body = await source(`components/${file}`)
+    assert.match(body, /<InspectorCard/)
+  }
+})
+
+test("status surfaces remain subtle theme-aware secondary cues", async () => {
+  const index = await source("index.tsx")
+  for (const token of ["successSurface", "errorSurface", "warningSurface", "accentSurface", "inset"]) assert.match(index, new RegExp(token))
+  const kit = await source("components/kit.jsx")
+  assert.match(kit, /statusSurface/)
+  assert.match(kit, /StatusGlyph/)
+  assert.match(kit, /statusLabel/)
 })
 
 test("plugin renderer host participates in native transcript layout", async () => {
