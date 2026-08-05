@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { migrateOpenCodeConfig } from "../scripts/lib/install-core.mjs";
+import { writeJsonAtomic } from "../scripts/lib/json-files.mjs";
 
 const options = { rootPluginUrl: "file:///portable/index.js", cbmSkillPath: "C:/portable/packages/cbm" };
 
@@ -45,4 +49,17 @@ test("migration is idempotent and does not duplicate root plugin or skill path",
   const twice = migrateOpenCodeConfig(once, options);
   assert.equal(twice.plugin.filter((item) => item === options.rootPluginUrl).length, 1);
   assert.equal(twice.skills.paths.filter((item) => item === options.cbmSkillPath).length, 1);
+});
+
+test("atomic JSON writes replace an existing Windows-compatible target without leaving swap files", () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-json-"));
+  const file = join(directory, "opencode.json");
+  try {
+    writeFileSync(file, '{"before":true}\n', "utf8");
+    writeJsonAtomic(file, { after: true });
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { after: true });
+    assert.deepEqual(readdirSync(directory).sort(), ["opencode.json"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

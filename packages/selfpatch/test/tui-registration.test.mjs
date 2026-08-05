@@ -26,6 +26,30 @@ test("root plugin registration creates the TUI config and is idempotent", async 
   }
 })
 
+test("registration canonicalizes equivalent companion file URLs without duplicate activation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "toolings-tui-canonical-"))
+  try {
+    const root = join(directory, "repo")
+    const configDirectory = join(directory, "config")
+    const configPath = join(configDirectory, "tui.json")
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(configDirectory, { recursive: true }))
+    const canonical = tuiCompanionSpec(root)
+    const alternate = canonical.replace("file:///", "file://")
+    writeFileSync(
+      configPath,
+      JSON.stringify({ $schema: "https://opencode.ai/tui.json", plugin: [alternate, canonical, "unrelated"] }),
+      "utf8"
+    )
+
+    const result = await ensureTuiCompanion(root, { configDirectory })
+    const config = JSON.parse(readFileSync(configPath, "utf8"))
+    assert.equal(result.changed, true)
+    assert.deepEqual(config.plugin, [canonical, "unrelated"])
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test("registration preserves unrelated TUI settings and tuple plugins", async () => {
   const f = fixture()
   try {

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { homedir } from "node:os"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const LOCK_WAIT_MS = 10_000
 const LOCK_STALE_MS = 30_000
@@ -17,6 +17,19 @@ export function tuiCompanionSpec(root) {
 
 function entrySpec(entry) {
   return Array.isArray(entry) ? entry[0] : entry
+}
+
+function specIdentity(spec) {
+  if (typeof spec !== "string") return null
+  try {
+    if (spec.startsWith("file:")) {
+      const value = path.resolve(fileURLToPath(spec)).replaceAll("\\", "/")
+      return `file:${process.platform === "win32" ? value.toLowerCase() : value}`
+    }
+  } catch {
+    return spec
+  }
+  return spec
 }
 
 function pidAlive(pid) {
@@ -58,14 +71,50 @@ async function acquireLock(file) {
   }
 }
 
+async function retryWindowsReplace(operation, attempts = 6) {
+  let last
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      last = error
+      if (!new Set(["EACCES", "EBUSY", "EPERM"]).has(error?.code) || attempt === attempts - 1) throw error
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)))
+    }
+  }
+  throw last
+}
+
 async function writeJsonAtomic(file, value) {
-  const temporary = `${file}.${process.pid}.${randomBytes(5).toString("hex")}.tmp`
+  const nonce = `${process.pid}.${randomBytes(5).toString("hex")}`
+  const temporary = `${file}.${nonce}.tmp`
+  const displaced = `${file}.${nonce}.old`
   await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
+  let movedExisting = false
   try {
-    await fs.rename(temporary, file)
+    try {
+      await retryWindowsReplace(() => fs.rename(file, displaced))
+      movedExisting = true
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error
+    }
+    await retryWindowsReplace(() => fs.rename(temporary, file))
+    if (movedExisting) await fs.rm(displaced, { force: true })
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => {})
+    if (movedExisting) {
+      let targetExists = true
+      try { await fs.access(file) } catch { targetExists = false }
+      if (!targetExists) {
+        try { await retryWindowsReplace(() => fs.rename(displaced, file)) }
+        catch (rollbackError) { throw new AggregateError([error, rollbackError], `Could not replace ${file} and could not restore the previous file`) }
+      }
+    }
     throw error
+  } finally {
+    let targetExists = true
+    try { await fs.access(file) } catch { targetExists = false }
+    if (targetExists) await fs.rm(displaced, { force: true }).catch(() => {})
   }
 }
 
@@ -100,11 +149,23 @@ export async function ensureTuiCompanion(root, options = {}) {
     } catch {
       previousSpec = null
     }
-    const present = plugins.some((entry) => entrySpec(entry) === spec)
-    const nextPlugins = present
-      ? plugins
-      : [...plugins.filter((entry) => !previousSpec || entrySpec(entry) !== previousSpec), spec]
-    if (!present) {
+    const identity = specIdentity(spec)
+    const previousIdentity = specIdentity(previousSpec)
+    let keptCompanion = false
+    const nextPlugins = []
+    for (const entry of plugins) {
+      const entryIdentity = specIdentity(entrySpec(entry))
+      if (entryIdentity === identity) {
+        if (!keptCompanion) nextPlugins.push(spec)
+        keptCompanion = true
+        continue
+      }
+      if (previousIdentity && previousIdentity !== identity && entryIdentity === previousIdentity) continue
+      nextPlugins.push(entry)
+    }
+    if (!keptCompanion) nextPlugins.push(spec)
+    const changed = JSON.stringify(nextPlugins) !== JSON.stringify(plugins)
+    if (changed) {
       await writeJsonAtomic(configPath, {
         ...config,
         $schema: config.$schema ?? "https://opencode.ai/tui.json",
@@ -112,7 +173,7 @@ export async function ensureTuiCompanion(root, options = {}) {
       })
     }
     await writeJsonAtomic(markerPath, { spec, updatedAt: new Date().toISOString() })
-    return { changed: !present, configPath, spec, restartRequired: !present, replaced: previousSpec && previousSpec !== spec ? previousSpec : null }
+    return { changed, configPath, spec, restartRequired: changed, replaced: previousSpec && previousSpec !== spec ? previousSpec : null }
   } finally {
     await fs.rm(lockPath, { force: true }).catch(() => {})
   }

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { cbmSkillPath, configDirectory, globalConfigPath, globalOpenCodeDirectory, installStatePath, root, rootPluginUrl } from "./lib/paths.mjs";
 import { readJson, writeJsonAtomic } from "./lib/json-files.mjs";
 import { migrateOpenCodeConfig } from "./lib/install-core.mjs";
+import { ensureTuiCompanion } from "../packages/selfpatch/lib/tui-registration.js";
 
 function backup(path, suffix) { if (!existsSync(path)) return null; const target = resolve(configDirectory, `backup-${suffix}-${Date.now()}-${basename(path)}`); copyFileSync(path, target); return target; }
 
@@ -20,13 +21,8 @@ try {
   const guidanceTargets = [[resolve(root, "config", "AGENTS.md"), resolve(globalOpenCodeDirectory, "AGENTS.md"), "agents"], [resolve(root, "config", "agents", "kilo-implementer.md"), resolve(globalOpenCodeDirectory, "agents", "kilo-implementer.md"), "kilo"]];
   for (const [source, target, key] of guidanceTargets) { if (!reusable || !state.backups[key] || !existsSync(state.backups[key])) state.backups[key] = backup(target, key); mkdirSync(dirname(target), { recursive: true }); copyFileSync(source, target); }
   const tuiJsonPath = resolve(globalOpenCodeDirectory, "tui.json");
-  const tuiSpec = `file://${resolve(root, "packages", "tui", "index.tsx").replace(/\\/g, "/")}`;
   if (!reusable || !state.backups.tui || !existsSync(state.backups.tui)) state.backups.tui = existsSync(tuiJsonPath) ? backup(tuiJsonPath, "tui") : null;
-  let tuiConfig = { "$schema": "https://opencode.ai/tui.json", "plugin": [] };
-  try { const existing = JSON.parse(readFileSync(tuiJsonPath, "utf8")); if (existing && typeof existing === "object") tuiConfig = { ...tuiConfig, ...existing }; } catch { /* start fresh */ }
-  if (!Array.isArray(tuiConfig.plugin)) tuiConfig.plugin = [];
-  if (!tuiConfig.plugin.some((entry) => (Array.isArray(entry) ? entry[0] : entry) === tuiSpec)) tuiConfig.plugin.push(tuiSpec);
-  writeFileSync(tuiJsonPath, `${JSON.stringify(tuiConfig, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await ensureTuiCompanion(root, { configDirectory: globalOpenCodeDirectory });
   writeJsonAtomic(installStatePath, state);
-  console.log(`INSTALL SUCCESS\nRoot plugin: ${rootPluginUrl}\nConfig backup: ${state.backups.config}\nBuilt-in webfetch: disabled and denied\nStealth MCP: removed\nTUI plugin: ${tuiJsonPath}\nRestart OpenCode to load the unified plugin (first launch auto-patches and restarts itself once).`);
+  console.log(`INSTALL SUCCESS\nRoot plugin: ${rootPluginUrl}\nConfig backup: ${state.backups.config}\nBuilt-in webfetch: disabled and denied\nStealth MCP: removed\nTUI plugin: ${tuiJsonPath}\nFully quit and restart OpenCode to load the unified plugin. If the first launch installs a patched binary, quit and relaunch once more to activate it; the installer never stops or restarts a running process.`);
 } catch (error) { console.error(`INSTALL FAILED: ${error.message}`); process.exitCode = 1; }

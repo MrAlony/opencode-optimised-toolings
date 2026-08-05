@@ -100,3 +100,18 @@ test("plugin renderer host participates in native transcript layout", async () =
   assert.match(manifest, /alwaysSeparate\.add\(el\)/)
   assert.match(manifest, /flexShrink=\{0\}/)
 })
+
+test("native-first IDE enriches only safe presentation slots and never owns behavior", async () => {
+  const index = await source("index.tsx")
+  const ide = await source("components/native-ide.jsx")
+  const nativeSlots = index.slice(index.indexOf("api.slots.register({\n      order: 20"), index.indexOf("  } catch {", index.indexOf("api.slots.register({\n      order: 20")))
+  for (const slot of ["home_prompt_right", "session_prompt_right", "home_bottom", "sidebar_content"]) assert.match(nativeSlots, new RegExp(slot))
+  assert.match(ide, /NativePromptContext/)
+  assert.match(ide, /NativeHomeWorkspace/)
+  assert.match(ide, /NativeWorkspaceInspector/)
+  assert.match(ide, /OpenCode - MrAlony Customised Tool Edition/)
+  assert.match(ide, /Alonix .*renderers/)
+  assert.equal((nativeSlots.match(/sidebar_content/g) ?? []).length, 1)
+  assert.doesNotMatch(ide + nativeSlots, /keymap\.registerLayer|mode\.push|route\.register|route\.navigate|project\.open|session\.list|session\.create|session\.update|setDirectory|onKeyDown|focusable=/)
+  assert.doesNotMatch(nativeSlots, /home_logo|home_prompt\(.*mode="replace"|session_prompt\(.*mode="replace"/s)
+})

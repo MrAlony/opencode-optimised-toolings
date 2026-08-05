@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { JSX } from "@opentui/solid"
-import type { TuiPlugin, TuiPluginApi, TuiPluginModule, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import {
   customTools,
   formatStateLog,
@@ -19,6 +19,7 @@ import { DiscoveryView } from "./components/discovery.jsx"
 import { WebView } from "./components/web.jsx"
 import { StealthView } from "./components/stealth.jsx"
 import { CbmView } from "./components/cbm.jsx"
+import { NativeHomeWorkspace, NativePromptContext, NativeWorkspaceInspector } from "./components/native-ide.jsx"
 
 const palette = {
   panel: "#242424",
@@ -40,11 +41,11 @@ const palette = {
   accentSurface: "#202631",
   accentSurfaceHover: "#283247",
   inset: "#191a1d",
+  section: "#8296b8",
 }
 
 function ink(map, name, fallback) {
-  const value = map?.[name]
-  return typeof value === "string" ? value : fallback
+  return map?.[name] ?? fallback
 }
 
 function skinOf(theme) {
@@ -69,6 +70,7 @@ function skinOf(theme) {
     accentSurface: ink(map, "backgroundPrimary", palette.accentSurface),
     accentSurfaceHover: ink(map, "backgroundPrimaryHover", palette.accentSurfaceHover),
     inset: ink(map, "background", palette.inset),
+    section: palette.section,
   }
 }
 
@@ -100,47 +102,6 @@ type RendererRegistration = {
   available: boolean
   registered: number
   failed: string[]
-}
-
-function statusSlot(statePath: string, registration: RendererRegistration): TuiSlotPlugin {
-  return {
-    order: 50,
-    slots: {
-      sidebar_content(ctx) {
-        const state = readStateSync(statePath)
-        const indicator = indicatorFor(state)
-        const skin = skinOf(ctx.theme)
-        const color = indicator.level === "error" ? skin.error : indicator.level === "warn" ? skin.accent : indicator.level === "ok" ? skin.success : skin.text
-        return (
-          <box
-            border
-            borderColor={skin.border}
-            backgroundColor={skin.panel}
-            paddingTop={1}
-            paddingBottom={1}
-            paddingLeft={2}
-            paddingRight={2}
-            flexDirection="column"
-            gap={1}
-          >
-            <text fg={color}>
-              <b>Tooling</b>
-            </text>
-            <text fg={skin.muted}>{indicator.text}</text>
-            {registration.available ? (
-              <text fg={registration.failed.length ? skin.accent : skin.success}>
-                Rich renderers registered: {registration.registered}/{customTools.length}
-              </text>
-            ) : (
-              <text fg={skin.error}>Rich renderer API unavailable in this TUI runtime</text>
-            )}
-            {registration.failed.length ? <text fg={skin.error}>Failed: {registration.failed.join(", ").slice(0, 140)}</text> : null}
-            {state.lastError ? <text fg={skin.error}>{String(state.lastError).slice(0, 140)}</text> : null}
-          </box>
-        )
-      },
-    },
-  }
 }
 
 const tui: TuiPlugin = async (api, options) => {
@@ -181,7 +142,31 @@ const tui: TuiPlugin = async (api, options) => {
   }
 
   try {
-    api.slots.register(statusSlot(statePath, registration))
+    api.slots.register({
+      order: 20,
+      slots: {
+        home_prompt_right() {
+          return <NativePromptContext api={api} skin={skin} />
+        },
+        session_prompt_right(ctx) {
+          return <NativePromptContext api={api} skin={skin} sessionID={ctx.session_id} />
+        },
+        home_bottom() {
+          return <NativeHomeWorkspace api={api} skin={skin} />
+        },
+        sidebar_content(ctx) {
+          const toolingState = readStateSync(statePath)
+          return (
+            <NativeWorkspaceInspector
+              api={api}
+              skin={skin}
+              sessionID={ctx.session_id}
+              tooling={{ state: toolingState, indicator: indicatorFor(toolingState), registration }}
+            />
+          )
+        },
+      },
+    })
   } catch {
     // slots.register is plugin-context only; ignore otherwise.
   }

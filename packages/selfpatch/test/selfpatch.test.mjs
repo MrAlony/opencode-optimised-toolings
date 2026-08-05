@@ -123,6 +123,18 @@ test("v1.18.13 patch carries tool renderers through every TUI API boundary", () 
   assert.match(adapters.replacements.map((item) => item.replace).join("\n"), /return registerPluginToolRenderer/)
 })
 
+test("v1.18.13 patch cannot replace native project, session, prompt, route, or keymap behavior", () => {
+  const paths = patchManifest.files.map((file) => file.path)
+  assert.deepEqual(paths.sort(), [
+    "packages/opencode/src/plugin/tui/runtime.ts",
+    "packages/plugin/src/tui.ts",
+    "packages/tui/src/plugin/adapters.tsx",
+    "packages/tui/src/routes/session/index.tsx",
+  ].sort())
+  const source = JSON.stringify(patchManifest)
+  for (const forbidden of ["app_left", "TuiProject", "TuiWorkspace", "setDirectory", "projectTransition", "session.get({ sessionID", "packages/tui/src/context/sdk.tsx", "packages/tui/src/context/sync.tsx", "packages/tui/src/app.tsx"]) assert.equal(source.includes(forbidden), false, `forbidden host behavior: ${forbidden}`)
+})
+
 test("v1.18.13 renderer registry is reactive and disposal-safe", () => {
   const source = patchManifest.create.find((item) => item.path.endsWith("tool-renderers.ts"))?.content ?? ""
   assert.match(source, /registryVersion\(\)/)
