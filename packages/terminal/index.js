@@ -7,6 +7,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 90_000;
 const MAX_COMMANDS = 12;
 const MAX_CONCURRENCY = 6;
+const TOOL_CALL_EFFICIENCY_PRINCIPLE = "Each tool invocation has per-call monetary cost. Maximize completed work by putting all already-known independent work into the fewest safe calls; never reduce task scope, implementation quality, or verification to save a call.";
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_BATCH_OUTPUT_BYTES = 192 * 1024;
 const WINDOWS_PROCESS_QUERY_TIMEOUT_MS = 5_000;
@@ -132,7 +133,7 @@ function repeatedToolAdvice(toolName, streak) {
   const guidance = toolName === "alonix-shell"
     ? "Batch independent finite commands and avoid serial shell micro-calls."
     : "Batch independent lifecycle operations and avoid repeated polling calls.";
-  return `[${strength} REPEATED-TOOL ADVICE] Consecutive ${toolName} call #${streak}. ${guidance}`;
+  return `[${strength} REPEATED-TOOL ADVICE] Consecutive ${toolName} call #${streak}. ${guidance} ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`;
 }
 
 function trackToolUse(context, toolName) {
@@ -144,9 +145,9 @@ function trackToolUse(context, toolName) {
 }
 
 function singletonAdvice(kind, count) {
-  if (count === 1) return `[TOOL-CALL EFFICIENCY NOTICE] Single-${kind} call detected. If other independent work is already known, include it in this call; do not invent unrelated work merely to fill a batch.`;
-  if (count === 2) return `[STRONG BATCHING ADVICE] Repeated single-${kind} calls detected. Consolidate already-known independent commands or operations into the next call. Preserve dependency ordering and never reduce verification.`;
-  if (count >= 3) return `[CRITICAL BATCHING ADVICE] ${count} single-${kind} calls have occurred in this session. Stop serial command micro-calls when work can safely be represented as one batch. Continue using single items only for genuine dependency-ordered steps.`;
+  if (count === 1) return `[TOOL-CALL EFFICIENCY NOTICE] Single-${kind} call detected. If other independent work is already known, include it in this call; do not invent unrelated work merely to fill a batch. ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`;
+  if (count === 2) return `[STRONG BATCHING ADVICE] Repeated single-${kind} calls detected. Consolidate all already-known independent commands or operations into the next call while preserving dependency ordering. ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`;
+  if (count >= 3) return `[CRITICAL BATCHING ADVICE] ${count} single-${kind} calls have occurred in this session. Stop serial command micro-calls when work can safely be represented as one batch; continue using single items only for genuine dependency-ordered steps. ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`;
   return "";
 }
 
@@ -192,8 +193,8 @@ function backgroundAdvice(context, operations) {
   } else state.backgroundSingletons = 0;
   const polling = operations.every((op) => ["status", "logs"].includes(String(op.action).toLowerCase()));
   state.pollStreak = polling ? state.pollStreak + 1 : 0;
-  if (state.pollStreak === 2) notes.push("[POLLING ADVICE] This is the second consecutive polling call. Stop polling now: do useful independent work before checking again, and batch status/log requests for all known process ids.");
-  if (state.pollStreak >= 3) notes.push(`[CRITICAL POLLING ADVICE] ${state.pollStreak} consecutive polling calls detected. Do not continue the polling loop. Work on something else and check once later, or use a finite foreground command when the process is not actually long-running.`);
+  if (state.pollStreak === 2) notes.push(`[POLLING ADVICE] This is the second consecutive polling call. Stop polling now: do useful independent work before checking again, and batch status/log requests for all known process ids. ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`);
+  if (state.pollStreak >= 3) notes.push(`[CRITICAL POLLING ADVICE] ${state.pollStreak} consecutive polling calls detected. Do not continue the polling loop. Work on something else and check once later, or use a finite foreground command when the process is not actually long-running. ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`);
   return notes.filter(Boolean);
 }
 

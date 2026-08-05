@@ -93,7 +93,10 @@ test("singleton shell calls emit escalating advice", async () => {
   const first = await plugin.tool["alonix-shell"].execute(args, singletonContext);
   const second = await plugin.tool["alonix-shell"].execute(args, singletonContext);
   assert.match(first, /EFFICIENCY NOTICE/);
+  assert.match(first, /Each tool invocation has per-call monetary cost/);
   assert.match(second, /STRONG BATCHING ADVICE/);
+  assert.match(second, /Maximize completed work by putting all already-known independent work into the fewest safe calls/);
+  assert.match(second, /never reduce task scope, implementation quality, or verification to save a call/);
   assert.match(second, /REPEATED COMMAND WARNING/);
 });
 
@@ -153,8 +156,10 @@ test("repeated pure polls emit escalating advice without delaying operations", a
   assert.match(first, /Process 'missing' not found/);
   assert.match(second, /POLLING ADVICE/);
   assert.match(second, /Stop polling now/);
+  assert.match(second, /Each tool invocation has per-call monetary cost/);
   assert.match(third, /CRITICAL POLLING ADVICE/);
   assert.match(third, /Do not continue the polling loop/);
+  assert.match(third, /never reduce task scope, implementation quality, or verification/);
   assert.doesNotMatch(`${first}\n${second}\n${third}`, /POLL COOLDOWN|delayed \d+s|COOLDOWN ABORTED/);
 });
 

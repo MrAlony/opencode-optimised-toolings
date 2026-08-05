@@ -59,6 +59,9 @@ test("filesystem usage advisories preserve established read, repeated-tool, and 
     assert.match(read2, /\[NOTICE REPEATED-TOOL ADVICE\] Consecutive alonix-read-many call #2\. If more paths are already known, combine them now instead of continuing serial reads\./);
     assert.match(read3, /\[READ BATCH SIGNAL\] This is one-file read #3 in the session; repeated narrow reads may indicate that related context is being discovered serially\./);
     assert.match(read3, /\[STRONG REPEATED-TOOL ADVICE\] Consecutive alonix-read-many call #3\. If more paths are already known, combine them now instead of continuing serial reads\./);
+    assert.match(read3, /Each tool invocation has per-call monetary cost\./);
+    assert.match(read3, /Maximize completed work by putting all already-known independent work into the fewest safe calls/);
+    assert.match(read3, /never reduce task scope, implementation quality, or verification to save a call/);
     assert.doesNotMatch(read3, /TOOL USAGE (?:SIGNAL|WARNING)|CRITICAL READ BATCH WARNING/);
 
     const discoverySession = context(directory, "usage-discovery-session");
@@ -80,6 +83,8 @@ test("repeated-tool advisories retain exact tool-specific guidance and NOTICE-to
     const edit3 = await tools["alonix-edit-many"].execute({ actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "ONE", replace: "one" }] }], base_dir: directory }, editSession);
     assert.match(edit2, /\[NOTICE REPEATED-TOOL ADVICE\] Consecutive alonix-edit-many call #2\. Combine independent files and repeated same-file actions into one ordered edit call when they are already known\./);
     assert.match(edit3, /\[STRONG REPEATED-TOOL ADVICE\] Consecutive alonix-edit-many call #3\./);
+    assert.match(edit3, /Each tool invocation has per-call monetary cost/);
+    assert.match(edit3, /never reduce task scope, implementation quality, or verification/);
   });
 });
 

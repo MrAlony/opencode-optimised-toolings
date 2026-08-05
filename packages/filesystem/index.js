@@ -7,6 +7,7 @@ import { atomicCreateText, atomicReplaceText } from "./lib/text-io.js";
 
 const MAX_BATCH_PATHS = 10;
 const MAX_RANGE_REQUESTS = 20;
+const TOOL_CALL_EFFICIENCY_PRINCIPLE = "Each tool invocation has per-call monetary cost. Maximize completed work by putting all already-known independent work into the fewest safe calls; never reduce task scope, implementation quality, or verification to save a call.";
 const sessionUsage = new Map();
 
 function sessionState(context) {
@@ -33,7 +34,7 @@ function usageSignals(context, toolName, { oneFile = false } = {}) {
       : level === 2
         ? "This is another one-file read in the session; a broader related-file batch may provide more complete edit context."
         : `This is one-file read #${level} in the session; repeated narrow reads may indicate that related context is being discovered serially.`;
-    signals.push(`[READ BATCH SIGNAL] ${text}`);
+    signals.push(`[READ BATCH SIGNAL] ${text} ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`);
   }
 
   if (state.streak >= 2) {
@@ -44,13 +45,13 @@ function usageSignals(context, toolName, { oneFile = false } = {}) {
       "alonix-edit-many": "Combine independent files and repeated same-file actions into one ordered edit call when they are already known.",
     };
     const label = state.streak === 2 ? "NOTICE REPEATED-TOOL ADVICE" : "STRONG REPEATED-TOOL ADVICE";
-    signals.push(`[${label}] Consecutive ${toolName} call #${state.streak}. ${guidance[toolName] ?? "Consolidate already-known independent work when the tool supports it."}`);
+    signals.push(`[${label}] Consecutive ${toolName} call #${state.streak}. ${guidance[toolName] ?? "Consolidate already-known independent work when the tool supports it."} ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`);
   }
 
   if (state.discoveryCalls === 2) {
-    signals.push("[CBM ESCALATION WARNING] Filesystem discovery call #2 detected. Use alonix-index-project(action=\"list\") before another broad filesystem discovery call. If the repository is indexed, switch to alonix-index-context or one complete alonix-index-investigate call; otherwise continue with precise filesystem evidence.");
+    signals.push(`[CBM ESCALATION WARNING] Filesystem discovery call #2 detected. Use alonix-index-project(action="list") before another broad filesystem discovery call. If the repository is indexed, switch to alonix-index-context or one complete alonix-index-investigate call; otherwise continue with precise filesystem evidence. ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`);
   } else if (state.discoveryCalls >= 3) {
-    signals.push(`[CRITICAL CBM ESCALATION] Filesystem discovery call #${state.discoveryCalls} detected. Stop broad explore/search loops. Use alonix-index-project(action=\"list\") now; for an indexed repository the NEXT discovery call should be alonix-index-context or alonix-index-investigate. If it is not indexed, index it once with alonix-index-project(action=\"index\") or explain why precise filesystem follow-up is genuinely required. Continue the full task—change the information source, not the scope.`);
+    signals.push(`[CRITICAL CBM ESCALATION] Filesystem discovery call #${state.discoveryCalls} detected. Stop broad explore/search loops. Use alonix-index-project(action="list") now; for an indexed repository the NEXT discovery call should be alonix-index-context or alonix-index-investigate. If it is not indexed, index it once with alonix-index-project(action="index") or explain why precise filesystem follow-up is genuinely required. Continue the full task—change the information source, not the scope. ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`);
   }
 
   return signals;
