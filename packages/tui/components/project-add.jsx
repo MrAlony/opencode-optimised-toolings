@@ -213,7 +213,7 @@ export function ProjectAdd(props) {
           <text fg={tokens().faint} wrapMode="none" selectable={false}>
             JUMP TO
           </text>
-          <box flexDirection="row" flexShrink={0} height={1} gap={1}>
+          <box flexDirection="row" flexShrink={0} gap={1} flexWrap="wrap">
             <For each={shortcuts()}>
               {(root) => (
                 <Button
@@ -293,8 +293,8 @@ export function ProjectAdd(props) {
         </text>
       </Show>
 
-      <box flexDirection="column" flexShrink={0}>
-        <SectionLabel tokens={tokens()} meta={String(model().entries.length)}>
+      <box flexDirection="column" flexGrow={1} minHeight={8}>
+        <SectionLabel tokens={tokens()} meta={`${model().entries.length} folders · scroll to browse`}>
           Folders
         </SectionLabel>
         <Show
@@ -307,7 +307,8 @@ export function ProjectAdd(props) {
             />
           }
         >
-          <For each={model().entries.slice(0, 12)}>
+          <scrollbox flexGrow={1} minHeight={8} stickyScroll={false}>
+          <For each={model().entries}>
             {(entry, position) => (
               <box
                 flexDirection="row"
@@ -335,6 +336,7 @@ export function ProjectAdd(props) {
               </box>
             )}
           </For>
+          </scrollbox>
         </Show>
       </box>
 
@@ -352,6 +354,14 @@ export function ProjectAdd(props) {
         >
           {model().alreadyAdded ? "Already added" : `Use ${fit(baseName(directory()) || "this folder", 20)}`}
         </Button>
+        <box flexDirection="column" flexGrow={1} minWidth={0}>
+          <text fg={model().isProject ? tokens().success : tokens().muted} wrapMode="none" selectable={false}>
+            {model().isProject ? `${GLYPH.ok} Project files detected` : "Any folder can be added"}
+          </text>
+          <text fg={tokens().faint} wrapMode="none" selectable={false}>
+            The folder appears immediately; the chat is created after your first message.
+          </text>
+        </box>
         <Button tokens={tokens()} variant="ghost" onPress={() => props.onClose?.()}>
           Cancel
         </Button>

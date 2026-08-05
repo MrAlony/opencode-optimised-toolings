@@ -13,8 +13,10 @@ export function repoRoot() {
  *
  * On plugin load it first ensures the rich TUI companion is registered in the
  * user's TUI config, then detects the running OpenCode binary. If the binary is
- * not the patched build it downloads the exact-version source, applies the bundled
- * anchor patches, rebuilds, and installs the patched binary over the official
+ * not the enhanced build it downloads the installed version's source, selects
+ * an exact or byte-verified compatible capability profile, rebuilds, and installs
+ * the enhanced binary over the official one. If host capabilities changed, the
+ * official binary and the portable plugin continue unchanged.
  * one in place — no running instance is stopped and nothing restarts by
  * itself; the user restarts OpenCode at their convenience and the next launch
  * reports the patched binary as active. Progress and errors are continuously
@@ -37,15 +39,16 @@ export async function SelfPatchPlugin() {
     started = true
     void (async () => {
       try {
-        // runSelfPatch installs the patched binary over the official one in
-        // place and leaves every running instance untouched; the user restarts
-        // OpenCode at their convenience to activate it.
+        // runSelfPatch only installs a binary after strict source-capability
+        // verification. OpenCode updates and incompatible official binaries are
+        // never blocked or replaced; portable plugin behavior stays available.
         await runSelfPatch(root)
       } catch (error) {
         await writeState(root, {
-          status: "error",
+          status: "portable",
           progressPercent: 0,
-          stepLabel: "Self-patch failed; running the official binary",
+          stepLabel: "Plugin active in portable mode; optional host enhancement failed",
+          renderersActive: false,
           lastError: error?.message ?? String(error),
         }).catch(() => {})
       }
@@ -54,8 +57,8 @@ export async function SelfPatchPlugin() {
 
   // Run the self-patch pipeline immediately on plugin load so the shared
   // state file reflects the actual runtime before any tool call or TUI poll.
-  // The pipeline is idempotent: dev-mode, no-opencode, unsupported versions,
-  // and already-patched binaries all short-circuit without touching the binary.
+  // The pipeline is idempotent and update-safe: source-incompatible versions,
+  // dev-mode, no-opencode, and already-enhanced binaries never modify the host.
   ensureStarted()
 
   return {
@@ -74,10 +77,11 @@ export async function SelfPatchPlugin() {
           ensureStarted()
           const state = await readState(root)
           return [
-            `Self-patch status: ${state.status}`,
+            `Enhancement status: ${state.status}`,
             `OpenCode version: ${state.version ?? "unknown"}`,
-            `Patched binary active: ${state.status === "ok" ? "yes" : "no"}`,
-            `Rich tool renderers: ${state.renderersActive ? "active" : "inactive (needs the patched binary and next launch)"}`,
+            `Plugin active: yes`,
+            `Optional host enhancements: ${state.renderersActive ? "active" : "inactive; portable plugin features remain available"}`,
+            state.compatibilityProfile ? `Compatibility profile: v${state.compatibilityProfile} (${state.compatibilityMode ?? "verified"})` : null,
             tuiRegistration.error
               ? `TUI companion registration: failed — ${tuiRegistration.error}`
               : `TUI companion registration: ${tuiRegistration.changed ? "added; restart required" : "present"}${tuiRegistration.configPath ? ` (${tuiRegistration.configPath})` : ""}`,

@@ -97,6 +97,8 @@ export function buildProjectModel(input = {}) {
   const statuses = input.statuses ?? {}
   const activeSessionID = input.activeSessionID ?? null
   const activeDirectory = normalizeDirectory(input.activeDirectory)
+  const selectedProjectID = input.selectedProjectID ?? null
+  const selectedProjectDirectory = normalizeDirectory(input.selectedProjectDirectory)
   const pinned = new Set(Array.from(input.pinnedProjects ?? []))
   // Hiding removes a project from the list only. Its sessions are untouched and
   // the project reappears if it is added again, so this is never destructive.
@@ -159,6 +161,12 @@ export function buildProjectModel(input = {}) {
     })
   }
 
+  const routeProject = activeDirectory
+    ? [...buckets.values()]
+        .filter((bucket) => containsDirectory(bucket.worktree, activeDirectory))
+        .sort((a, b) => normalizeDirectory(b.worktree).length - normalizeDirectory(a.worktree).length)[0]?.id ?? null
+    : null
+
   const rows = [...buckets.values()].map((bucket) => {
     bucket.sessions.sort((a, b) => {
       if (a.active !== b.active) return a.active ? -1 : 1
@@ -170,7 +178,9 @@ export function buildProjectModel(input = {}) {
       ...bucket,
       openable: Boolean(bucket.worktree),
       pinned: pinned.has(bucket.id),
-      current: Boolean(activeDirectory) && containsDirectory(bucket.worktree, activeDirectory),
+      current: selectedProjectDirectory
+        ? directoryKey(bucket.worktree) === directoryKey(selectedProjectDirectory)
+        : bucket.id === (selectedProjectID ?? routeProject),
       active: bucket.sessions.some((session) => session.active),
       running: bucket.sessions.filter((session) => session.running).length,
       sessionCount: bucket.sessions.length,
@@ -214,6 +224,28 @@ export function flattenProjectSessions(rows) {
     }
   }
   return out
+}
+
+/**
+ * Global portfolio recents, independent of project selection and project order.
+ * The active chat and every working chat are mandatory; newest idle chats fill
+ * the remaining baseline. The result can exceed `limit` when more chats are
+ * actively working because hiding live work would make the navigator dishonest.
+ */
+export function recentSessions(rows, limit = 5) {
+  const sessions = flattenProjectSessions(rows)
+  const mandatory = sessions
+    .filter((session) => session.active || session.running)
+    .sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1
+      if (a.running !== b.running) return a.running ? -1 : 1
+      return b.updated - a.updated
+    })
+  const seen = new Set(mandatory.map((session) => session.id))
+  const newest = sessions
+    .filter((session) => !seen.has(session.id))
+    .sort((a, b) => b.updated - a.updated)
+  return [...mandatory, ...newest.slice(0, Math.max(0, Number(limit) - mandatory.length))]
 }
 
 /**

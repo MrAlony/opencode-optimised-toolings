@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 // Persistent project navigator. Geometry never changes under the pointer.
 
-import { createMemo, For, Show } from "solid-js"
+import { createMemo, createSignal, For, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Button, ClickRow } from "./controls.jsx"
 import { GLYPH } from "../lib/design.js"
@@ -12,6 +12,9 @@ import { useClock } from "./runtime.jsx"
 
 export const DOCK_EXPANDED = 36
 export const DOCK_COLLAPSED = 4
+export const RECENT_CHAT_COUNT = 5
+export const INITIAL_SESSION_COUNT = 5
+export const SESSION_PAGE_SIZE = 10
 
 export function dockWidth(expanded, viewportWidth) {
   const width = Math.max(20, Math.floor(Number(viewportWidth) || 80))
@@ -36,7 +39,7 @@ function SessionRow(props) {
 
   return (
     <box flexDirection="column" flexShrink={0}>
-      <ClickRow tokens={tokens()} selected={session().active} onSelect={() => props.onOpen?.(session())}>
+      <ClickRow width={props.width} tokens={tokens()} selected={session().active} onSelect={() => props.onOpen?.(session())}>
         <text wrapMode="none" selectable={false}>
           <span style={{ fg: tokens().borderFaint }}>{"  └ "}</span>
           <span style={{ fg: session().running ? tokens().accent : session().active ? tokens().success : tokens().faint }}>
@@ -59,9 +62,27 @@ function SessionRow(props) {
 function ProjectCard(props) {
   const tokens = () => props.tokens
   const project = () => props.project
+  const open = () => {
+    if (project().openable) props.onOpen?.(project())
+  }
   return (
-    <box flexDirection="column" flexShrink={0} marginBottom={1} backgroundColor={project().current ? tokens().selection : tokens().panel}>
-      <box flexDirection="row" flexShrink={0} height={1}>
+    <box
+      flexDirection="column"
+      flexShrink={0}
+      width={props.width}
+      height={2}
+      marginBottom={1}
+      backgroundColor={project().current ? tokens().selectionStrong : tokens().panel}
+      focusable={project().openable}
+      onKeyDown={(event) => {
+        const key = String(event?.name ?? "").toLowerCase()
+        if (key !== "return" && key !== "enter" && key !== "space") return
+        event?.preventDefault?.()
+        open()
+      }}
+      onMouseUp={project().openable ? open : undefined}
+    >
+      <box flexDirection="row" flexShrink={0} width={props.width} height={1}>
         <box
           flexShrink={0}
           width={3}
@@ -74,11 +95,7 @@ function ProjectCard(props) {
             {" "}{props.collapsed ? GLYPH.caretRight : GLYPH.caretDown}
           </text>
         </box>
-        <box
-          flexGrow={1}
-          minWidth={0}
-          onMouseUp={project().openable ? () => props.onOpen?.(project()) : undefined}
-        >
+        <box flexGrow={1} minWidth={0}>
           <text fg={project().openable ? (project().current ? tokens().success : tokens().text) : tokens().faint} wrapMode="none" selectable={false}>
             <b>{fit(project().name, Math.max(6, props.width - 14))}</b>
           </text>
@@ -108,12 +125,64 @@ function ProjectCard(props) {
           </text>
         </box>
       </box>
-      <box flexDirection="row" flexShrink={0} paddingLeft={3} paddingRight={1}>
+      <box flexDirection="row" flexShrink={0} width={props.width} height={1} paddingLeft={3} paddingRight={1}>
         <text fg={tokens().faint} wrapMode="none" selectable={false}>
           {project().running > 0 ? `${project().running} working · ` : ""}{project().sessionCount} chat{project().sessionCount === 1 ? "" : "s"}
         </text>
       </box>
     </box>
+  )
+}
+
+function RecentChatRow(props) {
+  const session = () => props.session
+  const tokens = () => props.tokens
+  const clock = useClock(() => session().running === true && tokens().motion !== false)
+  const glyph = createMemo(() => {
+    if (session().running) return spinnerFrame(clock(), undefined, 90, tokens().motion !== false)
+    if (session().active) return GLYPH.diamond
+    return GLYPH.bullet
+  })
+  return (
+    <ClickRow
+      width={props.width}
+      tokens={tokens()}
+      selected={session().active}
+      onSelect={() => props.onOpen?.(session())}
+    >
+      <text fg={session().running ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+        {glyph()}
+      </text>
+      <text fg={session().active ? tokens().text : tokens().muted} wrapMode="none" selectable={false}>
+        {fit(session().title, Math.max(8, props.width - 15))}
+      </text>
+      <box flexGrow={1} />
+      <text fg={tokens().faint} wrapMode="none" selectable={false}>
+        {fit(session().projectName ?? "", 8)}
+      </text>
+    </ClickRow>
+  )
+}
+
+function ProjectSessions(props) {
+  const [limit, setLimit] = createSignal(INITIAL_SESSION_COUNT)
+  const sessions = createMemo(() => props.project.sessions.slice(0, limit()))
+  const remaining = createMemo(() => Math.max(0, props.project.sessions.length - sessions().length))
+  return (
+    <>
+      <For each={sessions()}>
+        {(session) => <SessionRow api={props.api} tokens={props.tokens} session={session} width={props.width} onOpen={props.onOpen} />}
+      </For>
+      <Show when={remaining() > 0}>
+        <ClickRow width={props.width} tokens={props.tokens} onSelect={() => setLimit((value) => value + SESSION_PAGE_SIZE)}>
+          <text fg={props.tokens.accent} wrapMode="none" selectable={false}>
+            {"  └ "}{GLYPH.caretDown} Show {Math.min(SESSION_PAGE_SIZE, remaining())} more
+          </text>
+          <box flexGrow={1} />
+          <text fg={props.tokens.faint} wrapMode="none" selectable={false}>{remaining()} left</text>
+        </ClickRow>
+      </Show>
+    </>
   )
 }
 
@@ -139,6 +208,7 @@ export function Dock(props) {
   const width = createMemo(() => dockWidth(expanded(), dimensions().width))
   const height = createMemo(() => Math.max(4, dimensions().height))
   const projects = createMemo(() => store.projectRows())
+  const recentChats = createMemo(() => store.recentSessionRows())
   const summary = createMemo(() => store.summary())
   const hiddenCount = () => store.hiddenProjects?.length ?? 0
 
@@ -166,13 +236,35 @@ export function Dock(props) {
             </box>
           </box>
 
-          <box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1} paddingTop={1}>
-            <text fg={tokens().muted} wrapMode="none" selectable={false}><b>YOUR FOLDERS</b></text>
-            <box flexGrow={1} />
-            <text fg={tokens().faint} wrapMode="none" selectable={false}>+ new · × hide</text>
-          </box>
-
           <scrollbox flexGrow={1} stickyScroll={false} paddingTop={1}>
+            <Show when={recentChats().length}>
+              <box flexDirection="row" flexShrink={0} width={width()} paddingLeft={1} paddingRight={1}>
+                <text fg={tokens().muted} wrapMode="none" selectable={false}><b>RECENT CHATS</b></text>
+                <box flexGrow={1} />
+                <text fg={tokens().faint} wrapMode="none" selectable={false}>active + latest</text>
+              </box>
+              <For each={recentChats()}>
+                {(session) => (
+                  <RecentChatRow
+                    tokens={tokens()}
+                    session={session}
+                    width={width()}
+                    onOpen={(row) => {
+                      if (row.projectID) store.selectProject?.(row.projectID)
+                      props.onOpen?.(row)
+                    }}
+                  />
+                )}
+              </For>
+              <box flexShrink={0} height={1} />
+            </Show>
+
+            <box flexDirection="row" flexShrink={0} width={width()} paddingLeft={1} paddingRight={1}>
+              <text fg={tokens().muted} wrapMode="none" selectable={false}><b>YOUR FOLDERS</b></text>
+              <box flexGrow={1} />
+              <text fg={tokens().faint} wrapMode="none" selectable={false}>+ new · × hide</text>
+            </box>
+
             <Show when={projects().length} fallback={<box paddingLeft={1} paddingRight={1}><text fg={tokens().muted} wrapMode="wrap" selectable={false}>{store.loading ? "Loading folders…" : "No folders yet. Add one to start working."}</text></box>}>
               <For each={projects()}>
                 {(project) => (
@@ -183,16 +275,29 @@ export function Dock(props) {
                       width={width()}
                       collapsed={store.workbench.collapsed.has(project.id)}
                       onToggle={() => store.toggleCollapsed(project.id)}
-                      onOpen={props.onOpenProject}
-                      onNew={props.onNewSessionIn}
+                      onOpen={(row) => {
+                        store.selectProject?.(row)
+                        props.onOpenProject?.(row)
+                      }}
+                      onNew={(row) => {
+                        store.selectProject?.(row)
+                        props.onNewSessionIn?.(row)
+                      }}
                       onHide={props.onHideProject}
                     />
                     <Show when={!store.workbench.collapsed.has(project.id)}>
-                      <For each={project.sessions}>
-                        {(session) => <SessionRow api={props.api} tokens={tokens()} session={session} width={width()} onOpen={props.onOpen} />}
-                      </For>
+                      <ProjectSessions
+                        api={props.api}
+                        tokens={tokens()}
+                        project={project}
+                        width={width()}
+                        onOpen={(session) => {
+                          store.selectProject?.(project)
+                          props.onOpen?.(session)
+                        }}
+                      />
                       <Show when={project.sessionCount === 0 && project.openable}>
-                        <ClickRow tokens={tokens()} onSelect={() => props.onNewSessionIn?.(project)}>
+                        <ClickRow width={width()} tokens={tokens()} onSelect={() => props.onNewSessionIn?.(project)}>
                           <text fg={tokens().muted} wrapMode="none" selectable={false}>{"  └ "}{GLYPH.plus} new chat here</text>
                         </ClickRow>
                       </Show>

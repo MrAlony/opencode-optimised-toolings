@@ -219,7 +219,7 @@ function ToolingPanel(props) {
           </text>
         </box>
       </Show>
-      <Show when={tooling()?.state?.lastError}>
+      <Show when={tooling()?.state?.lastError && tooling()?.indicator?.level === "error"}>
         <text fg={props.tokens.error} wrapMode="none" selectable={false}>
           {fit(String(tooling().state.lastError), props.width)}
         </text>

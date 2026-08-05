@@ -21,7 +21,7 @@ const SESSIONS = [
 function createApi(overrides = {}) {
   const kv = new Map(Object.entries(overrides.kv ?? {}))
   const listeners = new Map()
-  const calls = { projectList: 0, sessionList: 0 }
+  const calls = { projectList: 0, sessionList: 0, statusList: 0, messageList: 0 }
   const api = {
     calls,
     listeners,
@@ -50,6 +50,14 @@ function createApi(overrides = {}) {
           calls.sessionList += 1
           if (overrides.failSessions) throw new Error("network down")
           return { data: overrides.sessions ?? SESSIONS }
+        },
+        status: async () => {
+          calls.statusList += 1
+          return { data: overrides.statuses ?? {} }
+        },
+        messages: async ({ sessionID }) => {
+          calls.messageList += 1
+          return { data: overrides.messages?.[sessionID] ?? [{ info: { role: "assistant", time: { completed: Date.now() } } }] }
         },
       },
     },
@@ -220,6 +228,69 @@ test("cleanup unsubscribes so a disposed store stops refreshing", async () => {
   assert.equal(api.calls.projectList, before, "a disposed store must not keep polling")
   assert.equal(api.listeners.size, 0, "every listener must be removed")
   void store
+})
+
+test("durable transcript state repairs false idle status from another process", async () => {
+  const api = createApi({
+    statuses: { s1: { type: "idle" } },
+    messages: { s1: [{ info: { role: "user", time: { created: Date.now() } } }] },
+  })
+  await withStore(api, (store) => {
+    assert.equal(store.sessionRows().find((row) => row.id === "s1").running, true)
+    assert.ok(api.calls.statusList >= 1)
+    assert.ok(api.calls.messageList >= 1)
+  })
+})
+
+test("added folders persist immediately without creating a session", async () => {
+  const api = createApi()
+  await withStore(api, async (store) => {
+    assert.equal(store.addProject("C:/work/new-folder"), true)
+    assert.ok(store.registeredProjects.includes("C:/work/new-folder"))
+    assert.ok(api.kvStore.has("alonix_registered_projects"))
+    const immediate = store.projectRows().find((item) => item.worktree === "C:/work/new-folder")
+    assert.ok(immediate, "the folder must appear optimistically without waiting for the SDK")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const row = store.projectRows().find((item) => item.worktree === "C:/work/new-folder")
+    assert.ok(row, "the manually registered folder must appear before its first chat")
+    assert.equal(row.sessionCount, 0)
+  })
+})
+
+test("a reload discovers folders registered by another OpenCode process", async () => {
+  const api = createApi()
+  await withStore(api, async (store) => {
+    api.kvStore.set("alonix_registered_projects", ["C:/work/from-other-window"])
+    await store.reload()
+    assert.ok(store.registeredProjects.includes("C:/work/from-other-window"))
+    assert.ok(store.projectRows().some((row) => row.worktree === "C:/work/from-other-window"))
+  })
+})
+
+test("sidebar recents are global rather than inherited from selected-project ordering", async () => {
+  const now = Date.now()
+  const api = createApi({
+    sessions: [
+      { id: "selected-old", title: "Selected old", projectID: "p1", directory: "C:/work/alpha", time: { updated: now - 10_000 } },
+      { id: "other-new", title: "Other newest", projectID: "p2", directory: "C:/work/beta", time: { updated: now } },
+      { id: "other-working", title: "Other working", projectID: "p2", directory: "C:/work/beta", time: { updated: now - 20_000 } },
+    ],
+    statuses: { "other-working": { type: "busy" } },
+  })
+  await withStore(api, (store) => {
+    store.selectProject(store.projectRows().find((row) => row.id === "p1"))
+    assert.deepEqual(store.recentSessionRows().slice(0, 2).map((row) => row.id), ["other-working", "other-new"])
+    assert.equal(store.recentSessionRows().find((row) => row.id === "other-new")?.projectID, "p2")
+  })
+})
+
+test("explicit selection changes the highlighted project", async () => {
+  const api = createApi()
+  await withStore(api, (store) => {
+    store.selectProject(store.projectRows().find((row) => row.id === "p2"))
+    assert.equal(store.projectRows().find((row) => row.id === "p2").current, true)
+    assert.equal(store.projectRows().find((row) => row.id === "p1").current, false)
+  })
 })
 
 test("tabs persist across restarts through kv", async () => {

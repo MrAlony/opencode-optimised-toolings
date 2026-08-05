@@ -264,12 +264,21 @@ const tui: TuiPlugin = async (api, options) => {
     }
     const draftApi = (api as TuiPluginApi & { sessionDraft?: { open(directory: string): void } }).sessionDraft
     if (!draftApi || typeof draftApi.open !== "function") {
+      // Portable fallback: keep the registered folder and return to OpenCode's
+      // native new-chat screen without creating an empty session or touching
+      // the installed binary. Exact folder targeting is an optional host
+      // capability and will activate automatically on source-compatible builds.
+      try {
+        api.route.navigate("home")
+      } catch {
+        // The caller still retains the registered project in the portfolio.
+      }
       api.ui.toast({
-        variant: "warning",
-        title: "Restart OpenCode to use folder drafts",
-        message: "The updated host integration is installed automatically and becomes active after restart.",
+        variant: "info",
+        title: "Folder saved",
+        message: "Portable mode opened a native draft. The folder remains available in Alonix; no empty chat was created.",
       })
-      return false
+      return true
     }
     try {
       draftApi.open(target)
@@ -284,7 +293,8 @@ const tui: TuiPlugin = async (api, options) => {
     }
   }
 
-  const openProject = (project: { worktree?: string }) => {
+  const openProject = (project: { id?: string; worktree?: string }) => {
+    if (project?.id) projects.selectProject(project)
     openSessionDraft(project?.worktree)
   }
 
@@ -305,6 +315,7 @@ const tui: TuiPlugin = async (api, options) => {
           projects={() => projects.projectRows()}
           onClose={() => api.ui.dialog.clear()}
           onAdd={async (directory: string) => {
+            projects.addProject(directory)
             if (!openSessionDraft(directory)) return
             api.ui.dialog.clear()
             api.ui.toast({
@@ -450,8 +461,9 @@ const tui: TuiPlugin = async (api, options) => {
           Present on the home screen and inside a session alike: this is the
           always-visible navigation surface.
 
-          `app_left` is added by the Alonix self-patch. On an unpatched host the
-          slot simply never renders, and the workbench route still works.
+          `app_left` is an optional verified host enhancement. On a host whose
+          source changed, the slot simply does not render; the workbench,
+          palette, registered folders, status bar, and native routes continue.
         */
         app_left() {
           return (
@@ -462,7 +474,10 @@ const tui: TuiPlugin = async (api, options) => {
                 store={projects}
                 expanded={dockOpen}
                 onToggle={toggleDock}
-                onOpen={(session: { id: string }) => openSessionTab(session.id)}
+                onOpen={(session: { id: string; projectID?: string }) => {
+                  if (session.projectID) projects.selectProject(session.projectID)
+                  openSessionTab(session.id)
+                }}
                 onOpenProject={openProject}
                 onHideProject={(project: { worktree?: string; name?: string }) => {
                   if (!project?.worktree) return

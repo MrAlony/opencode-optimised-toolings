@@ -114,6 +114,8 @@ test("selecting a project prepares a native deferred draft in that folder", asyn
   const helpers = entry.slice(draftStart, addStart)
   assert.match(helpers, /sessionDraft/)
   assert.match(helpers, /draftApi\.open\(target\)/)
+  assert.match(helpers, /api\.route\.navigate\("home"\)/, "portable hosts must still open a native draft")
+  assert.match(helpers, /Portable mode opened a native draft/)
   assert.match(helpers, /openSessionDraft\(project\?\.worktree\)/)
   assert.doesNotMatch(helpers, /session\.create|projects\.createSession|openSessionTab/, "folder selection must not create or resume a chat")
 
@@ -126,7 +128,7 @@ test("selecting a project prepares a native deferred draft in that folder", asyn
 test("all folder entry points share the deferred draft helper", async () => {
   const entry = await source("index.tsx")
   assert.doesNotMatch(entry, /projects\.createSession|api\.client\.session\.create/)
-  assert.match(entry, /onAdd=\{async \(directory: string\) => \{\s*if \(!openSessionDraft\(directory\)\) return/)
+  assert.match(entry, /onAdd=\{async \(directory: string\) => \{\s*projects\.addProject\(directory\)\s*if \(!openSessionDraft\(directory\)\) return/)
   assert.match(entry, /onNewSessionIn=\{\(project: \{ worktree\?: string \}\) => openSessionDraft\(project\?\.worktree\)\}/)
 })
 
@@ -137,6 +139,34 @@ test("all folder entry points share the deferred draft helper", async () => {
 // Press *feedback* on mouse-down is still correct and is what makes a button
 // feel physical, so the rule is precise: a mouse-down handler may only set
 // local visual state, never invoke a callback.
+test("dock project cards use the full visible header as the action target and paginate chats", async () => {
+  const dock = await source("components/dock.jsx")
+  assert.match(dock, /width=\{props\.width\}[\s\S]*height=\{2\}[\s\S]*focusable=\{project\(\)\.openable\}[\s\S]*onMouseUp=\{project\(\)\.openable/)
+  assert.match(dock, /<box flexDirection="row" flexShrink=\{0\} width=\{props\.width\} height=\{1\}>/)
+  assert.match(dock, /width=\{props\.width\} height=\{1\} paddingLeft=\{3\}/, "the metadata row must share the full card hitbox")
+  assert.match(dock, /INITIAL_SESSION_COUNT = 5/)
+  assert.match(dock, /SESSION_PAGE_SIZE = 10/)
+  assert.match(dock, /Show \{Math\.min\(SESSION_PAGE_SIZE, remaining\(\)\)\} more/)
+  assert.doesNotMatch(dock, /<For each=\{project\.sessions\}>/, "all chats must never render eagerly")
+})
+
+test("the sidebar exposes a bounded full-width recent chats section", async () => {
+  const dock = await source("components/dock.jsx")
+  assert.match(dock, /RECENT_CHAT_COUNT = 5/)
+  assert.match(dock, /store\.recentSessionRows\(\)/)
+  assert.doesNotMatch(dock, /store\.sessionRows\(\)\.slice/, "recents must not inherit selected-project grouping")
+  assert.match(dock, /<b>RECENT CHATS<\/b>/)
+  assert.match(dock, /<RecentChatRow[\s\S]*width=\{width\(\)\}/)
+  assert.match(dock, /if \(row\.projectID\) store\.selectProject\?\.\(row\.projectID\)/)
+})
+
+test("folder picker lists every folder inside a scrollbox", async () => {
+  const picker = await source("components/project-add.jsx")
+  assert.match(picker, /<scrollbox flexGrow=\{1\} minHeight=\{8\}/)
+  assert.match(picker, /<For each=\{model\(\)\.entries\}>/)
+  assert.doesNotMatch(picker, /entries\.slice\(0, 12\)/)
+})
+
 test("no control acts on mouse-down", async () => {
   for (const file of COMPONENTS) {
     const text = await source(file)

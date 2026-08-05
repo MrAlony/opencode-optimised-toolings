@@ -5,7 +5,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultState, readState, sha256File, stateSummary, writeState } from "../lib/state.js"
-import { applyManifest, manifestSha256, patchFileContent, sourceReady } from "../lib/pipeline.js"
+import {
+  applyManifest,
+  manifestCompatible,
+  manifestSha256,
+  patchFileContent,
+  resolvePatchProfile,
+  sourceReady,
+} from "../lib/pipeline.js"
 import { detectBinary, isDevRuntime, resolveOnPath, versionOf } from "../lib/detect.js"
 import { SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
@@ -217,6 +224,76 @@ test("manifestSha256 is deterministic", async () => {
   assert.notEqual(await manifestSha256(manifest), await manifestSha256({ ...manifest, version: "y" }))
 })
 
+test("source-compatible OpenCode updates reuse a verified capability profile", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-compatible-version-"))
+  try {
+    const source = join(root, "source")
+    const patches = join(root, "packages", "selfpatch", "patches", "1.2.3")
+    mkdirSync(source, { recursive: true })
+    mkdirSync(patches, { recursive: true })
+    const official = "stable host boundary\n"
+    writeFileSync(join(source, "host.ts"), official)
+    writeFileSync(
+      join(patches, "manifest.mjs"),
+      `export const manifest = ${JSON.stringify({
+        version: "1.2.3",
+        create: [{ path: "created.ts", content: "enhancement\\n" }],
+        files: [{
+          path: "host.ts",
+          beforeSha256: sha256Of(official),
+          replacements: [{ search: "stable", replace: "enhanced" }],
+        }],
+      })}`,
+    )
+
+    const profile = await resolvePatchProfile(root, "1.2.4", source)
+    assert.ok(profile, "a future version with identical host boundaries must remain enhanceable")
+    assert.equal(profile.exact, false)
+    assert.equal(profile.profileVersion, "1.2.3")
+    assert.equal(profile.manifest.version, "1.2.4")
+    assert.equal(profile.manifest.compatibleProfile, "1.2.3")
+    assert.equal(await manifestCompatible(source, profile.manifest), true)
+
+    await applyManifest(source, profile.manifest)
+    assert.equal(
+      await manifestCompatible(source, profile.manifest),
+      true,
+      "an exact already-applied source tree must remain compatible on restart",
+    )
+    const repeated = await resolvePatchProfile(root, "1.2.4", source)
+    assert.equal(repeated?.profileVersion, "1.2.3")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("changed OpenCode host boundaries stay official and cannot reuse a profile", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-incompatible-version-"))
+  try {
+    const source = join(root, "source")
+    const patches = join(root, "packages", "selfpatch", "patches", "1.2.3")
+    mkdirSync(source, { recursive: true })
+    mkdirSync(patches, { recursive: true })
+    writeFileSync(join(source, "host.ts"), "new incompatible host boundary\n")
+    writeFileSync(
+      join(patches, "manifest.mjs"),
+      `export const manifest = ${JSON.stringify({
+        version: "1.2.3",
+        files: [{
+          path: "host.ts",
+          beforeSha256: sha256Of("old host boundary\\n"),
+          replacements: [{ search: "old", replace: "enhanced" }],
+        }],
+      })}`,
+    )
+
+    assert.equal(await resolvePatchProfile(root, "2.0.0", source), null)
+    assert.equal(readFileSync(join(source, "host.ts"), "utf8"), "new incompatible host boundary\n")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("an existing but partial source cache is not considered ready", async () => {
   const root = mkdtempSync(join(tmpdir(), "alonix-toolings-source-"))
   try {
@@ -227,6 +304,7 @@ test("an existing but partial source cache is not considered ready", async () =>
       "packages/plugin/src/tui.ts",
       "packages/tui/src/app.tsx",
       "packages/tui/src/plugin/adapters.tsx",
+      "packages/tui/src/context/sync.tsx",
       "packages/tui/src/routes/session/index.tsx",
     ]) {
       const target = join(root, file)
@@ -275,7 +353,7 @@ test("v1.18.13 patch exposes a native deferred session draft without creating se
   }
 })
 
-test("v1.18.13 patch is limited to renderer plumbing, deferred drafts, tool recovery, and one layout slot", () => {
+test("v1.18.13 patch is limited to renderer plumbing, transcript reconciliation, deferred drafts, tool recovery, and one layout slot", () => {
   // Every host file patched here is a maintenance cost on each OpenCode
   // upgrade, so the set stays explicit and small.
   const paths = patchManifest.files.map((file) => file.path)
@@ -288,6 +366,7 @@ test("v1.18.13 patch is limited to renderer plumbing, deferred drafts, tool reco
     // panel is the only alternative and it covers the transcript instead of
     // sitting beside it.
     "packages/tui/src/app.tsx",
+    "packages/tui/src/context/sync.tsx",
     "packages/tui/src/plugin/adapters.tsx",
     "packages/tui/src/routes/home/session-destination.tsx",
     "packages/tui/src/routes/session/index.tsx",
@@ -300,9 +379,7 @@ test("v1.18.13 patch is limited to renderer plumbing, deferred drafts, tool reco
     "TuiProject",
     "TuiWorkspace",
     "projectTransition",
-    "session.get({ sessionID",
     "packages/tui/src/context/sdk.tsx",
-    "packages/tui/src/context/sync.tsx",
   ]) {
     assert.equal(source.includes(forbidden), false, `forbidden host behavior: ${forbidden}`)
   }
@@ -334,6 +411,29 @@ test("the app_left slot is declared in the public plugin types", () => {
   assert.match(replaced, /app_left: \{\}/, "plugins must be able to target the new slot in a typed way")
 })
 
+test("v1.18.13 patch reconciles the visible transcript across processes without clobbering live deltas", () => {
+  const files = new Map(patchManifest.files.map((file) => [file.path, file]))
+  const sync = files.get("packages/tui/src/context/sync.tsx")
+  const session = files.get("packages/tui/src/routes/session/index.tsx")
+  assert.ok(sync, "host sync ownership must support authoritative refresh")
+  assert.ok(session, "the visible chat route must schedule reconciliation")
+
+  const syncSource = sync.replacements.map((item) => item.replace).join("\n")
+  assert.match(syncSource, /options: \{ force\?: boolean; transcriptOnly\?: boolean \} = \{\}/)
+  assert.match(syncSource, /fullSyncedSessions\.has\(sessionID\) && !options\.force/)
+  assert.match(syncSource, /hydratingSessions\.set\(sessionID, tracker\)/)
+  assert.match(syncSource, /options\.transcriptOnly/)
+  assert.match(syncSource, /sdk\.client\.session\.messages\(\{ sessionID, limit: 100 \}\)/)
+  assert.match(syncSource, /!visibleIDs\.has\(message\.id\) && !tracker\.messages\.has\(message\.id\)/, "persisted deletions must remove stale local part records")
+
+  const routeSource = session.replacements.map((item) => item.replace).join("\n")
+  assert.match(routeSource, /sync\.session\.sync\(sessionID, \{ force: true \}\)/)
+  assert.match(routeSource, /sync\.session\.sync\(sessionID, \{ force: true, transcriptOnly: true \}\)/)
+  assert.match(routeSource, /=== "working" \? 1250 : 5000/)
+  assert.match(routeSource, /onCleanup\(\(\) =>/)
+  assert.doesNotMatch(routeSource, /setInterval/, "adaptive recursive timeout avoids overlapping fixed polling")
+})
+
 test("v1.18.13 patch terminalizes only unfinished tools at a newly owned loop boundary", () => {
   const prompt = patchManifest.files.find((file) => file.path === "packages/opencode/src/session/prompt.ts")
   assert.ok(prompt, "session prompt lifecycle recovery must be patched")
@@ -355,12 +455,31 @@ test("v1.18.13 renderer registry is reactive and disposal-safe", () => {
   assert.match(source, /\.at\(-1\)\?\.renderer/)
 })
 
+test("self-patch rejects a missing relative detector result before opening it", () => {
+  const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
+  assert.match(source, /detected\?\.path \? \{ \.\.\.detected, path: path\.resolve\(detected\.path\) \}/)
+  assert.match(source, /!bin \|\| !\(await exists\(bin\.path\)\)/)
+})
+
 test("self-patch activation is gated by the current manifest fingerprint", () => {
   const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
   assert.match(source, /patchedSha === officialSha && artifactMarker\?\.manifestSha256 === manifestSha/)
   assert.match(source, /artifactMarker\?\.binarySha256 === patchedSha/)
   assert.match(source, /patchedArtifactMarkerFile\(root, bin\.version\)/)
   assert.match(source, /installPending\(freshState, Date\.now\(\)\) && artifactMarker\?\.manifestSha256 === manifestSha/)
+})
+
+test("OpenCode updates are never blocked or replaced without verified source compatibility", () => {
+  const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
+  const compatibilityCheck = source.indexOf("profile = await resolvePatchProfile(root, bin.version, sourceRootForMarker)")
+  const portableReturn = source.indexOf('status: "portable"', compatibilityCheck)
+  const install = source.indexOf("installPatchedBinary", portableReturn)
+  assert.ok(compatibilityCheck >= 0, "unknown versions must be checked by host capabilities")
+  assert.ok(portableReturn > compatibilityCheck, "a changed host must enter portable mode")
+  assert.ok(install > portableReturn, "binary installation must occur only after the portable early-return gate")
+  assert.match(source, /optional enhancements were safely skipped/)
+  assert.match(source, /readPatchMarker\(sourceRootForMarker\)/, "changed profiles must retry compatibility against pristine source")
+  assert.doesNotMatch(source, /No bundled patch manifest for OpenCode/)
 })
 
 test("source dependency hydration never runs third-party lifecycle scripts", () => {
@@ -396,7 +515,7 @@ test("PATH resolution returns a directly spawnable binary, not an unusable shim"
 
 test("defaultState contains every field the pipeline writes", () => {
   const state = defaultState()
-  for (const key of ["version", "binaryPath", "officialSha256", "patchedSha256", "patchedPath", "status", "progressPercent", "stepLabel", "logTail", "lastError", "renderersActive", "updatedAt"]) {
+  for (const key of ["version", "binaryPath", "officialSha256", "patchedSha256", "patchedPath", "compatibilityProfile", "compatibilityMode", "status", "progressPercent", "stepLabel", "logTail", "lastError", "renderersActive", "updatedAt"]) {
     assert.ok(key in state, `missing field: ${key}`)
   }
 })

@@ -7,8 +7,9 @@
 
 import { createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
-import { buildProjectModel, flattenProjectSessions, summarizeProjects } from "../lib/projects.js"
-import { listProjects, listSessions } from "../lib/sdk.js"
+import { buildProjectModel, flattenProjectSessions, recentSessions, summarizeProjects } from "../lib/projects.js"
+import { listMessages, listProjects, listSessions, listStatuses } from "../lib/sdk.js"
+import { durableStatus, mergeStatus } from "../lib/presence.js"
 import {
   activateSlot,
   activateTab,
@@ -41,7 +42,10 @@ const HIDDEN_PROJECTS_KEY = "alonix_hidden_projects"
 const PANES_KEY = "alonix_monitor_panes"
 const WORKBENCH_KEY = "alonix_workbench_state"
 const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
+const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
 const REFRESH_DEBOUNCE_MS = 150
+const RECONCILE_INTERVAL_MS = 5_000
+const PRESENCE_LIMIT = 16
 const SESSION_LIMIT = 400
 
 function readKv(api, key, fallback) {
@@ -74,7 +78,38 @@ function writeKv(api, key, value) {
  * flattened into an empty array, so one unreachable project cannot blank the
  * whole portfolio.
  */
-async function loadPortfolio(api) {
+function directoryKey(value) {
+  const normalized = String(value ?? "").trim().replaceAll("\\", "/").replace(/\/+$/, "")
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized
+}
+
+function normalizeDirectories(value, limit = 200) {
+  const out = []
+  const seen = new Set()
+  for (const item of Array.from(value ?? [])) {
+    const directory = String(item ?? "").trim().replaceAll("\\", "/").replace(/\/+$/, "")
+    const key = directoryKey(directory)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(directory)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
+function mergeProjects(serverProjects, registeredDirectories) {
+  const rows = Array.from(serverProjects ?? [])
+  const known = new Set(rows.map((project) => directoryKey(project?.worktree)).filter(Boolean))
+  for (const worktree of normalizeDirectories(registeredDirectories)) {
+    const key = directoryKey(worktree)
+    if (known.has(key)) continue
+    rows.push({ id: `alonix:${key}`, worktree, name: undefined, manual: true, time: { created: 0, updated: 0 }, sandboxes: [] })
+    known.add(key)
+  }
+  return rows
+}
+
+async function loadPortfolio(api, registeredDirectories = [], activeSessionID = null) {
   const client = api?.client
   if (!client) return { projects: [], sessions: [], errors: [] }
 
@@ -88,7 +123,8 @@ async function loadPortfolio(api) {
   }
 
   const projectSettled = await Promise.allSettled([listProjects(client)])
-  const projects = unwrap(projectSettled[0], "projects")
+  const serverProjects = unwrap(projectSettled[0], "projects")
+  const projects = mergeProjects(serverProjects, registeredDirectories)
 
   // Always include the launch directory: it answers before any project record
   // exists and covers sessions whose project is not yet registered.
@@ -101,7 +137,10 @@ async function loadPortfolio(api) {
   const listFor = (directory) => listSessions(client, { directory, roots: true, limit: SESSION_LIMIT })
 
   const targets = [...directories]
-  const settled = await Promise.allSettled(targets.map((directory) => listFor(directory)))
+  const [settled, statusSettled] = await Promise.all([
+    Promise.allSettled(targets.map((directory) => listFor(directory))),
+    Promise.allSettled(targets.map((directory) => listStatuses(client, directory))),
+  ])
 
   // Merge and de-duplicate: a session reachable from two directories is one
   // session, and the first (most specific) answer wins.
@@ -117,10 +156,41 @@ async function loadPortfolio(api) {
     }
   })
 
+  const liveStatuses = {}
+  statusSettled.forEach((result) => {
+    if (result.status !== "fulfilled") return
+    Object.assign(liveStatuses, result.value ?? {})
+  })
+
+  const sessions = anySucceeded ? [...byID.values()] : undefined
+  const durableStatuses = {}
+  if (sessions) {
+    const candidates = []
+    const seen = new Set()
+    const active = sessions.find((session) => session.id === activeSessionID)
+    if (active) { candidates.push(active); seen.add(active.id) }
+    for (const session of sessions.toSorted((a, b) => Number(b?.time?.updated ?? 0) - Number(a?.time?.updated ?? 0))) {
+      if (seen.has(session.id)) continue
+      candidates.push(session)
+      seen.add(session.id)
+      if (candidates.length >= PRESENCE_LIMIT) break
+    }
+    const messageResults = await Promise.allSettled(candidates.map((session) => listMessages(client, session, 1)))
+    messageResults.forEach((result, index) => {
+      if (result.status !== "fulfilled") return
+      const inferred = durableStatus(result.value)
+      if (inferred) durableStatuses[candidates[index].id] = inferred
+    })
+  }
+
+  const statuses = {}
+  for (const session of sessions ?? []) statuses[session.id] = mergeStatus(liveStatuses[session.id], durableStatuses[session.id])
+
   return {
     projects,
     // `undefined` means "nothing loaded", which preserves the previous list.
-    sessions: anySucceeded ? [...byID.values()] : undefined,
+    sessions,
+    statuses,
     errors,
   }
 }
@@ -134,6 +204,10 @@ export function createProjectStore(api) {
   const [store, setStore] = createStore({
     projects: [],
     sessions: [],
+    statuses: {},
+    registeredProjects: normalizeDirectories(readKv(api, REGISTERED_PROJECTS_KEY, [])),
+    selectedProjectID: null,
+    selectedProjectDirectory: "",
     pinnedProjects: normalizeIds(readKv(api, PINNED_PROJECTS_KEY, [])),
     hiddenProjects: normalizeIds(readKv(api, HIDDEN_PROJECTS_KEY, []), 200),
     workbench: createWorkbench(readKv(api, WORKBENCH_KEY, {})),
@@ -150,6 +224,10 @@ export function createProjectStore(api) {
 
   async function load() {
     if (disposed) return
+    const persistedProjects = normalizeDirectories(readKv(api, REGISTERED_PROJECTS_KEY, store.registeredProjects))
+    if (persistedProjects.join("\n") !== store.registeredProjects.join("\n")) {
+      setStore("registeredProjects", persistedProjects)
+    }
     if (inFlight) {
       queued = true
       return
@@ -157,12 +235,13 @@ export function createProjectStore(api) {
     inFlight = true
     setStore("loading", true)
     try {
-      const { projects, sessions, errors } = await loadPortfolio(api)
+      const { projects, sessions, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID())
       if (disposed) return
       // Only overwrite a list that actually loaded, so a partial failure keeps
       // the last good data instead of emptying the workbench.
       if (projects) setStore("projects", reconcile(projects, { key: "id" }))
       if (sessions) setStore("sessions", reconcile(sessions, { key: "id" }))
+      if (statuses) setStore("statuses", reconcile(statuses))
       setStore("error", errors.length ? errors.join("; ") : "")
       if (projects || sessions) setStore("loadedAt", Date.now())
     } catch (error) {
@@ -215,8 +294,13 @@ export function createProjectStore(api) {
     }
   }
 
+  const reconcileTimer = setInterval(() => {
+    if (!disposed) void load()
+  }, RECONCILE_INTERVAL_MS)
+
   onCleanup(() => {
     disposed = true
+    clearInterval(reconcileTimer)
     if (debounce) clearTimeout(debounce)
     for (const off of offs) {
       try {
@@ -227,17 +311,15 @@ export function createProjectStore(api) {
     }
   })
 
-  void load()
-
   const statuses = () => {
-    const map = {}
+    const map = { ...store.statuses }
     for (const session of store.sessions) {
       if (!session?.id) continue
       try {
         const status = api?.state?.session?.status?.(session.id)
-        if (status) map[session.id] = status
+        if (status) map[session.id] = mergeStatus(status, map[session.id])
       } catch {
-        // status is only available for locally-synced sessions
+        // Durable polling still covers sessions owned by another process.
       }
     }
     return map
@@ -259,6 +341,8 @@ export function createProjectStore(api) {
       projects: store.projects,
       sessions: store.sessions,
       statuses: statuses(),
+      selectedProjectID: store.selectedProjectID,
+      selectedProjectDirectory: store.selectedProjectDirectory,
       pinnedProjects: store.pinnedProjects,
       hiddenProjects: store.hiddenProjects,
       activeSessionID: activeSessionID(),
@@ -273,7 +357,10 @@ export function createProjectStore(api) {
     }),
   )
 
+  void load()
+
   const sessionRows = createMemo(() => flattenProjectSessions(projectRows()))
+  const recentSessionRows = createMemo(() => recentSessions(projectRows(), 5))
   const summary = createMemo(() => summarizeProjects(projectRows()))
 
   // Tabs for sessions that no longer exist must disappear, but only once a
@@ -326,12 +413,44 @@ export function createProjectStore(api) {
     get hiddenProjects() {
       return store.hiddenProjects
     },
+    get registeredProjects() {
+      return store.registeredProjects
+    },
+    get selectedProjectID() {
+      return store.selectedProjectID
+    },
     projectRows,
     sessionRows,
+    recentSessionRows,
     summary,
     activeSessionID,
     refresh,
     reload: load,
+
+    selectProject(project) {
+      const projectID = typeof project === "string" ? project : project?.id
+      const directory = typeof project === "object" ? String(project?.worktree ?? "") : ""
+      setStore("selectedProjectID", typeof projectID === "string" && projectID ? projectID : null)
+      if (directory) setStore("selectedProjectDirectory", directory)
+    },
+    addProject(directory) {
+      const target = normalizeDirectories([directory])[0]
+      if (!target) return false
+      const next = normalizeDirectories([target, ...store.registeredProjects])
+      setStore("registeredProjects", next)
+      writeKv(api, REGISTERED_PROJECTS_KEY, next)
+      const hidden = store.hiddenProjects.filter((item) => directoryKey(item) !== directoryKey(target))
+      if (hidden.length !== store.hiddenProjects.length) {
+        setStore("hiddenProjects", hidden)
+        writeKv(api, HIDDEN_PROJECTS_KEY, hidden)
+      }
+      const id = `alonix:${directoryKey(target)}`
+      setStore("selectedProjectID", id)
+      setStore("selectedProjectDirectory", target)
+      setStore("projects", reconcile(mergeProjects(store.projects, [target]), { key: "id" }))
+      void load()
+      return true
+    },
 
     openTab(tab) {
       commitWorkbench(openTab(store.workbench, tab))
@@ -389,6 +508,14 @@ export function createProjectStore(api) {
       const next = normalizeIds([target, ...store.hiddenProjects], 200)
       setStore("hiddenProjects", next)
       writeKv(api, HIDDEN_PROJECTS_KEY, next)
+      const registered = store.registeredProjects.filter((item) => directoryKey(item) !== directoryKey(target))
+      if (registered.length !== store.registeredProjects.length) {
+        setStore("registeredProjects", registered)
+        writeKv(api, REGISTERED_PROJECTS_KEY, registered)
+      }
+      if (store.selectedProjectID && projectRows().find((row) => row.id === store.selectedProjectID)?.worktree === target) {
+        setStore("selectedProjectID", null)
+      }
     },
     unhideProject(worktree) {
       const target = String(worktree ?? "").trim()

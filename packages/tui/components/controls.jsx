@@ -279,6 +279,7 @@ export function ClickRow(props) {
     <box
       flexDirection="row"
       flexShrink={0}
+      width={props.width}
       minHeight={props.height ?? 1}
       gap={1}
       paddingRight={1}

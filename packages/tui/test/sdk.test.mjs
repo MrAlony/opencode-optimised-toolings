@@ -1,22 +1,30 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { listDirectory, listProjects, listSessions } from "../lib/sdk.js"
+import { listDirectory, listMessages, listProjects, listSessions, listStatuses } from "../lib/sdk.js"
 
 test("the adapter uses the generated v2 client's flat parameter contract", async () => {
-  const calls = { list: [], files: [], projects: [] }
+  const calls = { list: [], files: [], projects: [], statuses: [], messages: [] }
   const client = {
     project: { list: async (args) => (calls.projects.push(args), { data: [{ id: "p" }] }) },
-    session: { list: async (args) => (calls.list.push(args), { data: [{ id: "s" }] }) },
+    session: {
+      list: async (args) => (calls.list.push(args), { data: [{ id: "s" }] }),
+      status: async (args) => (calls.statuses.push(args), { data: { s: { type: "busy" } } }),
+      messages: async (args) => (calls.messages.push(args), { data: [{ info: { role: "user" } }] }),
+    },
     file: { list: async (args) => (calls.files.push(args), { data: [{ name: "src", type: "directory" }] }) },
   }
 
   assert.deepEqual(await listProjects(client), [{ id: "p" }])
   assert.deepEqual(await listSessions(client, { directory: "C:/work/beta", roots: true, limit: 25 }), [{ id: "s" }])
   assert.deepEqual(await listDirectory(client, "C:/work/beta"), [{ name: "src", type: "directory" }])
+  assert.deepEqual(await listStatuses(client, "C:/work/beta"), { s: { type: "busy" } })
+  assert.deepEqual(await listMessages(client, { id: "s", directory: "C:/work/beta" }, 1), [{ info: { role: "user" } }])
 
   assert.deepEqual(calls.projects[0], {})
   assert.deepEqual(calls.list[0], { directory: "C:/work/beta", roots: true, limit: 25 })
   assert.deepEqual(calls.files[0], { path: "C:/work/beta", directory: "C:/work/beta" })
+  assert.deepEqual(calls.statuses[0], { directory: "C:/work/beta" })
+  assert.deepEqual(calls.messages[0], { sessionID: "s", directory: "C:/work/beta", limit: 1 })
   for (const args of [...calls.list, ...calls.files]) {
     assert.equal("query" in args, false)
     assert.equal("body" in args, false)
@@ -33,12 +41,18 @@ test("listing without a directory leaves the generated client on its launch scop
 test("SDK result errors become actionable exceptions", async () => {
   const client = {
     project: { list: async () => ({ error: { message: "project failure" } }) },
-    session: { list: async () => ({ error: { message: "session failure" } }) },
+    session: {
+      list: async () => ({ error: { message: "session failure" } }),
+      status: async () => ({ error: { message: "status failure" } }),
+      messages: async () => ({ error: { message: "message failure" } }),
+    },
     file: { list: async () => ({ error: { message: "file failure" } }) },
   }
   await assert.rejects(() => listProjects(client), /project failure/)
   await assert.rejects(() => listSessions(client), /session failure/)
   await assert.rejects(() => listDirectory(client, "C:/work"), /file failure/)
+  await assert.rejects(() => listStatuses(client), /status failure/)
+  await assert.rejects(() => listMessages(client, "s"), /message failure/)
 })
 
 test("the TUI SDK adapter exposes no eager session creation helper", async () => {

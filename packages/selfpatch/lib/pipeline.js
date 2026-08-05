@@ -20,6 +20,10 @@ export function manifestFileFor(root, version) {
   return path.join(root, "packages", "selfpatch", "patches", version, "manifest.mjs")
 }
 
+export function patchProfilesDir(root) {
+  return path.join(root, "packages", "selfpatch", "patches")
+}
+
 export function sourceDir(root, version) {
   return path.join(root, "runtime", "src", `opencode-${version}`)
 }
@@ -159,12 +163,115 @@ export async function manifestSha256(manifest) {
   return createHash("sha256").update(JSON.stringify(manifest)).digest("hex")
 }
 
+function versionParts(value) {
+  return String(value ?? "")
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0)
+}
+
+function compareVersionsDesc(left, right) {
+  const a = versionParts(left)
+  const b = versionParts(right)
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (b[index] ?? 0) - (a[index] ?? 0)
+    if (difference) return difference
+  }
+  return String(right).localeCompare(String(left))
+}
+
+/**
+ * Prove that a pristine upstream source tree has the exact file-level
+ * capabilities expected by a patch profile. Fingerprints are intentionally
+ * stronger than a semver range: a future OpenCode release can reuse a profile
+ * only when every touched host file is byte-for-byte compatible.
+ */
+export async function manifestCompatible(sourceRoot, manifest) {
+  for (const entry of manifest.create ?? []) {
+    const file = path.join(sourceRoot, entry.path)
+    if (await exists(file)) {
+      const current = await fs.readFile(file, "utf8").catch(() => null)
+      if (current !== entry.content) return false
+    }
+  }
+  for (const entry of manifest.files ?? []) {
+    const file = path.join(sourceRoot, entry.path)
+    if (!(await exists(file))) return false
+    const current = await fs.readFile(file, "utf8")
+    const sha = createHash("sha256").update(current).digest("hex")
+    if (sha === entry.beforeSha256) continue
+
+    // An interrupted/restarted controller commonly sees the exact source body
+    // it patched on the previous run. Reverse every complete replacement and
+    // require the official fingerprint, exactly like applyManifest's strict
+    // marker-loss recovery. Partial or foreign edits cannot pass this proof.
+    let restored = current
+    try {
+      for (const item of [...entry.replacements].reverse()) {
+        const count = item.count ?? 1
+        if (restored.split(item.replace).length - 1 !== count) return false
+        restored = restored.split(item.replace).join(item.search)
+      }
+    } catch {
+      return false
+    }
+    const restoredSha = createHash("sha256").update(restored).digest("hex")
+    if (restoredSha !== entry.beforeSha256) return false
+  }
+  return true
+}
+
+async function loadManifest(file) {
+  const module = await import(`${pathToFileURL(file).href}?profile=${encodeURIComponent(file)}`)
+  return module.manifest
+}
+
+/**
+ * Resolve the enhancement profile for an installed OpenCode release.
+ *
+ * Exact profiles win. Otherwise all bundled profiles are treated as capability
+ * descriptions and the newest byte-compatible one is reused for the installed
+ * version. This lets patch-compatible OpenCode updates continue automatically
+ * without unsafe broad version ranges or copied manifests.
+ */
+export async function resolvePatchProfile(root, version, sourceRoot) {
+  const exactFile = manifestFileFor(root, version)
+  if (await exists(exactFile)) {
+    return { manifest: await loadManifest(exactFile), profileVersion: version, exact: true }
+  }
+  if (!sourceRoot) return null
+
+  let entries = []
+  try {
+    entries = await fs.readdir(patchProfilesDir(root), { withFileTypes: true })
+  } catch {
+    return null
+  }
+  const versions = entries
+    .filter((entry) => entry.isDirectory() && entry.name !== version)
+    .map((entry) => entry.name)
+    .sort(compareVersionsDesc)
+
+  for (const profileVersion of versions) {
+    const file = manifestFileFor(root, profileVersion)
+    if (!(await exists(file))) continue
+    const manifest = await loadManifest(file)
+    if (!(await manifestCompatible(sourceRoot, manifest))) continue
+    return {
+      manifest: { ...manifest, version, compatibleProfile: profileVersion },
+      profileVersion,
+      exact: false,
+    }
+  }
+  return null
+}
+
 const SOURCE_SENTINELS = [
   "bun.lock",
   "packages/opencode/script/build.ts",
   "packages/plugin/src/tui.ts",
   "packages/tui/src/app.tsx",
   "packages/tui/src/plugin/adapters.tsx",
+  "packages/tui/src/context/sync.tsx",
   "packages/tui/src/routes/session/index.tsx",
 ]
 
@@ -497,8 +604,9 @@ export async function runSelfPatch(root) {
   await acquireLock(lock)
   const state = await readState(root)
   try {
-    const bin = detectBinary()
-    if (!bin) {
+    const detected = detectBinary()
+    const bin = detected?.path ? { ...detected, path: path.resolve(detected.path) } : detected
+    if (!bin || !(await exists(bin.path))) {
       await writeState(root, { ...state, status: "no-opencode", stepLabel: "No OpenCode binary found; self-patching skipped" })
       return null
     }
@@ -525,21 +633,57 @@ export async function runSelfPatch(root) {
       return null
     }
     const patchedPath = patchedBinaryPath(root, bin.version)
-    const manifestFile = manifestFileFor(root, bin.version)
-    if (!(await exists(manifestFile))) {
+    let sourceRootForMarker = sourceDir(root, bin.version)
+    let profile = await resolvePatchProfile(root, bin.version)
+    if (!profile) {
       await writeState(root, {
-        status: "unsupported-version",
+        status: "detecting",
         version: bin.version,
         binaryPath: bin.path,
         officialSha256: officialSha,
-        stepLabel: `No bundled patch manifest for OpenCode v${bin.version}; running the official binary until a patch set is added`,
+        progressPercent: 5,
+        stepLabel: `Checking OpenCode v${bin.version} host capabilities`,
+      })
+      try {
+        sourceRootForMarker = await ensureSource(root, bin.version)
+        profile = await resolvePatchProfile(root, bin.version, sourceRootForMarker)
+        if (!profile && (await readPatchMarker(sourceRootForMarker))) {
+          // A capability profile may have gained new strict patches since this
+          // generated source cache was last prepared. Re-check against pristine
+          // upstream source rather than misclassifying the installed release.
+          await fs.rm(sourceRootForMarker, { recursive: true, force: true })
+          sourceRootForMarker = await ensureSource(root, bin.version)
+          profile = await resolvePatchProfile(root, bin.version, sourceRootForMarker)
+        }
+      } catch (error) {
+        await writeState(root, {
+          status: "portable",
+          version: bin.version,
+          binaryPath: bin.path,
+          officialSha256: officialSha,
+          renderersActive: false,
+          progressPercent: 0,
+          stepLabel: "Plugin active in portable mode; optional host enhancement check will retry later",
+          lastError: error?.message ?? String(error),
+        })
+        return null
+      }
+    }
+    if (!profile) {
+      await writeState(root, {
+        status: "portable",
+        version: bin.version,
+        binaryPath: bin.path,
+        officialSha256: officialSha,
+        renderersActive: false,
+        progressPercent: 0,
+        stepLabel: `Plugin active on OpenCode v${bin.version}; host changed, so optional enhancements were safely skipped`,
+        lastError: null,
       })
       return null
     }
-    const manifestModule = await import(pathToFileURL(manifestFile).href)
-    const manifest = manifestModule.manifest
+    const manifest = profile.manifest
     const manifestSha = await manifestSha256(manifest)
-    const sourceRootForMarker = sourceDir(root, bin.version)
     const sourceMarker = await readPatchMarker(sourceRootForMarker)
     const artifactMarker = await readPatchedArtifactMarker(root, bin.version)
     if (await exists(patchedPath)) {
@@ -553,7 +697,11 @@ export async function runSelfPatch(root) {
           patchedSha256: patchedSha,
           patchedPath,
           renderersActive: true,
-          stepLabel: "Patched binary active with the current rich-renderer manifest",
+          compatibilityProfile: profile.profileVersion,
+          compatibilityMode: profile.exact ? "exact" : "verified-source",
+          stepLabel: profile.exact
+            ? "Optional host enhancements active with an exact profile"
+            : `Optional host enhancements active via verified profile v${profile.profileVersion}`,
         })
         return null
       }
@@ -594,8 +742,12 @@ export async function runSelfPatch(root) {
       binaryPath: bin.path,
       officialSha256: officialSha,
       patchedPath,
+      compatibilityProfile: profile.profileVersion,
+      compatibilityMode: profile.exact ? "exact" : "verified-source",
       progressPercent: 5,
-      stepLabel: "Downloading source for the exact OpenCode version",
+      stepLabel: profile.exact
+        ? "Preparing source for the installed OpenCode version"
+        : `OpenCode v${bin.version} verified compatible with enhancement profile v${profile.profileVersion}`,
     })
     let sourceRoot = await ensureSource(root, bin.version)
 
@@ -610,7 +762,7 @@ export async function runSelfPatch(root) {
       await applyManifest(sourceRoot, manifest)
       await fs.writeFile(
         patchMarkerFile(sourceRoot),
-        JSON.stringify({ version: bin.version, manifestSha256: manifestSha }, null, 2),
+        JSON.stringify({ version: bin.version, profileVersion: profile.profileVersion, manifestSha256: manifestSha }, null, 2),
         "utf8"
       )
     }
@@ -636,7 +788,7 @@ export async function runSelfPatch(root) {
     await fs.copyFile(binary, patchedPath)
     await fs.writeFile(
       patchedArtifactMarkerFile(root, bin.version),
-      JSON.stringify({ version: bin.version, manifestSha256: manifestSha, binarySha256: patchedSha }, null, 2),
+      JSON.stringify({ version: bin.version, profileVersion: profile.profileVersion, manifestSha256: manifestSha, binarySha256: patchedSha }, null, 2),
       "utf8"
     )
     await writeState(root, {

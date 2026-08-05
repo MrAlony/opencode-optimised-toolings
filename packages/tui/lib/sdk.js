@@ -35,6 +35,28 @@ export async function listSessions(client, options = {}) {
   return Array.isArray(result?.data) ? result.data : []
 }
 
+export async function listStatuses(client, directory = "") {
+  const target = text(directory)
+  const result = await client?.session?.status?.(target ? { directory: target } : {})
+  const error = resultError(result, `Could not read chat status${target ? ` in ${target}` : ""}`)
+  if (error) throw error
+  return result?.data && typeof result.data === "object" ? result.data : {}
+}
+
+export async function listMessages(client, session, limit = 2) {
+  const sessionID = text(session?.id ?? session)
+  if (!sessionID) return []
+  const directory = text(session?.directory)
+  const result = await client?.session?.messages?.({
+    sessionID,
+    limit: Math.max(1, Math.floor(Number(limit) || 2)),
+    ...(directory ? { directory } : {}),
+  })
+  const error = resultError(result, `Could not read recent activity for ${sessionID}`)
+  if (error) throw error
+  return Array.isArray(result?.data) ? result.data : []
+}
+
 export async function listDirectory(client, directory) {
   const target = text(directory)
   if (!target) return []

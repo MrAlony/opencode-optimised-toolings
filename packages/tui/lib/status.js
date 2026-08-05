@@ -83,8 +83,10 @@ export function isStale(state, now = Date.now()) {
  */
 export function indicatorFor(state, evidence = {}) {
   const renderersRegistered = Number(evidence.renderersRegistered ?? 0) > 0
-  if (renderersRegistered && state?.status !== "error" && state?.status !== "built") {
-    return { level: "ok", text: "Patched binary active", detail: "Rich tool renderers active" }
+  if (renderersRegistered && state?.status !== "built") {
+    return state?.status === "error"
+      ? { level: "warn", text: "Patched binary active", detail: "Rich renderers are active; a later background maintenance check failed" }
+      : { level: "ok", text: "Patched binary active", detail: "Rich tool renderers active" }
   }
   if (isStale(state) && ["idle", "dev-mode", "no-opencode"].includes(state?.status)) {
     return { level: "info", text: "Tooling self-patch: checking…", detail: "No fresh status record from the running OpenCode process yet" }
@@ -106,8 +108,13 @@ export function indicatorFor(state, evidence = {}) {
         text: "No OpenCode binary found to patch",
         detail: "Rich renderers stay inactive until an OpenCode binary is detected",
       }
+    case "portable":
     case "unsupported-version":
-      return { level: "warn", text: `Tooling patch not available for OpenCode v${state.version ?? "?"}` }
+      return {
+        level: "ok",
+        text: `Plugin active on OpenCode v${state.version ?? "?"}`,
+        detail: "Portable IDE features are available; optional host enhancements were safely skipped",
+      }
     case "error":
       return { level: "error", text: state.lastError ?? "Tooling self-patch failed" }
     case "built":
@@ -143,8 +150,9 @@ export function formatStateLog(state) {
   const lines = [
     `Status: ${s.status}`,
     `OpenCode version: ${s.version ?? "unknown"}`,
-    `Patched binary active: ${s.status === "ok" ? "yes" : "no"}`,
-    `Rich tool renderers: ${s.renderersActive ? "active" : "inactive (needs the patched binary)"}`,
+    `Plugin active: yes`,
+    `Optional host enhancements: ${s.renderersActive ? "active" : "inactive; portable mode remains available"}`,
+    s.compatibilityProfile ? `Compatibility profile: v${s.compatibilityProfile} (${s.compatibilityMode ?? "verified"})` : null,
     s.progressPercent > 0 ? `Progress: ${s.progressPercent}% — ${s.stepLabel}` : `Step: ${s.stepLabel}`,
     s.patchedSha256 ? `Patched SHA-256: ${s.patchedSha256.slice(0, 12)}` : null,
     s.lastError ? `Last error: ${s.lastError}` : null,

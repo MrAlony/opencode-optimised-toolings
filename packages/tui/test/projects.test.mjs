@@ -7,6 +7,7 @@ import {
   projectForSession,
   projectLabel,
   recentProjects,
+  recentSessions,
   summarizeProjects,
 } from "../lib/projects.js"
 
@@ -145,6 +146,19 @@ test("ordering puts the current project first, then pinned, running, and recency
   assert.equal(rows[2].running, 1)
 })
 
+test("explicit project selection overrides the launch directory and survives id replacement", () => {
+  const selected = buildProjectModel({
+    now: NOW,
+    activeDirectory: "C:/work/alpha",
+    selectedProjectID: "alonix:c:/work/beta",
+    selectedProjectDirectory: "C:/work/beta",
+    projects: PROJECTS,
+    sessions: [],
+  })
+  assert.equal(selected.find((row) => row.id === "p_beta").current, true)
+  assert.equal(selected.find((row) => row.id === "p_alpha").current, false)
+})
+
 test("within a project the active session leads, then running, then recency", () => {
   const rows = buildProjectModel({
     now: NOW,
@@ -182,6 +196,36 @@ test("aggregates and flattening expose portfolio-wide totals", () => {
   assert.ok(flat.every((item) => item.projectID && item.projectName))
 })
 
+test("global recents ignore selected-project ordering and retain every active or working chat", () => {
+  const rows = [
+    {
+      id: "selected",
+      name: "Selected",
+      worktree: "/selected",
+      sessions: [
+        { id: "selected-old", title: "Selected old", updated: 10, active: false, running: false },
+        { id: "selected-new", title: "Selected new", updated: 20, active: false, running: false },
+      ],
+    },
+    {
+      id: "other",
+      name: "Other",
+      worktree: "/other",
+      sessions: [
+        { id: "active", title: "Active", updated: 5, active: true, running: false },
+        { id: "working", title: "Working", updated: 1, active: false, running: true },
+        { id: "newest", title: "Newest", updated: 100, active: false, running: false },
+      ],
+    },
+  ]
+  assert.deepEqual(recentSessions(rows, 4).map((item) => item.id), ["active", "working", "newest", "selected-new"])
+  assert.deepEqual(
+    recentSessions(rows, 1).map((item) => item.id),
+    ["active", "working"],
+    "mandatory live chats may exceed the idle baseline",
+  )
+})
+
 test("recent projects are ordered by activity and bounded", () => {
   const rows = buildProjectModel({
     now: NOW,
@@ -201,4 +245,5 @@ test("malformed input never throws", () => {
   }
   assert.deepEqual(summarizeProjects(null), { projects: 0, sessions: 0, running: 0, changedFiles: 0, withWork: 0 })
   assert.deepEqual(flattenProjectSessions(null), [])
+  assert.deepEqual(recentSessions(null), [])
 })

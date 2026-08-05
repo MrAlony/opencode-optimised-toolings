@@ -63,7 +63,7 @@ export function ToolingStatusView(props) {
           {registration().registered}/{registration().available ? 16 : 0}
         </StatLine>
         <StatLine tokens={tokens()} label="registry available" labelWidth={24}>
-          {registration().available ? "yes" : "no (needs the patched binary)"}
+          {registration().available ? "yes" : "portable mode"}
         </StatLine>
         <Show when={registration().failed?.length}>
           <StatLine tokens={tokens()} label="failed" labelWidth={24} color={tokens().error}>
@@ -72,7 +72,7 @@ export function ToolingStatusView(props) {
         </Show>
       </Panel>
 
-      <Show when={state().lastError}>
+      <Show when={state().lastError && indicator().level === "error"}>
         <Panel tokens={tokens()} title="Last error" glyph={GLYPH.fail} tone="error">
           <text fg={tokens().error} wrapMode="wrap" selectable={false}>
             {String(state().lastError)}

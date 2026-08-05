@@ -30,10 +30,12 @@ test("indicatorFor maps statuses to visible levels", () => {
   assert.equal(indicatorFor({ status: "ok" }).level, "ok")
   assert.equal(indicatorFor({ status: "ok" }).detail, "Rich tool renderers active")
   assert.equal(indicatorFor({ status: "error", lastError: "boom" }).level, "error")
-  assert.equal(indicatorFor({ status: "unsupported-version" }).level, "warn")
+  assert.equal(indicatorFor({ status: "unsupported-version", version: "2.0.0" }).level, "ok")
+  assert.equal(indicatorFor({ status: "portable", version: "2.0.0" }).level, "ok")
   assert.equal(indicatorFor({ status: "idle" }).level, "info")
   assert.equal(indicatorFor({ status: "dev-mode" }).level, "info")
   assert.equal(indicatorFor({ status: "no-opencode" }).level, "warn")
+  assert.match(indicatorFor({ status: "portable", version: "9.9.9" }).detail, /Portable IDE features/)
   assert.equal(indicatorFor({ status: "building", progressPercent: 40, stepLabel: "Rebuilding" }).level, "warn")
   assert.equal(indicatorFor({ status: "built" }).level, "info")
   assert.match(indicatorFor({ status: "built" }).text, /restart OpenCode/i)
@@ -49,8 +51,10 @@ test("live renderer registration outranks a stale or dev-host state record", () 
     assert.equal(indicator.level, "ok", `${status} must report active when renderers are registered`)
     assert.match(indicator.text, /Patched binary active/)
   }
-  // Genuine failures and pending restarts still win; they are actionable.
-  assert.equal(indicatorFor({ status: "error", lastError: "boom" }, evidence).level, "error")
+  // Direct runtime evidence outranks a stale background maintenance failure,
+  // but keeps it visible as a warning rather than a false fatal state.
+  assert.equal(indicatorFor({ status: "error", lastError: "boom" }, evidence).level, "warn")
+  assert.match(indicatorFor({ status: "error", lastError: "boom" }, evidence).detail, /maintenance check failed/i)
   assert.match(indicatorFor({ status: "built" }, evidence).text, /restart OpenCode/i)
   // With no renderers the state file remains authoritative.
   assert.equal(indicatorFor({ status: "dev-mode" }, { renderersRegistered: 0 }).level, "info")
@@ -122,6 +126,6 @@ test("formatStateLog renders the key fields", () => {
   })
   assert.match(out, /Status: ok/)
   assert.match(out, /OpenCode version: 1\.18\.13/)
-  assert.match(out, /Patched binary active: yes/)
+  assert.match(out, /Plugin active: yes/)
   assert.match(out, /abcdef012345/)
 })

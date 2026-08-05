@@ -103,8 +103,8 @@ export function detectBinary(overrides = {}) {
       if (!existsSync(probe)) continue
       const info = versionOf(probe)
       if (!info) continue
-      if (!isDevRuntime(probe)) return { path: probe, version: info.version, devMode: false }
-      if (!devFallback) devFallback = { path: probe, version: info.version, devMode: true }
+      if (!isDevRuntime(probe)) return { path: path.resolve(probe), version: info.version, devMode: false }
+      if (!devFallback) devFallback = { path: path.resolve(probe), version: info.version, devMode: true }
     } catch {
       // try the next candidate
     }
