@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { diagnosticEvidenceLines } from "../lib/evidence.js"
 
 export function displayPath(path, max = 64) {
   const text = String(path ?? "")
@@ -68,6 +69,20 @@ function isToggleKey(event) {
   return name === "return" || name === "enter" || name === "space" || name === " "
 }
 
+export function ToolOutputEvidence(props) {
+  const text = createMemo(() => String(props.text ?? "").trim())
+  const lines = createMemo(() => text().split(/\r?\n/))
+  const diagnostics = createMemo(() => diagnosticEvidenceLines(text()))
+  const long = createMemo(() => lines().length > 24)
+  return text() ? (
+    <InspectorCard title="Original tool output preserved" skin={props.skin} status={props.status ?? "PARTIAL SUCCESS"} subtitle="The clean structured inspector above is additive. This bounded appendix retains the tool's own advisories, recovery signals, provenance, and transport evidence.">
+      {diagnostics().length ? <ContentPane title="Advisories and diagnostic signals" skin={props.skin} lines={diagnostics()} limit={48} tail={false} color={props.skin.warning} /> : null}
+      <RawEvidence title={long() ? "Original output · beginning" : "Original output"} skin={props.skin} text={text()} limit={long() ? 12 : 24} tail={false} />
+      {long() ? <RawEvidence title="Original output · ending" skin={props.skin} text={text()} limit={12} /> : null}
+    </InspectorCard>
+  ) : null
+}
+
 export function Activity(props) {
   const expandable = createMemo(() => typeof props.details === "function")
   const [open, setOpen] = createSignal(Boolean(props.openDefault))
@@ -116,7 +131,7 @@ export function Activity(props) {
         {expandable() ? <text fg={active() ? statusTone(props.status, props.skin) : props.skin.muted}>{open() ? "▾" : "›"}</text> : null}
       </box>
       {props.preview ? <box paddingLeft={2} paddingTop={1} flexDirection="column" gap={0}>{props.preview}</box> : null}
-      {open() ? <box paddingLeft={2} paddingTop={1} flexDirection="column" gap={1}>{props.details()}</box> : null}
+      {open() ? <box paddingLeft={2} paddingTop={1} flexDirection="column" gap={1}>{props.details()}{props.evidence ? <ToolOutputEvidence skin={props.skin} text={props.evidence} status={props.status} /> : null}</box> : null}
     </box>
   )
 }

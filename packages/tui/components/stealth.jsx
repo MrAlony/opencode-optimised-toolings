@@ -31,5 +31,5 @@ export function StealthView(props) {
     if (lifecycle().phase === "error") return <InspectorUnavailable skin={props.skin} message={lifecycle().error} />
     return <InspectorDegraded skin={props.skin} items={items()} message="The completed response was bounded before its structured stealth report. The request plan remains intact." />
   }
-  return <Activity label={labelFor(props.tool)} summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
+  return <Activity evidence={props.output} label={labelFor(props.tool)} summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
 }

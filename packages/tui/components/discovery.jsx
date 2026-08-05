@@ -19,5 +19,5 @@ export function DiscoveryView(props) {
     if (lifecycle().phase === "error") return <InspectorUnavailable skin={props.skin} message={lifecycle().error} />
     return <InspectorDegraded skin={props.skin} message={`The completed ${props.tool} response was bounded before its structured discovery report.`} />
   }
-  return <Activity label={label()} summary={summary().slice(0, 120)} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
+  return <Activity evidence={props.output} label={label()} summary={summary().slice(0, 120)} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
 }

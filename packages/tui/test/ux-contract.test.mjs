@@ -113,9 +113,15 @@ test("known tool families preserve plans and degrade bounded completed output wi
     assert.match(body, /statusPending\(status\(\)\)/)
     assert.doesNotMatch(body, /lifecycle\(\)\.error \|\|/)
   }
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "cbm.jsx"]) {
+  const kit = await source("components/kit.jsx")
+  assert.match(kit, /export function ToolOutputEvidence/)
+  const evidence = await source("lib/evidence.js")
+  assert.match(evidence, /export function diagnosticEvidenceLines/)
+  for (const signal of ["ADVISORY", "ESCALATION", "RECOVERY", "TECHNICAL STATUS", "OUTPUT BUDGET", "EDIT CONTEXT"]) assert.match(evidence, new RegExp(signal))
+  assert.match(kit, /import \{ diagnosticEvidenceLines \}/)
+  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx", "report.jsx"]) {
     const body = await source(`components/${file}`)
-    assert.doesNotMatch(body, /RawEvidence/)
+    assert.match(body, /evidence=\{props\.output\}/, `${file} must preserve the original tool output`)
   }
   const batch = await source("lib/batch.js")
   assert.match(batch, /export function reconcileBatch/)
@@ -126,6 +132,16 @@ test("known tool families preserve plans and degrade bounded completed output wi
   assert.doesNotMatch(read, /Read \$\{items\(\)\.length\} targets/)
   const editParser = await source("lib/edit-many.js")
   assert.match(editParser, /declared.*consistency/s)
+})
+
+test("rich inspectors remain additive and preserve finalized tool diagnostics", async () => {
+  const kit = await source("components/kit.jsx")
+  assert.match(kit, /Original tool output preserved/)
+  assert.match(kit, /Advisories and diagnostic signals/)
+  assert.match(kit, /Original output · beginning/)
+  assert.match(kit, /Original output · ending/)
+  assert.match(kit, /props\.details\(\).*ToolOutputEvidence/s)
+  assert.match(kit, /limit=\{48\}/)
 })
 
 test("status surfaces remain subtle theme-aware secondary cues", async () => {

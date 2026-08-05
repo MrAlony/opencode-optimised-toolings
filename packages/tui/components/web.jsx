@@ -32,5 +32,5 @@ export function WebView(props) {
     if (lifecycle().phase === "error") return <InspectorUnavailable skin={props.skin} message={lifecycle().error} />
     return <InspectorDegraded skin={props.skin} items={items()} message={`The completed ${props.tool} response was bounded before its structured report header. The ${batch().plannedCount}-item request plan remains authoritative.`} />
   }
-  return <Activity label={label()} summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
+  return <Activity evidence={props.output} label={label()} summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
 }

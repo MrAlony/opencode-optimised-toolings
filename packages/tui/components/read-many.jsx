@@ -52,5 +52,5 @@ export function ReadManyView(props) {
       <InspectorCard title="Provenance" skin={props.skin} status={result.recovery.length ? "PARTIAL SUCCESS" : "SUCCESS"}><MetaGrid skin={props.skin} entries={[["shared budget", result.budget["Shared total"]], ["evidence used", result.budget["Complete-file evidence used"]], ["remaining range budget", result.budget["Remaining range budget"]], ["unstable sources", result.editContext["Unstable sources"]]]} />{result.recovery.length ? <ContentPane title="Recovery" skin={props.skin} lines={result.recovery} limit={10} tail={false} /> : null}</InspectorCard>
     </>
   }
-  return <Activity label="Read" summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
+  return <Activity evidence={props.output} label="Read" summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
 }

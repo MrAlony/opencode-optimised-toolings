@@ -19,5 +19,5 @@ export function CbmView(props) {
     if (lifecycle().phase === "error") return <InspectorUnavailable skin={props.skin} message={lifecycle().error} />
     return <InspectorDegraded skin={props.skin} message={`The completed ${props.tool} response was bounded before indexed evidence could be classified.`} />
   }
-  return <Activity label={labelFor(props.tool)} summary={summary().slice(0, 120)} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={sections().length ? <PreviewList skin={props.skin} items={sections()} /> : null} details={details} />
+  return <Activity evidence={props.output} label={labelFor(props.tool)} summary={summary().slice(0, 120)} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={sections().length ? <PreviewList skin={props.skin} items={sections()} /> : null} details={details} />
 }
