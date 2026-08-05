@@ -11,6 +11,9 @@ import { SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
 
 test("toolings tool registration exposes a callable execute", async () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configRoot = mkdtempSync(join(tmpdir(), "toolings-plugin-config-"))
+  process.env.OPENCODE_CONFIG_DIR = configRoot
   const plugin = await SelfPatchPlugin()
   try {
     assert.equal(typeof plugin.tool.toolings, "object")
@@ -19,6 +22,9 @@ test("toolings tool registration exposes a callable execute", async () => {
     assert.equal(typeof plugin.tool.toolings.inputSchema, "object")
   } finally {
     await plugin.dispose?.()
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+    rmSync(configRoot, { recursive: true, force: true })
   }
 })
 

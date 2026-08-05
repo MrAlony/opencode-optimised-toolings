@@ -1,9 +1,9 @@
 {
   "name": "@sparkly/selfpatch",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
-  "description": "Self-patching controller: detects the running OpenCode binary, patches the exact-version source, rebuilds, and swaps in the patched binary automatically with progress feedback and restart.",
+  "description": "Self-healing OpenCode controller that registers the rich TUI companion, patches exact-version source, rebuilds, and safely installs the verified binary.",
   "main": "index.js",
   "exports": {
     ".": "./index.js",

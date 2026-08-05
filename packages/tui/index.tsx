@@ -15,6 +15,10 @@ import { EditManyView } from "./components/edit-many.jsx"
 import { ReadManyView } from "./components/read-many.jsx"
 import { ReportView } from "./components/report.jsx"
 import { ShellView } from "./components/shell.jsx"
+import { DiscoveryView } from "./components/discovery.jsx"
+import { WebView } from "./components/web.jsx"
+import { StealthView } from "./components/stealth.jsx"
+import { CbmView } from "./components/cbm.jsx"
 
 const palette = {
   panel: "#242424",
@@ -24,6 +28,7 @@ const palette = {
   accent: "#5f87ff",
   success: "#5faf5f",
   error: "#d75f5f",
+  warning: "#d7af5f",
 }
 
 function ink(map, name, fallback) {
@@ -41,6 +46,7 @@ function skinOf(theme) {
     accent: ink(map, "primary", palette.accent),
     success: ink(map, "success", palette.success),
     error: ink(map, "error", palette.error),
+    warning: ink(map, "warning", palette.warning),
   }
 }
 
@@ -61,6 +67,10 @@ function rendererFor(tool: string): RendererView {
   if (tool === "fs_edit_many") return EditManyView
   if (tool === "shell") return ShellView
   if (tool === "background_process") return BackgroundView
+  if (tool === "fs_search" || tool === "fs_explore") return DiscoveryView
+  if (tool === "web_search" || tool === "web_fetch_many") return WebView
+  if (tool.startsWith("stealth_")) return StealthView
+  if (tool.startsWith("cbm_")) return CbmView
   return ReportView
 }
 

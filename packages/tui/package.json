@@ -1,9 +1,9 @@
 {
   "name": "@sparkly/toolings-tui",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
-  "description": "OpenCode TUI companion with stable transcript layout, compact interactive tool activities, progressive disclosure, patch status, and lifecycle-safe rich renderers.",
+  "description": "OpenCode TUI companion with lifecycle-accurate, per-item interactive inspectors for all custom tool families and stable transcript layout.",
   "main": "index.tsx",
   "exports": {
     ".": "./index.tsx",

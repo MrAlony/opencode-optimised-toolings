@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createEffect, createSignal, onCleanup } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 
 export function displayPath(path, max = 64) {
   const text = String(path ?? "")
@@ -7,37 +7,47 @@ export function displayPath(path, max = 64) {
   return `…${text.slice(-(max - 1))}`
 }
 
+export function lifecycleOf(part) {
+  const state = part?.state ?? {}
+  if (state.status === "error") return { phase: "error", status: "FAILED", pending: false, label: "failed", error: state.error ?? "Tool execution failed" }
+  if (state.status === "completed") return { phase: "completed", status: null, pending: false, label: "done", error: "" }
+  if (state.status === "running") return { phase: "running", status: "RUNNING", pending: true, label: "running", error: "" }
+  return { phase: "pending", status: "PENDING", pending: true, label: "queued", error: "" }
+}
+
+export function resolvedStatus(part, resultStatus) {
+  const lifecycle = lifecycleOf(part)
+  if (lifecycle.status) return lifecycle.status
+  return resultStatus ?? "PARTIAL SUCCESS"
+}
+
 export function statusTone(status, skin) {
   if (status === "SUCCESS") return skin.success
   if (status === "FAILED") return skin.error
-  return skin.accent
+  if (status === "RUNNING" || status === "PENDING") return skin.accent
+  return skin.warning ?? skin.accent
 }
 
-export function StatusGlyph({ status, skin, pending = false }) {
+export function statusLabel(status, lifecycle) {
+  if (lifecycle?.phase !== "completed") return lifecycle?.label ?? "working"
+  if (status === "SUCCESS") return "success"
+  if (status === "FAILED") return "failed"
+  return "partial"
+}
+
+export function StatusGlyph(props) {
   const frames = ["◌", "◔", "◑", "◕"]
   const [frame, setFrame] = createSignal(0)
   createEffect(() => {
-    if (!pending || skin.motion === false) return
+    if (!props.pending || props.skin.motion === false) return
     const timer = setInterval(() => setFrame((value) => (value + 1) % frames.length), 140)
     onCleanup(() => clearInterval(timer))
   })
-  if (pending) return <text fg={skin.accent}>{skin.motion === false ? frames[0] : frames[frame()]}</text>
-  if (status === "SUCCESS") return <text fg={skin.success}>✓</text>
-  if (status === "PARTIAL SUCCESS") return <text fg={skin.accent}>◐</text>
-  if (status === "FAILED") return <text fg={skin.error}>✕</text>
-  return <text fg={skin.muted}>·</text>
-}
-
-export function Badge({ text, color }) {
-  return <text fg={color}>{String(text).toLowerCase()}</text>
-}
-
-export function MetaLine({ skin, children }) {
-  return <text fg={skin.muted}>{children}</text>
-}
-
-export function SectionHeader({ title, skin, color }) {
-  return <text fg={color ?? skin.accent}><b>{title}</b></text>
+  return (
+    <text fg={statusTone(props.status, props.skin)}>
+      {props.pending ? (props.skin.motion === false ? frames[0] : frames[frame()]) : props.status === "SUCCESS" ? "✓" : props.status === "FAILED" ? "✕" : "◐"}
+    </text>
+  )
 }
 
 function isToggleKey(event) {
@@ -45,70 +55,99 @@ function isToggleKey(event) {
   return name === "return" || name === "enter" || name === "space" || name === " "
 }
 
-export function Activity({ label, summary, meta, status, skin, children, openDefault = false, pending = false }) {
-  const expandable = children !== undefined && children !== null
-  const [open, setOpen] = createSignal(openDefault || status === "FAILED")
+export function Activity(props) {
+  const expandable = createMemo(() => typeof props.details === "function")
+  const [open, setOpen] = createSignal(Boolean(props.openDefault))
   const [active, setActive] = createSignal(false)
+  let failureOpened = false
+  let defaultOpened = Boolean(props.openDefault)
+  createEffect(() => {
+    if (props.openDefault && !defaultOpened) {
+      defaultOpened = true
+      setOpen(true)
+    }
+    if (props.status === "FAILED" && !failureOpened) {
+      failureOpened = true
+      setOpen(true)
+    }
+  })
   const toggle = (event) => {
-    if (!expandable) return
+    if (!expandable()) return
     event?.stopPropagation?.()
     setOpen((value) => !value)
   }
-  const tone = () => statusTone(status, skin)
   return (
     <box
       flexDirection="column"
       flexShrink={0}
+      marginTop={props.compact ? 0 : 1}
       paddingLeft={1}
       paddingRight={1}
       paddingTop={0}
       paddingBottom={open() ? 1 : 0}
-      backgroundColor={active() ? skin.panel : undefined}
+      backgroundColor={active() ? props.skin.panel : undefined}
       onMouseOver={() => setActive(true)}
       onMouseOut={() => setActive(false)}
-      onMouseUp={(event) => toggle(event)}
-      focusable={expandable}
+      onMouseUp={toggle}
+      focusable={expandable()}
       onFocus={() => setActive(true)}
       onBlur={() => setActive(false)}
       onKeyDown={(event) => {
-        if (!expandable || !isToggleKey(event)) return
-        toggle(event)
+        if (isToggleKey(event)) toggle(event)
       }}
     >
       <box flexDirection="row" gap={1}>
-        <StatusGlyph status={status} skin={skin} pending={pending} />
-        <text fg={skin.text}><b>{label}</b></text>
-        <text flexGrow={1} fg={status === "FAILED" ? skin.error : skin.text}>{summary}</text>
-        {meta ? <text fg={skin.muted}>{meta}</text> : null}
-        {expandable ? <text fg={active() ? tone() : skin.muted}>{open() ? "▾" : "›"}</text> : null}
+        <StatusGlyph status={props.status} skin={props.skin} pending={props.pending} />
+        <text fg={props.skin.text}><b>{props.label}</b></text>
+        <text flexGrow={1} fg={props.status === "FAILED" ? props.skin.error : props.skin.text}>{props.summary}</text>
+        {props.meta ? <text fg={statusTone(props.status, props.skin)}>{props.meta}</text> : null}
+        {expandable() ? <text fg={active() ? statusTone(props.status, props.skin) : props.skin.muted}>{open() ? "▾" : "›"}</text> : null}
       </box>
-      {open() ? <box paddingLeft={2} paddingTop={1} flexDirection="column" gap={0}>{children}</box> : null}
+      {props.preview ? <box paddingLeft={2} paddingTop={1} flexDirection="column" gap={0}>{props.preview}</box> : null}
+      {open() ? <box paddingLeft={2} paddingTop={1} flexDirection="column" gap={1}>{props.details()}</box> : null}
     </box>
   )
 }
 
-export function Expandable({ header, children, skin, openDefault = false }) {
-  return <Activity label="" summary={header} status="SUCCESS" skin={skin} openDefault={openDefault}>{children}</Activity>
+export function ItemRow(props) {
+  return (
+    <box flexDirection="row" gap={1} flexShrink={0}>
+      <text width={1} fg={statusTone(props.status, props.skin)}>{props.status === "SUCCESS" ? "✓" : props.status === "FAILED" ? "✕" : props.status === "RUNNING" || props.status === "PENDING" ? "◌" : "◐"}</text>
+      <text flexGrow={1} fg={props.status === "FAILED" ? props.skin.error : props.skin.text}>{props.label}</text>
+      {props.meta ? <text fg={props.skin.muted}>{props.meta}</text> : null}
+    </box>
+  )
 }
 
-export function MetaGrid({ skin, entries, limit = 8 }) {
-  const visible = entries
-    .filter((entry) => entry && entry[1] !== null && entry[1] !== undefined && entry[1] !== "")
-    .slice(0, limit)
+export function PreviewList(props) {
+  const items = createMemo(() => Array.from(props.items ?? []).slice(0, props.limit ?? 4))
   return (
     <box flexDirection="column" gap={0}>
-      {visible.map((entry) => (
-        <text fg={skin.muted}><span style={{ fg: skin.text }}>{entry[0]}</span>  {String(entry[1]).slice(0, 140)}</text>
-      ))}
+      {items().map((item) => <ItemRow skin={props.skin} {...item} />)}
+      {(props.items?.length ?? 0) > (props.limit ?? 4) ? <text fg={props.skin.muted}>  +{props.items.length - (props.limit ?? 4)} more</text> : null}
     </box>
   )
 }
 
-export function DetailLines({ lines, skin, limit = 12, color }) {
-  const list = Array.from(lines ?? []).filter((line) => String(line).trim()).slice(-limit)
+export function Section(props) {
   return (
     <box flexDirection="column" gap={0}>
-      {list.map((line, index) => <text key={index} fg={color ?? skin.muted}>{String(line).slice(0, 220)}</text>)}
+      <text fg={props.color ?? props.skin.accent}><b>{props.title}</b>{props.meta ? <span style={{ fg: props.skin.muted }}>  {props.meta}</span> : null}</text>
+      <box paddingLeft={1} flexDirection="column" gap={0}>{props.children}</box>
     </box>
   )
+}
+
+export function MetaGrid(props) {
+  const visible = createMemo(() => Array.from(props.entries ?? []).filter((entry) => entry && entry[1] !== null && entry[1] !== undefined && entry[1] !== "").slice(0, props.limit ?? 10))
+  return <box flexDirection="column" gap={0}>{visible().map((entry) => <text fg={props.skin.muted}><span style={{ fg: props.skin.text }}>{entry[0]}</span>  {String(entry[1]).slice(0, 180)}</text>)}</box>
+}
+
+export function DetailLines(props) {
+  const list = createMemo(() => Array.from(props.lines ?? []).filter((line) => String(line).trim()).slice(props.tail === false ? 0 : -(props.limit ?? 16), props.tail === false ? (props.limit ?? 16) : undefined))
+  return <box flexDirection="column" gap={0}>{list().map((line, index) => <text key={index} fg={props.color ?? props.skin.muted}>{String(line).slice(0, props.width ?? 240)}</text>)}</box>
+}
+
+export function RawEvidence(props) {
+  return <Section title="Raw evidence" skin={props.skin} meta={`${props.tail === false ? "first" : "last"} ${props.limit ?? 24} lines`}><DetailLines skin={props.skin} lines={String(props.text ?? "").split(/\r?\n/)} limit={props.limit ?? 24} color={props.skin.muted} tail={props.tail} /></Section>
 }

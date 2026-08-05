@@ -1,40 +1,15 @@
 /** @jsxImportSource @opentui/solid */
+import { createMemo } from "solid-js"
 import { parseReportBlocks, reportStatus, reportSummary } from "../lib/report.js"
-import { Activity, DetailLines, MetaGrid } from "./kit.jsx"
-
-export function highlightParts(text, skin) {
-  const parts = String(text ?? "").split(/(PARTIAL SUCCESS|SUCCESS|READY|FAILED|ERROR|PASS\b|OK\b|yes\b|complete\b|running\b|stopped\b)/im)
-  return parts.map((part) => {
-    if (!part) return null
-    const up = part.toUpperCase()
-    if (["SUCCESS", "READY", "PASS", "OK", "YES"].includes(up)) return <span style={{ fg: skin.success }}><b>{part}</b></span>
-    if (["FAILED", "ERROR"].includes(up)) return <span style={{ fg: skin.error }}><b>{part}</b></span>
-    if (["PARTIAL SUCCESS", "COMPLETE", "RUNNING"].includes(up)) return <span style={{ fg: skin.accent }}><b>{part}</b></span>
-    return part
-  })
-}
+import { Activity, lifecycleOf, MetaGrid, RawEvidence, resolvedStatus, Section, statusLabel } from "./kit.jsx"
 
 export function ReportView(props) {
-  const skin = props.skin
-  const text = String(props.output ?? "").trim()
-  const status = reportStatus(text, props.tool)
-  const nodes = parseReportBlocks(text)
-  const details = nodes.flatMap((node) => {
-    if (node.type === "kv") return [[node.key, node.value]]
-    if (node.type === "list") return node.items.map((item) => ["•", item])
-    if (node.type === "section") return [[node.title, ""]]
-    return node.lines.map((line) => ["", line])
-  })
-  return (
-    <Activity
-      label={props.tool}
-      summary={reportSummary(text, props.tool)}
-      meta={status === "SUCCESS" ? "done" : status === "FAILED" ? "failed" : "partial"}
-      status={status}
-      skin={skin}
-      pending={!text}
-    >
-      {details.length ? <MetaGrid skin={skin} entries={details} limit={12} /> : <DetailLines skin={skin} lines={[text || "Waiting for output…"]} />}
-    </Activity>
-  )
+  const text = createMemo(() => String(props.output ?? "").trim())
+  const lifecycle = createMemo(() => lifecycleOf(props.part))
+  const resultStatus = createMemo(() => text() ? reportStatus(text(), props.tool) : null)
+  const status = createMemo(() => resolvedStatus(props.part, resultStatus()))
+  const nodes = createMemo(() => parseReportBlocks(text()))
+  const entries = createMemo(() => nodes().flatMap((node) => node.type === "kv" ? [[node.key, node.value]] : node.type === "list" ? node.items.map((item) => ["•", item]) : node.type === "section" ? [[node.title, ""]] : node.lines.map((line) => ["", line])))
+  const summary = createMemo(() => lifecycle().phase === "completed" ? reportSummary(text(), props.tool) : `${props.tool} is ${lifecycle().label}`)
+  return <Activity label={props.tool} summary={summary()} meta={statusLabel(status(), lifecycle())} status={status()} pending={lifecycle().pending} skin={props.skin} details={() => <><Section title="Parsed details" skin={props.skin}><MetaGrid skin={props.skin} entries={entries()} limit={20} /></Section><RawEvidence skin={props.skin} text={lifecycle().error || text()} limit={32} /></>} />
 }

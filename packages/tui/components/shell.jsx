@@ -1,30 +1,16 @@
 /** @jsxImportSource @opentui/solid */
+import { createMemo } from "solid-js"
 import { parseShellCommands } from "../lib/shell.js"
-import { Activity, DetailLines, displayPath, MetaGrid } from "./kit.jsx"
+import { inputItems } from "../lib/inspect.js"
+import { Activity, DetailLines, displayPath, lifecycleOf, MetaGrid, PreviewList, RawEvidence, resolvedStatus, Section, statusLabel } from "./kit.jsx"
 
 export function ShellView(props) {
-  const skin = props.skin
-  const text = String(props.output ?? "").trim()
-  const status = text.match(/^TERMINAL RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m)?.[1] ?? (text ? "PARTIAL SUCCESS" : "PARTIAL SUCCESS")
-  const meaning = text.match(/^WHAT HAPPENED: (.+)$/m)?.[1] ?? "Running terminal command"
-  const commands = parseShellCommands(text)
-  const failed = commands.filter((command) => command.exit != null && command.exit !== 0).length
-  const running = commands.filter((command) => command.exit == null).length
-  const meta = commands.length ? `${commands.length} cmd${commands.length === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : running ? ` · ${running} running` : ""}` : status === "SUCCESS" ? "done" : ""
-  return (
-    <Activity label="shell" summary={meaning.slice(0, 120)} meta={meta} status={status} skin={skin} pending={!text}>
-      {commands.length ? commands.slice(0, 8).map((command) => (
-        <Activity
-          label={command.exit === 0 ? "✓" : command.exit == null ? "◌" : "✕"}
-          summary={displayPath(command.label || command.command, 72)}
-          meta={command.duration || (command.exit == null ? "running" : `exit ${command.exit}`)}
-          status={command.exit === 0 ? "SUCCESS" : command.exit == null ? "PARTIAL SUCCESS" : "FAILED"}
-          skin={skin}
-        >
-          <MetaGrid skin={skin} entries={[["command", command.command], ["directory", displayPath(command.workdir, 90)], ["result", command.meaning]]} />
-          <DetailLines skin={skin} lines={command.body} limit={10} color={skin.text} />
-        </Activity>
-      )) : <DetailLines skin={skin} lines={text.split(/\r?\n/)} limit={12} />}
-    </Activity>
-  )
+  const text = createMemo(() => String(props.output ?? "").trim())
+  const lifecycle = createMemo(() => lifecycleOf(props.part))
+  const commands = createMemo(() => parseShellCommands(text()))
+  const resultStatus = createMemo(() => text().match(/^TERMINAL RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m)?.[1] ?? null)
+  const status = createMemo(() => resolvedStatus(props.part, resultStatus()))
+  const items = createMemo(() => commands().length ? commands().map((command) => ({ status: command.exit === 0 ? "SUCCESS" : command.exit == null ? "PARTIAL SUCCESS" : "FAILED", label: displayPath(command.label || command.command, 84), meta: command.duration || (command.exit == null ? "running" : `exit ${command.exit}`) })) : inputItems("shell", props.input))
+  const meaning = createMemo(() => text().match(/^WHAT HAPPENED: (.+)$/m)?.[1] ?? `Executing ${items().length} command${items().length === 1 ? "" : "s"}`)
+  return <Activity label="shell" summary={meaning().slice(0, 130)} meta={statusLabel(status(), lifecycle())} status={status()} pending={lifecycle().pending} skin={props.skin} preview={<PreviewList skin={props.skin} items={items()} />} details={() => commands().length ? <>{commands().map((command) => <Section title={`Command ${command.num} · ${command.label || "unlabelled"}`} skin={props.skin} color={command.exit === 0 ? props.skin.success : command.exit == null ? props.skin.accent : props.skin.error} meta={command.duration || `exit ${command.exit ?? "?"}`}><MetaGrid skin={props.skin} entries={[["command", command.command], ["directory", command.workdir], ["meaning", command.meaning], ["technical", command.technical.join(" · ")]]} /><Section title="Captured output" skin={props.skin}><DetailLines skin={props.skin} lines={command.body} limit={24} color={props.skin.text} /></Section></Section>)}</> : <RawEvidence skin={props.skin} text={lifecycle().error || text()} />} />
 }

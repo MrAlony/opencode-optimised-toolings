@@ -2,6 +2,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { readState, stateSummary, writeState } from "./lib/state.js"
 import { runSelfPatch } from "./lib/pipeline.js"
+import { ensureTuiCompanion } from "./lib/tui-registration.js"
 
 export function repoRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
@@ -10,8 +11,9 @@ export function repoRoot() {
 /**
  * Server-side half of the unified plugin.
  *
- * On plugin load it detects the running OpenCode binary; if the binary is not
- * the patched build it downloads the exact-version source, applies the bundled
+ * On plugin load it first ensures the rich TUI companion is registered in the
+ * user's TUI config, then detects the running OpenCode binary. If the binary is
+ * not the patched build it downloads the exact-version source, applies the bundled
  * anchor patches, rebuilds, and installs the patched binary over the official
  * one in place — no running instance is stopped and nothing restarts by
  * itself; the user restarts OpenCode at their convenience and the next launch
@@ -22,6 +24,13 @@ export function repoRoot() {
 export async function SelfPatchPlugin() {
   const root = repoRoot()
   let started = false
+  let tuiRegistration
+  try {
+    tuiRegistration = await ensureTuiCompanion(root)
+  } catch (error) {
+    tuiRegistration = { error: error?.message ?? String(error), changed: false, restartRequired: false }
+    console.warn(`[toolings] ${tuiRegistration.error}`)
+  }
 
   function ensureStarted() {
     if (started) return
@@ -68,7 +77,10 @@ export async function SelfPatchPlugin() {
             `Self-patch status: ${state.status}`,
             `OpenCode version: ${state.version ?? "unknown"}`,
             `Patched binary active: ${state.status === "ok" ? "yes" : "no"}`,
-            `Rich tool renderers: ${state.renderersActive ? "active" : "inactive (needs the patched binary)"}`,
+            `Rich tool renderers: ${state.renderersActive ? "active" : "inactive (needs the patched binary and next launch)"}`,
+            tuiRegistration.error
+              ? `TUI companion registration: failed — ${tuiRegistration.error}`
+              : `TUI companion registration: ${tuiRegistration.changed ? "added; restart required" : "present"}${tuiRegistration.configPath ? ` (${tuiRegistration.configPath})` : ""}`,
             state.progressPercent > 0 ? `Progress: ${state.progressPercent}% — ${state.stepLabel}` : `Step: ${state.stepLabel}`,
             state.lastError ? `Last error: ${state.lastError}` : null,
           ]

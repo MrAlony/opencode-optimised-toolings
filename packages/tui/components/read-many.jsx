@@ -1,33 +1,14 @@
 /** @jsxImportSource @opentui/solid */
+import { createMemo } from "solid-js"
 import { parseReadResult } from "../lib/read-many.js"
-import { Activity, DetailLines, displayPath, MetaGrid } from "./kit.jsx"
-import { ReportView } from "./report.jsx"
+import { inputItems } from "../lib/inspect.js"
+import { Activity, DetailLines, displayPath, lifecycleOf, MetaGrid, PreviewList, RawEvidence, resolvedStatus, Section, statusLabel } from "./kit.jsx"
 
 export function ReadManyView(props) {
-  const skin = props.skin
-  const parsed = parseReadResult(String(props.output ?? ""))
-  if (!parsed) return <ReportView {...props} />
-  const summary = parsed.outcome || `Read ${parsed.files.length} file${parsed.files.length === 1 ? "" : "s"}`
-  const meta = [
-    parsed.files.length && `${parsed.files.length} read`,
-    parsed.unavailable.length && `${parsed.unavailable.length} missing`,
-    parsed.omitted.length && `${parsed.omitted.length} bounded`,
-  ].filter(Boolean).join(" · ")
-  return (
-    <Activity label="read" summary={summary.slice(0, 120)} meta={meta} status={parsed.status} skin={skin}>
-      {parsed.files.slice(0, 10).map((file) => (
-        <Activity
-          label={file.bounded ? "◐" : "·"}
-          summary={displayPath(file.path, 82)}
-          meta={file.bounded ? "bounded" : file.kind}
-          status={file.bounded ? "PARTIAL SUCCESS" : "SUCCESS"}
-          skin={skin}
-        >
-          <MetaGrid skin={skin} entries={[["encoding", file.encoding], ["source", file.sourceBytes && `${file.sourceBytes} bytes`], ["returned", file.returnedRenderedBytes && `${file.returnedRenderedBytes} bytes`], ["ranges", file.ranges], ["sha256", file.sha256]]} />
-        </Activity>
-      ))}
-      {parsed.unavailable.length ? <DetailLines skin={skin} color={skin.error} lines={parsed.unavailable.map((item) => `${displayPath(item.path)} — ${item.reason}`)} limit={8} /> : null}
-      {parsed.omitted.length ? <DetailLines skin={skin} lines={parsed.omitted.map((item) => item.note || `${displayPath(item.path)} · omitted ${item.lines}`)} limit={6} /> : null}
-    </Activity>
-  )
+  const parsed = createMemo(() => parseReadResult(String(props.output ?? "")))
+  const lifecycle = createMemo(() => lifecycleOf(props.part))
+  const status = createMemo(() => resolvedStatus(props.part, parsed()?.status))
+  const items = createMemo(() => parsed() ? [...parsed().files.map((file) => ({ status: file.bounded ? "PARTIAL SUCCESS" : "SUCCESS", label: displayPath(file.path, 84), meta: file.bounded ? "bounded" : file.kind })), ...parsed().unavailable.map((item) => ({ status: "FAILED", label: displayPath(item.path, 84), meta: "unavailable" }))] : inputItems("fs_read_many", props.input))
+  const summary = createMemo(() => lifecycle().phase === "completed" ? parsed()?.outcome ?? `Read ${items().length} targets` : `Reading ${items().length} target${items().length === 1 ? "" : "s"}`)
+  return <Activity label="read" summary={summary().slice(0, 130)} meta={statusLabel(status(), lifecycle())} status={status()} pending={lifecycle().pending} skin={props.skin} preview={<PreviewList skin={props.skin} items={items()} />} details={() => parsed() ? <><Section title="Returned evidence" skin={props.skin} meta={`${parsed().files.length} target(s)`}>{parsed().files.map((file) => <Section title={displayPath(file.path, 100)} skin={props.skin} color={file.bounded ? props.skin.accent : props.skin.success} meta={file.bounded ? "bounded" : file.kind}><MetaGrid skin={props.skin} entries={[["encoding", file.encoding], ["source bytes", file.sourceBytes], ["returned bytes", file.returnedRenderedBytes], ["ranges", file.ranges], ["sha256", file.sha256]]} /></Section>)}</Section>{parsed().unavailable.length ? <Section title="Unavailable" skin={props.skin} color={props.skin.error}><DetailLines skin={props.skin} lines={parsed().unavailable.map((item) => `${item.path} — ${item.reason}`)} /></Section> : null}{parsed().omitted.length ? <Section title="Bounded evidence" skin={props.skin}><DetailLines skin={props.skin} lines={parsed().omitted.map((item) => item.note || `${item.path} · omitted lines ${item.lines} · ${item.bytes} bytes`)} /></Section> : null}<Section title="Budget and recovery" skin={props.skin}><MetaGrid skin={props.skin} entries={[...Object.entries(parsed().budget), ...Object.entries(parsed().editContext)]} /><DetailLines skin={props.skin} lines={[...parsed().consolidation, ...parsed().recovery, ...parsed().possiblePaths]} /></Section></> : <RawEvidence skin={props.skin} text={lifecycle().error || props.output} />} />
 }
