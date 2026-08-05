@@ -164,7 +164,9 @@ const tui: TuiPlugin = async (api, options) => {
   }
 
   const openSwitcher = () => {
-    api.ui.dialog.setSize("large")
+    // Must match the `size` passed to SessionSwitcher below: the component sizes
+    // its columns against the dialog panel, so a mismatch overflows it.
+    api.ui.dialog.setSize("xlarge")
     api.ui.dialog.replace(() => {
       const dimensions = useTerminalDimensions()
       return (
@@ -174,6 +176,7 @@ const tui: TuiPlugin = async (api, options) => {
             tokens={tokens}
             store={store}
             dimensions={dimensions}
+            size="xlarge"
             onClose={() => api.ui.dialog.clear()}
           />
         </ClockProvider>

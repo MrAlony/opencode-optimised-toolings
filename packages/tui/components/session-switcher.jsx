@@ -131,7 +131,11 @@ export function SessionSwitcher(props) {
   const [offset, setOffset] = createSignal(0)
   const clock = useClock(() => tokens().motion !== false)
 
-  const layout = createMemo(() => switcherLayout(props.dimensions?.() ?? { width: 120, height: 40 }))
+  // Sized against the host dialog panel, not the terminal: the dialog is a
+  // fixed-width container, so terminal-derived widths overflow it.
+  const layout = createMemo(() =>
+    switcherLayout(props.dimensions?.() ?? { width: 120, height: 40 }, props.size ?? "xlarge"),
+  )
   const rows = createMemo(() => store.model(activeSessionID(props.api), query()))
   const groups = createMemo(() => groupSessions(rows(), query()))
   const flat = createMemo(() => flattenGroups(groups()))

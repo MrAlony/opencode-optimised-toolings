@@ -31,6 +31,7 @@ test("workbench geometry survives missing or absurd dimensions", () => {
 })
 
 test("switcher geometry only shows a preview when there is room", () => {
+  // A narrow terminal clamps the dialog panel, leaving no room beside the list.
   const narrow = switcherLayout({ width: 80, height: 30 })
   assert.equal(narrow.showPreview, false)
   assert.equal(narrow.preview, 0)
@@ -38,9 +39,23 @@ test("switcher geometry only shows a preview when there is room", () => {
 
   const wide = switcherLayout({ width: 180, height: 50 })
   assert.equal(wide.showPreview, true)
-  assert.ok(wide.preview >= 30)
+  assert.ok(wide.preview >= 26)
   assert.ok(wide.list + wide.preview <= wide.inner)
-  assert.ok(wide.rows >= 3 && wide.rows <= 14)
+  assert.ok(wide.rows >= 3 && wide.rows <= 16)
+})
+
+test("switcher geometry is bounded by the dialog panel, not the terminal", () => {
+  // Regression: sizing from the terminal overflowed the fixed-width host dialog
+  // and let the renderer shrink labels to a few characters.
+  const huge = switcherLayout({ width: 400, height: 60 })
+  assert.ok(huge.inner <= 116, `panel width must stay bounded, got ${huge.inner}`)
+  assert.ok(huge.list + huge.preview <= huge.inner + 1)
+  assert.ok(huge.columns.title >= 24, "titles must remain readable")
+
+  // A smaller dialog yields a smaller panel.
+  const large = switcherLayout({ width: 400, height: 60 }, "large")
+  assert.ok(large.inner < huge.inner)
+  assert.ok(large.list + large.preview <= large.inner + 1)
 })
 
 test("inspector and home geometry stay within their host containers", () => {

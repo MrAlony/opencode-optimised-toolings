@@ -111,19 +111,26 @@ export function paletteLayout(options = {}) {
 }
 
 /**
- * Command-palette style switcher geometry. The preview pane only appears when
- * there is genuinely room for it beside the list.
+ * Switcher geometry for surfaces rendered inside a host dialog.
+ *
+ * Delegates to `paletteLayout` so dialog-hosted surfaces share one panel-aware
+ * sizing model. Sizing against the terminal instead of the dialog panel
+ * overflows the fixed-width container and lets the renderer shrink labels to a
+ * few characters, so the dialog size is the authority here.
  */
-export function switcherLayout(dimensions = {}) {
+export function switcherLayout(dimensions = {}, size = "xlarge") {
   const width = Math.max(20, Math.floor(Number(dimensions.width) || 80))
   const height = Math.max(8, Math.floor(Number(dimensions.height) || 24))
-  const density = densityOf(width)
-  const showPreview = density === "wide" || density === "panoramic"
-  const inner = Math.max(18, Math.min(width - 8, 118))
-  const preview = showPreview ? Math.max(30, Math.round(inner * 0.36)) : 0
-  const list = Math.max(16, inner - preview - (showPreview ? 2 : 0))
-  const rows = Math.max(3, Math.min(14, height - 12))
-  return { density, inner, list, preview, showPreview, rows }
+  const layout = paletteLayout({ size, width, height })
+  return {
+    density: densityOf(width),
+    inner: layout.inner,
+    list: layout.list,
+    preview: layout.preview,
+    showPreview: layout.showPreview,
+    rows: layout.rows,
+    columns: layout.columns,
+  }
 }
 
 /** Sidebar panel geometry; the host reserves a fixed 42-column sidebar. */
