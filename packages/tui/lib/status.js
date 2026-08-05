@@ -62,10 +62,22 @@ export async function readStateFile(file) {
   }
 }
 
+export const STALE_AFTER_MS = 2 * 60 * 1000
+
+export function isStale(state, now = Date.now()) {
+  const value = state?.updatedAt
+  const timestamp = typeof value === "number" ? value : Date.parse(String(value ?? ""))
+  if (!Number.isFinite(timestamp)) return false
+  return now - timestamp > STALE_AFTER_MS
+}
+
 export function indicatorFor(state) {
+  if (isStale(state) && ["idle", "dev-mode", "no-opencode"].includes(state?.status)) {
+    return { level: "info", text: "Tooling self-patch: checking…", detail: "No fresh status record from the running OpenCode process yet" }
+  }
   switch (state?.status) {
     case "ok":
-      return { level: "hidden", text: "Patched binary active" }
+      return { level: "ok", text: "Patched binary active", detail: "Rich tool renderers active" }
     case "idle":
       return { level: "info", text: "Tooling self-patch pending" }
     case "dev-mode":
@@ -76,10 +88,14 @@ export function indicatorFor(state) {
     case "error":
       return { level: "error", text: state.lastError ?? "Tooling self-patch failed" }
     case "built":
-      return { level: "info", text: "Patched binary ready — OpenCode restarts automatically" }
+      return {
+        level: "info",
+        text: "Patched binary installed — restart OpenCode to activate",
+        detail: "Running instances keep the original binary until you restart",
+      }
     case "restarting":
     case "swapping":
-      return { level: "info", text: "Swapping binaries and restarting OpenCode — session will resume" }
+      return { level: "info", text: "Restart OpenCode to activate the patched binary" }
     default:
       return { level: "warn", text: `${state?.stepLabel ?? state?.status ?? "unknown"}${state?.progressPercent ? ` (${state.progressPercent}%)` : ""}` }
   }
@@ -87,13 +103,10 @@ export function indicatorFor(state) {
 
 export function toastForTransition(prev, next) {
   if (!prev) return null
-  if (next?.status === "built") {
-    return { variant: "info", title: "Patched binary ready", message: "OpenCode restarts automatically in a few seconds to activate rich tool renderers." }
+  if (next?.status === "built" && prev?.status !== "built") {
+    return { variant: "info", title: "OpenCode patched", message: "Patched binary installed — restart OpenCode to activate rich tool renderers." }
   }
-  if (next?.status === "restarting") {
-    return { variant: "info", title: "Restarting OpenCode", message: "Your session resumes automatically with the patched binary." }
-  }
-  if (next?.status === "ok" && ["built", "restarting", "swapping"].includes(prev?.status)) {
+  if (next?.status === "ok" && prev?.status === "built") {
     return { variant: "success", title: "Tooling active", message: "Patched binary loaded — rich renderers enabled for all custom tools." }
   }
   if (next?.status === "error" && prev?.status !== "error") {

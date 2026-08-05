@@ -8,6 +8,7 @@ import {
   customTools,
   formatStateLog,
   indicatorFor,
+  isStale,
   readStateSync,
   rootFromModule,
   statePathForRoot,
@@ -25,22 +26,38 @@ test("custom tool registry has 16 unique names covering every family", () => {
 })
 
 test("indicatorFor maps statuses to visible levels", () => {
-  assert.equal(indicatorFor({ status: "ok" }).level, "hidden")
+  assert.equal(indicatorFor({ status: "ok" }).level, "ok")
+  assert.equal(indicatorFor({ status: "ok" }).detail, "Rich tool renderers active")
   assert.equal(indicatorFor({ status: "error", lastError: "boom" }).level, "error")
   assert.equal(indicatorFor({ status: "unsupported-version" }).level, "warn")
   assert.equal(indicatorFor({ status: "idle" }).level, "info")
   assert.equal(indicatorFor({ status: "building", progressPercent: 40, stepLabel: "Rebuilding" }).level, "warn")
-  assert.equal(indicatorFor({ status: "restarting" }).level, "info")
+  assert.equal(indicatorFor({ status: "built" }).level, "info")
+  assert.match(indicatorFor({ status: "built" }).text, /restart OpenCode/i)
+})
+
+test("indicatorFor reports stale records as checking instead of misleading states", () => {
+  const stale = { status: "dev-mode", updatedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() }
+  const fresh = { status: "dev-mode", updatedAt: new Date().toISOString() }
+  assert.equal(isStale(stale), true)
+  assert.equal(isStale(fresh), false)
+  assert.equal(isStale({ status: "idle" }), false)
+  assert.match(indicatorFor(stale).text, /checking/)
+  assert.equal(indicatorFor(fresh).text, "Tooling self-patch: not applicable")
+  assert.equal(indicatorFor({ status: "idle" }).text, "Tooling self-patch pending")
+  assert.equal(indicatorFor({ status: "ok", updatedAt: stale.updatedAt }).level, "ok")
 })
 
 test("toastForTransition only fires on meaningful transitions", () => {
   assert.equal(toastForTransition(null, { status: "building" }), null)
   assert.equal(toastForTransition({ status: "building" }, { status: "building" }), null)
   assert.ok(toastForTransition({ status: "building" }, { status: "built" }))
-  assert.ok(toastForTransition({ status: "built" }, { status: "restarting" }))
+  assert.match(toastForTransition({ status: "building" }, { status: "built" }).message, /restart OpenCode/i)
+  assert.equal(toastForTransition({ status: "built" }, { status: "built" }), null)
   assert.ok(toastForTransition({ status: "built" }, { status: "ok" }))
   assert.ok(toastForTransition({ status: "building" }, { status: "error", lastError: "x" }))
   assert.equal(toastForTransition({ status: "error" }, { status: "error", lastError: "y" }), null)
+  assert.equal(toastForTransition({ status: "building" }, { status: "restarting" }), null)
 })
 
 test("root discovery climbs to the toolings package.json", () => {

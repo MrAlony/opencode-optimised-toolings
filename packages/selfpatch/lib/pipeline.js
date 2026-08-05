@@ -5,6 +5,7 @@ import { createHash } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { patchedBinaryPath, readState, sha256File, writeState } from "./state.js"
 import { detectBinary } from "./detect.js"
+import { installPatchedBinary } from "./restart.js"
 
 export const OPENCODE_VERSION = "1.18.13"
 export const BUN_VERSION = "1.3.14"
@@ -31,6 +32,10 @@ export function lockFile(root) {
 
 export function patchMarkerFile(sourceRoot) {
   return path.join(sourceRoot, ".toolings-patch-marker.json")
+}
+
+export function patchedArtifactMarkerFile(root, version) {
+  return `${patchedBinaryPath(root, version)}.manifest.json`
 }
 
 function tarExecutable() {
@@ -101,12 +106,20 @@ export async function applyManifest(sourceRoot, manifest) {
   }
 }
 
-async function readPatchMarker(sourceRoot) {
+async function readJsonMarker(file) {
   try {
-    return JSON.parse(await fs.readFile(patchMarkerFile(sourceRoot), "utf8"))
+    return JSON.parse(await fs.readFile(file, "utf8"))
   } catch {
     return null
   }
+}
+
+async function readPatchMarker(sourceRoot) {
+  return readJsonMarker(patchMarkerFile(sourceRoot))
+}
+
+async function readPatchedArtifactMarker(root, version) {
+  return readJsonMarker(patchedArtifactMarkerFile(root, version))
 }
 
 export async function manifestSha256(manifest) {
@@ -221,7 +234,53 @@ export async function resolveBun(root) {
   return null
 }
 
-async function buildPatched(sourceRoot, root, onLog) {
+/**
+ * One-time dependency install for the extracted monorepo. The upstream build
+ * runs `bun install` before `script/build.ts --skip-install`, so a freshly
+ * extracted source tree has no node_modules and the workspace links
+ * (@opencode-ai/script, @opencode-ai/server, ...) cannot resolve. The success
+ * sentinel means a completed install is never repeated; if the patch set
+ * changes and the source is re-extracted, the sentinel disappears and the
+ * install runs again against the pristine tree.
+ */
+export async function installSourceDeps(sourceRoot, root, onLog) {
+  const okMarker = path.join(sourceRoot, "node_modules", ".toolings-install-ok")
+  if (await exists(okMarker)) return
+  const bun = await resolveBun(root)
+  if (!bun) {
+    throw new Error(
+      "bun is required to install OpenCode build dependencies and none was found on PATH, in this workspace, or via npx. " +
+        "Run `npm install` once in the tooling root (bun is a devDependency), then retry."
+    )
+  }
+  // The CLI build only needs the dependency graph and workspace links. Running
+  // third-party lifecycle scripts here needlessly compiles optional native
+  // grammars (for example tree-sitter-powershell) and makes patching depend on
+  // a host C++ toolchain. The upstream Bun build resolves its target-specific
+  // artifacts without those install hooks.
+  const args = ["install", "--frozen-lockfile", "--ignore-scripts"]
+  onLog(`installing OpenCode dependencies with ${bun.command} ${[...bun.prefixArgs, ...args].join(" ")} (${bun.source})`)
+  const child = spawn(bun.command, [...bun.prefixArgs, ...args], {
+    cwd: sourceRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+    env: { ...process.env, HUSKY: "0", OPENCODE_TOOLINGS_INSTALL: "1" },
+  })
+  let tail = ""
+  const collect = (chunk) => {
+    tail = (tail + chunk.toString()).slice(-4000)
+    onLog(tail)
+  }
+  child.stdout.on("data", collect)
+  child.stderr.on("data", collect)
+  const code = await new Promise((resolve) => child.on("close", resolve))
+  if (code !== 0) {
+    throw new Error(`dependency install failed with exit code ${code}\n${tail.slice(-1500)}`)
+  }
+  await fs.writeFile(okMarker, JSON.stringify({ installedAt: new Date().toISOString() }), "utf8")
+}
+
+export async function buildPatched(sourceRoot, root, version, onLog) {
   const pkgDir = path.join(sourceRoot, "packages", "opencode")
   const bun = await resolveBun(root)
   if (!bun) {
@@ -236,6 +295,10 @@ async function buildPatched(sourceRoot, root, onLog) {
     cwd: pkgDir,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
+    /* The extracted tree is not a git checkout, so Script.version would fall
+       back to 0.0.0-main-{timestamp}; binding OPENCODE_VERSION makes the built
+       binary report the real release version (matches detectBinary + manifest). */
+    env: { ...process.env, OPENCODE_VERSION: version },
   })
   let tail = ""
   const collect = (chunk) => {
@@ -263,17 +326,36 @@ function pidAlive(pid) {
 
 async function acquireLock(lock) {
   await fs.mkdir(path.dirname(lock), { recursive: true })
-  try {
-    const existing = JSON.parse(await fs.readFile(lock, "utf8"))
-    if (existing.pid && pidAlive(existing.pid)) {
-      throw new Error(`self-patch already running (pid ${existing.pid})`)
+  // A live instance finishes a build in seconds; wait for it instead of
+  // immediately reporting an error state that a concurrent launch would read.
+  const deadline = Date.now() + 300_000
+  for (;;) {
+    let owner = null
+    try {
+      owner = JSON.parse(await fs.readFile(lock, "utf8"))
+    } catch {
+      owner = null
     }
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      if (error.message?.includes("already running")) throw error
-    }
+    const held = owner?.pid && pidAlive(owner.pid)
+    if (!held) break
+    if (Date.now() > deadline) throw new Error(`self-patch lock still held by pid ${owner.pid} after 5 minutes`)
+    await new Promise((resolve) => setTimeout(resolve, 250))
   }
   await fs.writeFile(lock, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
+}
+
+// A freshly completed in-place install ("built") must not be re-triggered by a
+// concurrent launch. Once the record goes stale the next launch retries, so a
+// failed install self-heals instead of wedging forever.
+const INSTALL_PENDING_STALE_MS = 120_000
+
+export function installPending(state, now = Date.now()) {
+  if (!state) return false
+  if (state.status !== "built") return false
+  const value = state.updatedAt
+  const ts = typeof value === "number" ? value : Date.parse(String(value ?? ""))
+  if (!Number.isFinite(ts)) return true
+  return now - ts <= INSTALL_PENDING_STALE_MS
 }
 
 export async function runSelfPatch(root) {
@@ -309,23 +391,6 @@ export async function runSelfPatch(root) {
       return null
     }
     const patchedPath = patchedBinaryPath(root, bin.version)
-    if (await exists(patchedPath)) {
-      const patchedSha = await sha256File(patchedPath)
-      if (patchedSha === officialSha) {
-        await writeState(root, {
-          status: "ok",
-          version: bin.version,
-          binaryPath: bin.path,
-          officialSha256: officialSha,
-          patchedSha256: patchedSha,
-          patchedPath,
-          renderersActive: true,
-          stepLabel: "Patched binary active with rich tool renderers",
-        })
-        return null
-      }
-    }
-    if (state.status === "restarting" || state.status === "swapping") return null
     const manifestFile = manifestFileFor(root, bin.version)
     if (!(await exists(manifestFile))) {
       await writeState(root, {
@@ -339,6 +404,55 @@ export async function runSelfPatch(root) {
     }
     const manifestModule = await import(pathToFileURL(manifestFile).href)
     const manifest = manifestModule.manifest
+    const manifestSha = await manifestSha256(manifest)
+    const sourceRootForMarker = sourceDir(root, bin.version)
+    const sourceMarker = await readPatchMarker(sourceRootForMarker)
+    const artifactMarker = await readPatchedArtifactMarker(root, bin.version)
+    if (await exists(patchedPath)) {
+      const patchedSha = await sha256File(patchedPath)
+      if (patchedSha === officialSha && artifactMarker?.manifestSha256 === manifestSha && artifactMarker?.binarySha256 === patchedSha) {
+        await writeState(root, {
+          status: "ok",
+          version: bin.version,
+          binaryPath: bin.path,
+          officialSha256: officialSha,
+          patchedSha256: patchedSha,
+          patchedPath,
+          renderersActive: true,
+          stepLabel: "Patched binary active with the current rich-renderer manifest",
+        })
+        return null
+      }
+    }
+    const freshState = await readState(root)
+    if (installPending(freshState, Date.now()) && artifactMarker?.manifestSha256 === manifestSha) return null
+
+    // A previously built patched binary that still matches the current
+    // manifest can be installed directly: skip download/patch/build entirely
+    // and replace the official binary in place (no process interaction).
+    if (await exists(patchedPath)) {
+      if (artifactMarker?.manifestSha256 === manifestSha) {
+        await writeState(root, {
+          status: "installing",
+          progressPercent: 85,
+          stepLabel: "Installing the patched binary over the official one",
+        })
+        const patchedSha = await sha256File(patchedPath)
+        const installed = await installPatchedBinary({ officialPath: bin.path, patchedPath })
+        await writeState(root, {
+          status: "built",
+          progressPercent: 100,
+          stepLabel: "Patched binary installed — restart OpenCode to activate",
+          version: bin.version,
+          binaryPath: bin.path,
+          officialSha256: officialSha,
+          patchedSha256: patchedSha,
+          patchedPath,
+          renderersActive: false,
+        })
+        return { officialPath: bin.path, patchedPath, officialSha, patchedSha, installed }
+      }
+    }
 
     await writeState(root, {
       status: "detecting",
@@ -351,8 +465,7 @@ export async function runSelfPatch(root) {
     })
     let sourceRoot = await ensureSource(root, bin.version)
 
-    const marker = await readPatchMarker(sourceRoot)
-    const manifestSha = await manifestSha256(manifest)
+    const marker = sourceRoot === sourceRootForMarker ? sourceMarker : await readPatchMarker(sourceRoot)
     if (!marker || marker.manifestSha256 !== manifestSha) {
       if (marker) {
         // The patch set changed for this version: reset to pristine source and re-extract.
@@ -368,22 +481,44 @@ export async function runSelfPatch(root) {
       )
     }
 
+    await writeState(root, { status: "installing", progressPercent: 35, stepLabel: "Installing OpenCode build dependencies (first run only; takes a few minutes)" })
+    await installSourceDeps(sourceRoot, root, (tail) => {
+      void writeState(root, { status: "installing", progressPercent: 38, stepLabel: "Installing OpenCode build dependencies", logTail: tail }).catch(() => {})
+    })
     await writeState(root, { status: "building", progressPercent: 40, stepLabel: "Rebuilding OpenCode (first run takes a few minutes)" })
-    const binary = await buildPatched(sourceRoot, root, (tail) => {
+    const binary = await buildPatched(sourceRoot, root, bin.version, (tail) => {
       void writeState(root, { status: "building", progressPercent: 45, stepLabel: "Rebuilding OpenCode", logTail: tail }).catch(() => {})
     })
     const patchedSha = await sha256File(binary)
     await fs.mkdir(path.dirname(patchedPath), { recursive: true })
     await fs.copyFile(binary, patchedPath)
+    await fs.writeFile(
+      patchedArtifactMarkerFile(root, bin.version),
+      JSON.stringify({ version: bin.version, manifestSha256: manifestSha, binarySha256: patchedSha }, null, 2),
+      "utf8"
+    )
     await writeState(root, {
-      status: "built",
+      status: "installing",
       progressPercent: 90,
-      stepLabel: "Patched binary ready; OpenCode will restart automatically",
+      stepLabel: "Installing the patched binary over the official one",
       patchedSha256: patchedSha,
       patchedPath,
       logTail: "",
     })
-    return { officialPath: bin.path, patchedPath, officialSha, patchedSha }
+    const installed = await installPatchedBinary({ officialPath: bin.path, patchedPath })
+    await writeState(root, {
+      status: "built",
+      progressPercent: 100,
+      stepLabel: "Patched binary installed — restart OpenCode to activate",
+      version: bin.version,
+      binaryPath: bin.path,
+      officialSha256: officialSha,
+      patchedSha256: patchedSha,
+      patchedPath,
+      renderersActive: false,
+      logTail: "",
+    })
+    return { officialPath: bin.path, patchedPath, officialSha, patchedSha, installed }
   } finally {
     await fs.rm(lock, { force: true }).catch(() => {})
   }

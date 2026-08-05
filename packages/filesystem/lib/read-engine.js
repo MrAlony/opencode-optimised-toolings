@@ -37,7 +37,7 @@ function formatComplete(path, snapshot, rendered) {
   if (snapshot.binary) return `${path}\n  BINARY FILE: ${formatSize(snapshot.size)}; encoding=${snapshot.encoding}. Content was not decoded.`;
   const regions = rendered.regions.map((region) => `${region.kind} lines ${region.startLine}-${region.endLine}, decoded bytes ${region.startByte}-${Math.max(region.startByte, region.endByte - 1)}`).join("; ");
   const bounds = rendered.truncated
-    ? `\n[TRUNCATION BOUNDS: returned ${regions}; omitted lines ${rendered.omitted.startLine}-${rendered.omitted.endLine}, decoded bytes ${rendered.omitted.startByte}-${rendered.omitted.endByte}, ${rendered.omitted.bytes} decoded byte(s) / ${rendered.omitted.lines} line(s) not returned.]`
+    ? `\n[TRUNCATION BOUNDS: returned ${regions};${rendered.omitted ? ` omitted lines ${rendered.omitted.startLine}-${rendered.omitted.endLine}, decoded bytes ${rendered.omitted.startByte}-${rendered.omitted.endByte}, ${rendered.omitted.bytes} decoded byte(s) / ${rendered.omitted.lines} line(s) not returned` : " an oversized single line was returned as a marked fragment; no line range is omitted"}.]`
     : "";
   const stability = formatStability(snapshot);
   return `${path} (${rendered.totalLines} total lines, ${formatSize(snapshot.size)} source bytes, encoding=${snapshot.encoding}, sha256 ${snapshot.fingerprint}, stable=${snapshot.stable}):\n${rendered.text}${bounds}${rendered.fragmented ? "\n[BOUNDARY SIGNAL: one oversized line was returned as a marked fragment.]" : ""}${stability.length ? `\n[READ RECOVERY: ${stability.join("; ")}]` : ""}`;
@@ -160,7 +160,9 @@ export function executeReadMany(args, context, options = {}) {
     const rendered = completeResults.get(key);
     output.push(formatComplete(item.path, snapshot, rendered));
     read.push(`${item.path}: ${rendered.truncated ? "bounded head/tail complete-file evidence" : "complete file"}; returned_rendered_bytes=${rendered.renderedBytes}; source_bytes=${snapshot.size}; encoding=${snapshot.encoding}; sha256=${snapshot.fingerprint}`);
-    if (rendered.truncated) truncated.push(`${item.path}: omitted lines ${rendered.omitted.startLine}-${rendered.omitted.endLine}; decoded bytes ${rendered.omitted.startByte}-${rendered.omitted.endByte}; ${rendered.omitted.bytes} decoded byte(s) omitted`);
+    if (rendered.truncated) truncated.push(rendered.omitted
+      ? `${item.path}: omitted lines ${rendered.omitted.startLine}-${rendered.omitted.endLine}; decoded bytes ${rendered.omitted.startByte}-${rendered.omitted.endByte}; ${rendered.omitted.bytes} decoded byte(s) omitted`
+      : `${item.path}: an oversized single line was returned as a marked fragment`);
     recovery.push(...formatStability(snapshot).map((signal) => `${item.path}: ${signal}`));
   }
   for (const plan of rangePlans) {

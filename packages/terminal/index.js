@@ -54,6 +54,52 @@ function transientSpawnFailure(errorCode) {
   return typeof errorCode === "string" && TRANSIENT_SPAWN_CODES.has(errorCode.toUpperCase());
 }
 
+// Windows PowerShell 5.1 (powershell.exe) rejects '&&' / '||' with a parse error,
+// but agents coming from POSIX shells write them instinctively. Convert unquoted
+// chain separators to ';' chaining so the original intent (run both) executes.
+function chainSeparatorRepair(command) {
+  if (process.platform !== "win32") return null;
+  let repaired = "";
+  let quote = null;
+  let changed = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (quote) {
+      repaired += char;
+      if (char === "`" && quote === '"' && index + 1 < command.length) {
+        repaired += command[index + 1];
+        index += 1;
+      } else if (char === quote) {
+        if (quote === "'" && command[index + 1] === "'") {
+          repaired += "'";
+          index += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      repaired += char;
+      continue;
+    }
+    if ((char === "&" || char === "|") && command[index + 1] === char) {
+      repaired += "; ";
+      changed = true;
+      index += 1;
+      if (command[index + 1] === " " || command[index + 1] === "\t") index += 1;
+      continue;
+    }
+    repaired += char;
+  }
+  return changed ? repaired : null;
+}
+
+function portabilityNote(repaired) {
+  return `\n--- SYNTAX PORTABILITY ---\nDetected: unix-style chain separator(s) ('&&' or '||') in a Windows PowerShell session\nCorrection: converted to ';' chaining because Windows PowerShell 5.1 does not support '&&' or '||'\nRepaired command: ${repaired}`;
+}
+
 function extractWindowsDescendants(text) {
   if (process.platform !== "win32") return { output: text, pids: [], commandEnded: false };
   const pattern = new RegExp(`(?:\\r?\\n)?${WINDOWS_DESCENDANT_MARKER}(\\[[^\\r\\n]*\\]|\\d+|null)(?:\\r?\\n)?`, "g");
@@ -293,13 +339,15 @@ function runCommandOnce(spec, defaultCwd, context, command = spec.command) {
   const chunks = [];
   const capture = { bytes: 0, truncated: false };
   const started = Date.now();
+  const portability = chainSeparatorRepair(command);
+  const effectiveCommand = portability ?? command;
   return new Promise((resolve) => {
     let settled = false;
     let timedOut = false;
     let aborted = false;
     let termination = "";
     let timer;
-    const proc = spawn(shell.cmd, [...shell.args, shellCommand(command)], {
+    const proc = spawn(shell.cmd, [...shell.args, shellCommand(effectiveCommand)], {
       cwd,
       shell: false,
       windowsHide: true,
@@ -311,7 +359,7 @@ function runCommandOnce(spec, defaultCwd, context, command = spec.command) {
       clearTimeout(timer);
       context?.abort?.removeEventListener?.("abort", onAbort);
       const captured = extractWindowsDescendants(Buffer.concat(chunks).toString("utf8"));
-      resolve({ label: spec.label, command: spec.command, executedCommand: command, cwd, code, error: error?.message ?? error ?? null, errorCode: error?.code ?? null, timedOut, aborted, timeoutMs, requestedTimeoutMs, termination, durationMs: Date.now() - started, output: captured.output.trimEnd(), truncated: capture.truncated });
+      resolve({ label: spec.label, command: spec.command, executedCommand: effectiveCommand, cwd, code, error: error?.message ?? error ?? null, errorCode: error?.code ?? null, timedOut, aborted, timeoutMs, requestedTimeoutMs, termination, durationMs: Date.now() - started, output: captured.output.trimEnd(), truncated: capture.truncated, portability });
     };
     const onAbort = async () => {
       aborted = true;
@@ -400,6 +448,7 @@ function formatCommandResults(results, mode, notes) {
       else body += "\nSafe correction: retried the identical command once after a 100ms bounded delay; the failed spawn could not execute command code.";
       body += "\nRetry limit: one same-call recovery attempt; ordinary command failures are never replayed.";
     }
+    if (result.portability) body += portabilityNote(result.portability);
     if (result.requestedTimeoutMs > MAX_TIMEOUT_MS) body += `\n[TIMEOUT CLAMPED] Requested ${result.requestedTimeoutMs}ms, but the absolute maximum is ${MAX_TIMEOUT_MS}ms.`;
     if (result.timedOut) body += `\n[TIMEOUT ENFORCEMENT] The command exceeded ${result.timeoutMs}ms. Full process-tree termination was requested (${result.termination || "termination initiated"}).\n[TIMEOUT ADVISORY] Do not retry the same long-running command unchanged. Investigate why it exceeded the deadline, use a finite readiness-bounded command, or split the work without weakening verification.`;
     if (result.aborted) body += `\n[ABORT ENFORCEMENT] Full process-tree termination was requested (${result.termination || "termination initiated"}).`;
@@ -417,7 +466,9 @@ function formatCommandResults(results, mode, notes) {
 
 function startProc(command, cwd, id, label) {
   const shell = getShell();
-  const proc = spawn(shell.cmd, [...shell.args, shellCommand(command)], {
+  const portability = chainSeparatorRepair(command);
+  const effectiveCommand = portability ?? command;
+  const proc = spawn(shell.cmd, [...shell.args, shellCommand(effectiveCommand)], {
     cwd,
     shell: false,
     windowsHide: true,
@@ -425,7 +476,7 @@ function startProc(command, cwd, id, label) {
   });
   let resolveClosed;
   const closed = new Promise((resolvePromise) => { resolveClosed = resolvePromise; });
-  const rec = { id, label, command, executedCommand: command, cwd, pid: proc.pid, proc, chunks: [], bytes: 0, truncated: false, exitCode: null, rootExitCode: null, trackedPids: [], startTime: Date.now(), spawnError: null, spawnErrorCode: null, closed, commandEnded: false };
+  const rec = { id, label, command, executedCommand: effectiveCommand, cwd, pid: proc.pid, proc, chunks: [], bytes: 0, truncated: false, exitCode: null, rootExitCode: null, trackedPids: [], startTime: Date.now(), spawnError: null, spawnErrorCode: null, closed, commandEnded: false, portability };
   const capture = { get bytes() { return rec.bytes; }, set bytes(v) { rec.bytes = v; }, get truncated() { return rec.truncated; }, set truncated(v) { rec.truncated = v; } };
   proc.stdout?.on("data", (data) => appendBounded(rec.chunks, data, capture));
   proc.stderr?.on("data", (data) => appendBounded(rec.chunks, data, capture));
@@ -614,9 +665,9 @@ async function runBackgroundOperation(op, defaultCwd) {
     if (startup.exited || !startup.ready) {
       if (!startup.exited) await stopAndConfirm(rec);
       procs.delete(rec.id);
-      return `PROCESS START FAILED\n  ID: ${rec.id}\n  PID: ${rec.pid ?? "unknown"}\n  State: ${statusOf(rec)}\n  Meaning: ${startup.exited ? "The process exited during bounded startup settlement." : startup.evidence}\n  Working directory: ${rec.cwd}\n  Command: ${rec.command}\n--- STARTUP OUTPUT ---\n${captured || "(no output)"}${rec.recovery ? `\n--- AUTOMATIC RECOVERY ---\nOutcome: ${rec.recovery.succeeded ? "SUCCEEDED" : "ATTEMPTED BUT FAILED"}\nDetected: ${rec.recovery.kind}\nCorrection: ${rec.recovery.kind === "windows_quoted_executable" ? "added PowerShell call operator" : "retried identical spawn after 100ms"}\nRetry limit: one; the first attempt could not execute command code.` : ""}\n\nTechnical: start_failed id=${rec.id} pid=${rec.pid ?? "?"} status=${statusOf(rec)}`;
+      return `PROCESS START FAILED\n  ID: ${rec.id}\n  PID: ${rec.pid ?? "unknown"}\n  State: ${statusOf(rec)}\n  Meaning: ${startup.exited ? "The process exited during bounded startup settlement." : startup.evidence}\n  Working directory: ${rec.cwd}\n  Command: ${rec.command}\n--- STARTUP OUTPUT ---\n${captured || "(no output)"}${rec.recovery ? `\n--- AUTOMATIC RECOVERY ---\nOutcome: ${rec.recovery.succeeded ? "SUCCEEDED" : "ATTEMPTED BUT FAILED"}\nDetected: ${rec.recovery.kind}\nCorrection: ${rec.recovery.kind === "windows_quoted_executable" ? "added PowerShell call operator" : "retried identical spawn after 100ms"}\nRetry limit: one; the first attempt could not execute command code.` : ""}${rec.portability ? portabilityNote(rec.portability) : ""}\n\nTechnical: start_failed id=${rec.id} pid=${rec.pid ?? "?"} status=${statusOf(rec)}`;
     }
-    return `PROCESS ${op.ready_output || op.ready_port || op.ready_url ? "READY" : "STARTED"}\n  ID: ${rec.id}\n  PID: ${rec.pid ?? "unknown"}\n  State: ${statusOf(rec)}\n  Startup evidence: ${startup.evidence}\n  Working directory: ${rec.cwd}\n  Command: ${rec.command}${captured ? `\n--- STARTUP OUTPUT ---\n${captured}` : ""}${rec.recovery ? `\n--- AUTOMATIC RECOVERY ---\nOutcome: SUCCEEDED\nDetected: ${rec.recovery.kind}\nCorrection: ${rec.recovery.kind === "windows_quoted_executable" ? "added PowerShell call operator without changing executable or arguments" : "retried identical spawn after 100ms"}\nRetry limit: one; ordinary process exits are never replayed.` : ""}\n\nTechnical: started id=${rec.id} pid=${rec.pid ?? "?"} status=${statusOf(rec)} cwd=${rec.cwd}`;
+    return `PROCESS ${op.ready_output || op.ready_port || op.ready_url ? "READY" : "STARTED"}\n  ID: ${rec.id}\n  PID: ${rec.pid ?? "unknown"}\n  State: ${statusOf(rec)}\n  Startup evidence: ${startup.evidence}\n  Working directory: ${rec.cwd}\n  Command: ${rec.command}${captured ? `\n--- STARTUP OUTPUT ---\n${captured}` : ""}${rec.recovery ? `\n--- AUTOMATIC RECOVERY ---\nOutcome: SUCCEEDED\nDetected: ${rec.recovery.kind}\nCorrection: ${rec.recovery.kind === "windows_quoted_executable" ? "added PowerShell call operator without changing executable or arguments" : "retried identical spawn after 100ms"}\nRetry limit: one; ordinary process exits are never replayed.` : ""}${rec.portability ? portabilityNote(rec.portability) : ""}\n\nTechnical: started id=${rec.id} pid=${rec.pid ?? "?"} status=${statusOf(rec)} cwd=${rec.cwd}`;
   }
   if (action === "list") {
     if (procs.size === 0) return "No background processes.";
@@ -649,7 +700,7 @@ async function runBackgroundOperation(op, defaultCwd) {
   if (action === "restart") {
     await stopAndConfirm(rec);
     const { rec: next, startup } = await startWithRecovery({ ...op, command: rec.command, cwd: rec.cwd, label: rec.label }, defaultCwd, rec.id);
-    return `${startup.ready && !startup.exited ? "PROCESS RESTARTED" : "PROCESS RESTART FAILED"}\n  ID: ${next.id}\n  PID: ${next.pid ?? "unknown"}\n  State: ${statusOf(next)}\n  Startup evidence: ${startup.evidence || "process exited during startup"}\n  Command: ${next.command}\n--- STARTUP OUTPUT ---\n${outputOf(next, 8_000).trimEnd() || "(no output)"}`;
+    return `${startup.ready && !startup.exited ? "PROCESS RESTARTED" : "PROCESS RESTART FAILED"}\n  ID: ${next.id}\n  PID: ${next.pid ?? "unknown"}\n  State: ${statusOf(next)}\n  Startup evidence: ${startup.evidence || "process exited during startup"}\n  Command: ${next.command}\n--- STARTUP OUTPUT ---\n${outputOf(next, 8_000).trimEnd() || "(no output)"}${next.portability ? portabilityNote(next.portability) : ""}`;
   }
   return `Unknown action '${op.action}'. Valid: start, list, status, logs, stop, restart, cleanup, stop_all.`;
 }
@@ -668,7 +719,7 @@ export const EnhancedTerminalPlugin = async () => ({
   },
   tool: {
     shell: tool({
-      description: `Run 1-${MAX_COMMANDS} finite shell commands in one call and wait for completion. Known no-execution failures may be repaired and retried once inside the same call: a quoted Windows executable missing PowerShell's call operator, or a transient process-spawn resource error. Ordinary nonzero exits, timeouts, cancellations, and potentially side-effecting failures are never replayed. Use mode=parallel for independent tests/builds/checks and mode=sequential for ordered commands whose processes do not share state. For dependent steps that must share shell state (cd, variables, pipelines), put them in one command string. Default timeout ${DEFAULT_TIMEOUT_MS}ms per command; absolute hard maximum ${MAX_TIMEOUT_MS}ms (90 seconds), even if a larger value is requested. At the deadline the full process tree is force-terminated and the tool returns after a bounded termination grace period. Output is bounded. Run only finite commands; servers, watchers, daemons, and intentionally persistent processes are unsupported while background_process is disabled. Do not use Get-Content/cat/rg/Select-String/recursive directory commands as substitutes for fs_read_many range reads, fs_search, or fs_explore; runtime output will flag such substitutions. On Windows use ';' rather than '&&'.`,
+      description: `Run 1-${MAX_COMMANDS} finite shell commands in one call and wait for completion. Known no-execution failures may be repaired and retried once inside the same call: a quoted Windows executable missing PowerShell's call operator, or a transient process-spawn resource error. Ordinary nonzero exits, timeouts, cancellations, and potentially side-effecting failures are never replayed. Use mode=parallel for independent tests/builds/checks and mode=sequential for ordered commands whose processes do not share state. For dependent steps that must share shell state (cd, variables, pipelines), put them in one command string. Default timeout ${DEFAULT_TIMEOUT_MS}ms per command; absolute hard maximum ${MAX_TIMEOUT_MS}ms (90 seconds), even if a larger value is requested. At the deadline the full process tree is force-terminated and the tool returns after a bounded termination grace period. Output is bounded. Run only finite commands; servers, watchers, daemons, and intentionally persistent processes are unsupported while background_process is disabled. Do not use Get-Content/cat/rg/Select-String/recursive directory commands as substitutes for fs_read_many range reads, fs_search, or fs_explore; runtime output will flag such substitutions. On Windows, unix-style '&&'/'||' chain separators in any command are auto-converted to ';' chaining (Windows PowerShell 5.1 rejects them) and reported as a SYNTAX PORTABILITY note.`,
       args: {
         commands: tool.schema.array(tool.schema.object({ command: tool.schema.string().min(1), cwd: tool.schema.string().optional(), timeout_ms: tool.schema.number().optional(), label: tool.schema.string().optional() })).min(1).max(MAX_COMMANDS),
         mode: tool.schema.string().optional(),
@@ -695,7 +746,7 @@ export const EnhancedTerminalPlugin = async () => ({
       },
     }),
     background_process: tool({
-      description: "Manage long-running processes in batches. Pass 1-20 ordered operations: start/list/status/logs/stop/restart/cleanup/stop_all. Start performs bounded startup settlement in the same operation, returns early output, detects safe no-execution failures, and retries once when safe. Optional ready_output, ready_port, or ready_url waits for readiness within startup_timeout_ms so agents do not need polling calls. Multiple independent starts, status checks, log reads, or stops belong in one call. Processes do not push notifications. After starting a process, do useful independent work and check it once when it is likely ready; do not spam repeated status/logs calls. Repeated polling emits escalating advisories but is not delayed or blocked. Always stop processes no longer needed.",
+      description: "Manage long-running processes in batches. Pass 1-20 ordered operations: start/list/status/logs/stop/restart/cleanup/stop_all. Start performs bounded startup settlement in the same operation, returns early output, detects safe no-execution failures, and retries once when safe. Optional ready_output, ready_port, or ready_url waits for readiness within startup_timeout_ms so agents do not need polling calls. Multiple independent starts, status checks, log reads, or stops belong in one call. Processes do not push notifications. After starting a process, do useful independent work and check it once when it is likely ready; do not spam repeated status/logs calls. Repeated polling emits escalating advisories but is not delayed or blocked. Always stop processes no longer needed. Unix-style '&&'/'||' chaining in start commands is auto-converted to ';' on Windows and reported as a SYNTAX PORTABILITY note.",
       args: {
         operations: tool.schema.array(tool.schema.object({ action: tool.schema.string(), command: tool.schema.string().optional(), id: tool.schema.string().optional(), cwd: tool.schema.string().optional(), label: tool.schema.string().optional(), tail_chars: tool.schema.number().optional(), ready_output: tool.schema.string().optional(), ready_port: tool.schema.number().optional(), ready_url: tool.schema.string().optional(), startup_timeout_ms: tool.schema.number().optional() })).min(1).max(20),
       },

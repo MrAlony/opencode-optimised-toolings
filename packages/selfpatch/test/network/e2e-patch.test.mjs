@@ -49,15 +49,23 @@ try {
   const sessionIndex = join(sourceRoot, "packages", "tui", "src", "routes", "session", "index.tsx")
   const adapters = join(sourceRoot, "packages", "tui", "src", "plugin", "adapters.tsx")
   const registryFile = join(sourceRoot, "packages", "tui", "src", "plugin", "tool-renderers.ts")
+  const pluginTypesFile = join(sourceRoot, "packages", "plugin", "src", "tui.ts")
+  const scopedRuntimeFile = join(sourceRoot, "packages", "opencode", "src", "plugin", "tui", "runtime.ts")
   const session = await readFile(sessionIndex, "utf8")
   const adap = await readFile(adapters, "utf8")
+  const registry = await readFile(registryFile, "utf8")
+  const pluginTypes = await readFile(pluginTypesFile, "utf8")
+  const scopedRuntime = await readFile(scopedRuntimeFile, "utf8")
   const checks = {
     "registry file created": existsSync(registryFile),
     "session imports registry": session.includes('from "../../plugin/tool-renderers"'),
     "plugin display branch": session.includes('display() === "plugin"') && session.includes("<PluginTool"),
     "PluginTool component": session.includes("function PluginTool"),
     "adapters registers api surface": adap.includes("toolRenderers:"),
-    "adapters imports registration": adap.includes("registerPluginToolRenderer"),
+    "adapters returns registration disposer": adap.includes("return registerPluginToolRenderer"),
+    "public plugin API declares renderer capability": pluginTypes.includes("toolRenderers: TuiToolRenderers"),
+    "scoped plugin API forwards renderer capability": scopedRuntime.includes("scope.track(api.toolRenderers.register"),
+    "registry supports disposal": registry.includes("entry.token !== token") && registry.includes("return () =>"),
   }
   const failed = Object.entries(checks).filter(([, value]) => !value)
   if (failed.length) throw new Error(`anchor verification failed: ${failed.map(([name]) => name).join(", ")}`)
@@ -76,7 +84,7 @@ try {
   }
   if (!secondRejected) throw new Error("second apply should have been rejected (files already patched)")
 
-  console.log(`PATCH E2E: SUCCESS (v${VERSION}; registry, session branch, PluginTool, adapters surface, marker, idempotent rejection)`)
+  console.log(`PATCH E2E: SUCCESS (v${VERSION}; registry, session branch, public + scoped API forwarding, disposal, marker, idempotent rejection)`)
   ok = true
 } catch (error) {
   console.error(`PATCH E2E: FAILED — ${error.message}`)

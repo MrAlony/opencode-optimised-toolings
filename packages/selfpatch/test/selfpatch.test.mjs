@@ -8,6 +8,7 @@ import { defaultState, readState, sha256File, stateSummary, writeState } from ".
 import { applyManifest, manifestSha256, patchFileContent } from "../lib/pipeline.js"
 import { detectBinary, isDevRuntime } from "../lib/detect.js"
 import { SelfPatchPlugin } from "../index.js"
+import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
 
 test("toolings tool registration exposes a callable execute", async () => {
   const plugin = await SelfPatchPlugin()
@@ -101,6 +102,40 @@ test("manifestSha256 is deterministic", async () => {
   const manifest = { version: "x", create: [] }
   assert.equal(await manifestSha256(manifest), await manifestSha256(manifest))
   assert.notEqual(await manifestSha256(manifest), await manifestSha256({ ...manifest, version: "y" }))
+})
+
+test("v1.18.13 patch carries tool renderers through every TUI API boundary", () => {
+  const files = new Map(patchManifest.files.map((file) => [file.path, file]))
+  const pluginTypes = files.get("packages/plugin/src/tui.ts")
+  const hostRuntime = files.get("packages/opencode/src/plugin/tui/runtime.ts")
+  const adapters = files.get("packages/tui/src/plugin/adapters.tsx")
+  assert.ok(pluginTypes, "public plugin API types must be patched")
+  assert.ok(hostRuntime, "scoped plugin facade must be patched")
+  assert.ok(adapters, "base TUI adapter must be patched")
+  assert.match(pluginTypes.replacements.map((item) => item.replace).join("\n"), /toolRenderers/)
+  assert.match(hostRuntime.replacements.map((item) => item.replace).join("\n"), /scope\.track\(api\.toolRenderers\.register/)
+  assert.match(adapters.replacements.map((item) => item.replace).join("\n"), /return registerPluginToolRenderer/)
+})
+
+test("v1.18.13 renderer registry is reactive and disposal-safe", () => {
+  const source = patchManifest.create.find((item) => item.path.endsWith("tool-renderers.ts"))?.content ?? ""
+  assert.match(source, /registryVersion\(\)/)
+  assert.match(source, /return \(\) =>/)
+  assert.match(source, /entry\.token !== token/)
+  assert.match(source, /\.at\(-1\)\?\.renderer/)
+})
+
+test("self-patch activation is gated by the current manifest fingerprint", () => {
+  const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
+  assert.match(source, /patchedSha === officialSha && artifactMarker\?\.manifestSha256 === manifestSha/)
+  assert.match(source, /artifactMarker\?\.binarySha256 === patchedSha/)
+  assert.match(source, /patchedArtifactMarkerFile\(root, bin\.version\)/)
+  assert.match(source, /installPending\(freshState, Date\.now\(\)\) && artifactMarker\?\.manifestSha256 === manifestSha/)
+})
+
+test("source dependency hydration never runs third-party lifecycle scripts", () => {
+  const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
+  assert.match(source, /\["install", "--frozen-lockfile", "--ignore-scripts"\]/)
 })
 
 test("detectBinary recognizes the dev runtime", () => {

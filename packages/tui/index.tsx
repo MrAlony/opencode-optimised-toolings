@@ -10,6 +10,11 @@ import {
   statePathForRoot,
   toastForTransition,
 } from "./lib/status.js"
+import { BackgroundView } from "./components/background.jsx"
+import { EditManyView } from "./components/edit-many.jsx"
+import { ReadManyView } from "./components/read-many.jsx"
+import { ReportView } from "./components/report.jsx"
+import { ShellView } from "./components/shell.jsx"
 
 const palette = {
   panel: "#1d1d1d",
@@ -47,6 +52,16 @@ type RenderProps = {
   tool: string
   output?: string
   part: unknown
+}
+
+type RendererView = (props: RenderProps & { skin: Skin }) => JSX.Element
+
+function rendererFor(tool: string): RendererView {
+  if (tool === "fs_read_many") return ReadManyView
+  if (tool === "fs_edit_many") return EditManyView
+  if (tool === "shell") return ShellView
+  if (tool === "background_process") return BackgroundView
+  return ReportView
 }
 
 function summarize(props: RenderProps) {
@@ -96,16 +111,21 @@ function ToolCardView(props: RenderProps & { skin: Skin }) {
   )
 }
 
-function statusSlot(statePath: string): TuiSlotPlugin {
+type RendererRegistration = {
+  available: boolean
+  registered: number
+  failed: string[]
+}
+
+function statusSlot(statePath: string, registration: RendererRegistration): TuiSlotPlugin {
   return {
     order: 50,
     slots: {
       sidebar_content(ctx) {
         const state = readStateSync(statePath)
         const indicator = indicatorFor(state)
-        if (indicator.level === "hidden") return null
         const skin = skinOf(ctx.theme)
-        const color = indicator.level === "error" ? skin.error : indicator.level === "warn" ? skin.accent : skin.text
+        const color = indicator.level === "error" ? skin.error : indicator.level === "warn" ? skin.accent : indicator.level === "ok" ? skin.success : skin.text
         return (
           <box
             border
@@ -122,6 +142,14 @@ function statusSlot(statePath: string): TuiSlotPlugin {
               <b>Tooling</b>
             </text>
             <text fg={skin.muted}>{indicator.text}</text>
+            {registration.available ? (
+              <text fg={registration.failed.length ? skin.accent : skin.success}>
+                Rich renderers registered: {registration.registered}/{customTools.length}
+              </text>
+            ) : (
+              <text fg={skin.error}>Rich renderer API unavailable in this TUI runtime</text>
+            )}
+            {registration.failed.length ? <text fg={skin.error}>Failed: {registration.failed.join(", ").slice(0, 140)}</text> : null}
             {state.lastError ? <text fg={skin.error}>{String(state.lastError).slice(0, 140)}</text> : null}
           </box>
         )
@@ -146,21 +174,29 @@ const tui: TuiPlugin = async (api, options) => {
   // Register rich renderers through the patched core's api.toolRenderers.
   const skin = skinOf(api.theme)
   const extended = api as TuiPluginApi & {
-    toolRenderers?: { register(name: string, renderer: (props: RenderProps) => JSX.Element): void }
+    toolRenderers?: { register(name: string, renderer: (props: RenderProps) => JSX.Element): void | (() => void) }
   }
   const registry = extended.toolRenderers
+  const registration: RendererRegistration = {
+    available: Boolean(registry && typeof registry.register === "function"),
+    registered: 0,
+    failed: [],
+  }
   if (registry && typeof registry.register === "function") {
     for (const name of customTools) {
       try {
-        registry.register(name, (props) => <ToolCardView skin={skin} {...props} />)
+        const View = rendererFor(name)
+        const dispose = registry.register(name, (props) => <View skin={skin} {...props} />)
+        if (typeof dispose === "function") api.lifecycle.onDispose(dispose)
+        registration.registered += 1
       } catch {
-        // one bad renderer must not break the rest
+        registration.failed.push(name)
       }
     }
   }
 
   try {
-    api.slots.register(statusSlot(statePath))
+    api.slots.register(statusSlot(statePath, registration))
   } catch {
     // slots.register is plugin-context only; ignore otherwise.
   }

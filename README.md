@@ -9,7 +9,7 @@ A portable, shareable distribution of the custom OpenCode tools used in this env
 - **Stealth:** native OpenCode Tor/Patchright tools, no MCP server, cookie-authenticated dedicated Tor process.
 - **SearXNG:** loopback-only local search service with generated local secret and owned PID lifecycle.
 - **Guidance:** production-oriented global AGENTS and Kilo Implementer configuration.
-- **Self-patching:** the unified plugin detects an unpatched OpenCode binary, rebuilds the exact installed version with rich tool renderers, swaps the binary, and restarts automatically once — and repeats after OpenCode self-updates.
+- **Self-patching:** the unified plugin detects an unpatched OpenCode binary, rebuilds the exact installed version with rich tool renderers, and swaps the binary in place — no running instance is ever stopped or restarted; the patched build activates on your next launch — and repeats after OpenCode self-updates.
 
 ## Quick setup
 
@@ -33,11 +33,11 @@ Then fully quit and restart OpenCode. Plugins and global configuration are loade
 `packages/selfpatch` plus the TUI companion (`packages/tui`) implement the automatic patch lifecycle:
 
 1. On launch the plugin compares the running OpenCode binary against the bundled anchor patch set (`packages/selfpatch/patches/<version>/`). A matching patched SHA-256 means nothing to do.
-2. Unpatched or updated binary → the plugin downloads the exact-version source archive, applies the SHA-verified anchor patches (renderer registry + `api.toolRenderers`), rebuilds with the workspace-local Bun, stages the patched binary, and schedules a detached swap helper.
-3. OpenCode restarts itself once and resumes the session (`--continue`). Progress is visible in the sidebar, via toasts, and through the `toolings` status tool.
-4. Future OpenCode self-updates change the binary hash, so the plugin re-patches automatically.
+2. Unpatched, updated, or manifest-stale binary → the plugin downloads the exact-version source archive, applies the SHA-verified anchor patches (renderer registry, public API types, scoped plugin forwarding, and transcript dispatch), rebuilds with the workspace-local Bun, and installs the patched executable in place while preserving the original backup.
+3. Running OpenCode processes are never stopped or restarted. Fully quit and relaunch OpenCode when the sidebar reports that the patched binary was installed; the next process loads the current renderer manifest.
+4. The companion reports actual renderer registration (`16/16`) separately from binary status, and future OpenCode self-updates or patch-manifest revisions trigger a provenance-verified rebuild automatically.
 
-Safeguards: version-specific manifests with source fingerprints, fail-closed behavior on unknown versions (the official binary keeps running), validation-before-write patching, an idempotent per-version patch marker, a pipeline lock, and `OPENCODE_TOOLINGS_NO_EXIT=1` to disable the automatic restart exit. Running under a node/bun dev runtime is detected and skipped (`dev-mode`).
+Safeguards: version-specific manifests with source fingerprints, fail-closed behavior on unknown versions, validation-before-write patching, separate source and built-artifact provenance markers, post-install SHA-256 verification with rollback, lifecycle-safe renderer unregistration, a pipeline lock, and dependency hydration without third-party lifecycle scripts. Running under a node/bun dev runtime is detected and skipped (`dev-mode`).
 
 ## Web contract
 

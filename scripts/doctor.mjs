@@ -17,7 +17,10 @@ try {
   check("local secrets file", existsSync(secretsPath), secretsPath);
   check("CBM build", existsSync(resolve(root, "packages", "cbm", "dist", "index.js")), "packages/cbm/dist/index.js");
   check("TUI companion registered", (() => { try { const tui = JSON.parse(readFileSync(resolve(globalOpenCodeDirectory, "tui.json"), "utf8")); return (tui.plugin || []).some((entry) => String(Array.isArray(entry) ? entry[0] : entry).includes("/packages/tui/index.tsx")); } catch { return false; } })(), resolve(globalOpenCodeDirectory, "tui.json"));
-  check("self-patch manifest v1.18.13", existsSync(resolve(root, "packages", "selfpatch", "patches", "1.18.13", "manifest.mjs")), "packages/selfpatch/patches/1.18.13/manifest.mjs");
+  const manifestFile = resolve(root, "packages", "selfpatch", "patches", "1.18.13", "manifest.mjs");
+  check("self-patch manifest v1.18.13", existsSync(manifestFile), "packages/selfpatch/patches/1.18.13/manifest.mjs");
+  const manifestText = existsSync(manifestFile) ? readFileSync(manifestFile, "utf8") : "";
+  check("renderer API boundary patch", manifestText.includes("packages/opencode/src/plugin/tui/runtime.ts") && manifestText.includes("scope.track(api.toolRenderers.register"), "base adapter + scoped plugin API forwarding");
   const stealth = stealthConfig(); check("stealth Python", Boolean(stealth.python), stealth.python || "not found"); check("Tor executable", Boolean(stealth.tor), stealth.tor || "optional until stealth use, but required for Tor operations");
   const searx = await statusSearx(); check("SearXNG environment", searx.installed, searx.python); checks.push({ name: "SearXNG service", outcome: searx.status === "running" ? "pass" : "info", detail: `${searx.status} on 127.0.0.1:${searx.port}` });
   const node = spawnSync(process.execPath, ["--version"], { encoding: "utf8", windowsHide: true }); check("Node runtime", node.status === 0, String(node.stdout || node.stderr || node.error?.message || "no output").trim());

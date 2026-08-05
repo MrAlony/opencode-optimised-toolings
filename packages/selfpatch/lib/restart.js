@@ -1,62 +1,63 @@
 import { promises as fs } from "node:fs"
-import { spawn } from "node:child_process"
-import path from "node:path"
+import { sha256File } from "./state.js"
 
-export function restartMarkerFile(root) {
-  return path.join(root, "runtime", "restart-marker.json")
-}
-
-function ps(str) {
-  return `'${String(str).replace(/\\/g, "\\\\").replace(/'/g, "''")}'`
-}
-
-function sh(str) {
-  return `'${String(str).replace(/'/g, `'\\''`)}'`
-}
-
-export function buildHelperCommand(marker) {
-  const backup = `${marker.officialPath}.toolings-backup`
-  if (process.platform === "win32") {
-    const script = [
-      "$ErrorActionPreference='Continue'",
-      `Wait-Process -Id ${Number(marker.parentPid)} -Timeout 180 -ErrorAction SilentlyContinue`,
-      "$ok=$false",
-      "for ($i=0; $i -lt 60; $i++) {",
-      "  Start-Sleep -Milliseconds 250",
-      `  try { Move-Item -LiteralPath ${ps(marker.officialPath)} -Destination ${ps(backup)} -Force -ErrorAction Stop; Move-Item -LiteralPath ${ps(marker.patchedPath)} -Destination ${ps(marker.officialPath)} -Force -ErrorAction Stop; $ok=$true; break } catch { $err=$_.Exception.Message }`,
-      "}",
-      "if (-not $ok) { Write-Error 'toolings swap failed'; exit 2 }",
-      `Start-Process -FilePath ${ps(marker.officialPath)} -ArgumentList ${ps("--continue")} -WorkingDirectory ${ps(marker.cwd)}`,
-    ].join("\n")
-    return { program: "powershell", args: ["-NoProfile", "-WindowStyle", "Hidden", "-Command", script] }
+async function exists(file) {
+  try {
+    await fs.access(file)
+    return true
+  } catch {
+    return false
   }
-
-  const script = [
-    `while kill -0 ${Number(marker.parentPid)} 2>/dev/null; do sleep 0.3; done`,
-    "i=0",
-    "while [ $i -lt 60 ]; do",
-    `  if mv -f ${sh(marker.officialPath)} ${sh(backup)} 2>/dev/null && mv -f ${sh(marker.patchedPath)} ${sh(marker.officialPath)} 2>/dev/null; then break; fi`,
-    "  i=$((i+1)); sleep 0.25",
-    "done",
-    `cd ${sh(marker.cwd)} 2>/dev/null`,
-    `nohup ${sh(marker.officialPath)} --continue >/dev/null 2>&1 &`,
-  ].join("\n")
-  return { program: "/bin/sh", args: ["-c", script] }
 }
 
-export async function scheduleRestart(root, { officialPath, patchedPath, cwd, parentPid }) {
-  const marker = {
-    officialPath,
-    patchedPath,
-    cwd: cwd ?? process.cwd(),
-    parentPid: parentPid ?? process.pid,
-    scheduledAt: new Date().toISOString(),
+/**
+ * Install the patched binary over the official OpenCode binary, in place.
+ *
+ * The official executable is replaced on disk while running instances keep
+ * their already-mapped image, so no process is ever stopped, killed, or
+ * restarted: the file is swapped exactly like a package update, and the user
+ * restarts OpenCode at their convenience to activate it. The original
+ * official binary is preserved once under `<official>.toolings-backup` for
+ * restore.
+ *
+ * Windows refuses to overwrite (or copy onto) an executable image that a
+ * running process has mapped (EBUSY), but it permits RENAMING such a file
+ * away, because the image section keeps its own handle. So the swap is:
+ * rename the mapped official image aside, copy the patched binary to the now
+ * free official name, verify the fingerprint, and roll back on failure.
+ *
+ * Returns { installed, alreadyPatched, officialSha, patchedSha, backupPath }.
+ */
+export async function installPatchedBinary({ officialPath, patchedPath }) {
+  if (!(await exists(officialPath)) || !(await exists(patchedPath))) {
+    throw new Error("install-patched requires both the official and the patched binary")
   }
-  const file = restartMarkerFile(root)
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, JSON.stringify(marker, null, 2), { encoding: "utf8", mode: 0o600 })
-  const command = buildHelperCommand(marker)
-  const child = spawn(command.program, command.args, { detached: true, stdio: "ignore", windowsHide: true })
-  child.unref()
-  return marker
+  const officialSha = await sha256File(officialPath)
+  const patchedSha = await sha256File(patchedPath)
+  if (officialSha === patchedSha) {
+    return { installed: false, alreadyPatched: true, officialSha, patchedSha, backupPath: null }
+  }
+  const backupPath = `${officialPath}.toolings-backup`
+  if (!(await exists(backupPath))) {
+    await fs.copyFile(officialPath, backupPath)
+  }
+  const stash = `${officialPath}.toolings-incoming-${Date.now()}`
+  await fs.rename(officialPath, stash)
+  try {
+    await fs.copyFile(patchedPath, officialPath)
+  } catch (error) {
+    await fs.rename(stash, officialPath).catch(() => {})
+    throw error
+  }
+  const after = await sha256File(officialPath)
+  if (after !== patchedSha) {
+    await fs.rename(stash, officialPath).catch(() => {})
+    throw new Error(
+      `patched binary install failed: post-swap fingerprint mismatch (${after.slice(0, 12)} != ${patchedSha.slice(0, 12)})`
+    )
+  }
+  // Best-effort cleanup: a running instance may keep the stashed image mapped,
+  // in which case the deletion is deferred by Windows and harmless to ignore.
+  await fs.rm(stash, { force: true }).catch(() => {})
+  return { installed: true, alreadyPatched: false, officialSha, patchedSha, backupPath }
 }

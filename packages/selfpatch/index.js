@@ -2,7 +2,6 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { readState, stateSummary, writeState } from "./lib/state.js"
 import { runSelfPatch } from "./lib/pipeline.js"
-import { scheduleRestart } from "./lib/restart.js"
 
 export function repoRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
@@ -13,9 +12,12 @@ export function repoRoot() {
  *
  * On plugin load it detects the running OpenCode binary; if the binary is not
  * the patched build it downloads the exact-version source, applies the bundled
- * anchor patches, rebuilds, swaps the binary, and restarts OpenCode once.
- * Progress and errors are continuously written to the shared state file that
- * the TUI companion renders. Tool outputs are never modified.
+ * anchor patches, rebuilds, and installs the patched binary over the official
+ * one in place — no running instance is stopped and nothing restarts by
+ * itself; the user restarts OpenCode at their convenience and the next launch
+ * reports the patched binary as active. Progress and errors are continuously
+ * written to the shared state file that the TUI companion renders. Tool
+ * outputs are never modified.
  */
 export async function SelfPatchPlugin() {
   const root = repoRoot()
@@ -26,21 +28,10 @@ export async function SelfPatchPlugin() {
     started = true
     void (async () => {
       try {
-        const result = await runSelfPatch(root)
-        if (result && result.patchedPath && result.officialPath) {
-          await writeState(root, { status: "swapping", progressPercent: 95, stepLabel: "Swapping binaries and restarting OpenCode" })
-          await scheduleRestart(root, {
-            officialPath: result.officialPath,
-            patchedPath: result.patchedPath,
-            cwd: process.cwd(),
-          })
-          await writeState(root, { status: "restarting", progressPercent: 100, stepLabel: "Session continues after restart" })
-          // Give the TUI a moment to show the restart notice, then hand off.
-          // OPENCODE_TOOLINGS_NO_EXIT=1 disables the exit (tests and non-interactive runtimes).
-          if (process.env.OPENCODE_TOOLINGS_NO_EXIT === "1") return
-          const parsedDelay = Number(process.env.OPENCODE_TOOLINGS_EXIT_DELAY_MS)
-          setTimeout(() => process.exit(0), Number.isFinite(parsedDelay) && parsedDelay > 0 ? parsedDelay : 1200)
-        }
+        // runSelfPatch installs the patched binary over the official one in
+        // place and leaves every running instance untouched; the user restarts
+        // OpenCode at their convenience to activate it.
+        await runSelfPatch(root)
       } catch (error) {
         await writeState(root, {
           status: "error",
@@ -51,6 +42,12 @@ export async function SelfPatchPlugin() {
       }
     })()
   }
+
+  // Run the self-patch pipeline immediately on plugin load so the shared
+  // state file reflects the actual runtime before any tool call or TUI poll.
+  // The pipeline is idempotent: dev-mode, no-opencode, unsupported versions,
+  // and already-patched binaries all short-circuit without touching the binary.
+  ensureStarted()
 
   return {
     tool: {

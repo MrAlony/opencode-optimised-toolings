@@ -49,6 +49,22 @@ test("shell safely repairs a quoted Windows executable invocation inside one cal
   assert.match(output, /Retry limit: one/);
 });
 
+test("shell auto-converts unix chain separators for Windows PowerShell", { skip: process.platform !== "win32" }, async () => {
+  const output = await plugin.tool.shell.execute({ commands: [{ command: "Write-Output FIRST&&Write-Output SECOND" }] }, { ...context, sessionID: "chain-separator-repair" });
+  assert.match(output, /TERMINAL RESULT: SUCCESS/);
+  assert.match(output, /SYNTAX PORTABILITY/);
+  assert.match(output, /Repaired command: Write-Output FIRST\s*;\s*Write-Output SECOND/);
+  assert.match(output, /\bFIRST\b/);
+  assert.match(output, /\bSECOND\b/);
+});
+
+test("shell preserves unix chain syntax inside quoted strings", { skip: process.platform !== "win32" }, async () => {
+  const output = await plugin.tool.shell.execute({ commands: [{ command: "Write-Output 'kept&&intact'" }] }, { ...context, sessionID: "chain-quoted-preserved" });
+  assert.match(output, /TERMINAL RESULT: SUCCESS/);
+  assert.doesNotMatch(output, /SYNTAX PORTABILITY/);
+  assert.match(output, /kept&&intact/);
+});
+
 test("shell never retries an ordinary nonzero command", async () => {
   const output = await plugin.tool.shell.execute({ commands: [{ command: "node -e \"console.log('ordinary-failure');process.exit(9)\"" }] }, { ...context, sessionID: "ordinary-failure-no-replay" });
   assert.match(output, /TERMINAL RESULT: FAILED/);

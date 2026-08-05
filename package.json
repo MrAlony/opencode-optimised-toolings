@@ -1,6 +1,6 @@
 {
   "name": "opencode-optimised-toolings",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Portable, production-grade OpenCode custom tooling distribution with filesystem, terminal, CBM, web, stealth, Tor, and SearXNG integration.",
@@ -47,6 +47,7 @@
     "test:patch:e2e": "node packages/selfpatch/test/network/e2e-patch.test.mjs",
     "install:opencode": "node scripts/install.mjs",
     "uninstall:opencode": "node scripts/uninstall.mjs",
+    "recover:opencode": "node scripts/recover-selfpatch.mjs",
     "doctor": "node scripts/doctor.mjs",
     "verify:shareable": "node scripts/verify-shareable.mjs",
     "services": "node scripts/services.mjs",
