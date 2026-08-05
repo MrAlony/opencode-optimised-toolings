@@ -86,13 +86,22 @@ test("expanded inspectors use separated status-aware cards and bounded content p
   }
 })
 
-test("known tool families use plans or explicit inspector defects instead of routine raw dumps", async () => {
+test("known tool families preserve plans and degrade bounded completed output without false renderer defects", async () => {
+  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx"]) {
+    const body = await source(`components/${file}`)
+    assert.match(body, /InspectorDegraded/)
+    assert.match(body, /lifecycle\(\)\.phase === "error"/)
+    assert.match(body, /statusPending\(status\(\)\)/)
+    assert.doesNotMatch(body, /lifecycle\(\)\.error \|\|/)
+  }
   for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "cbm.jsx"]) {
     const body = await source(`components/${file}`)
-    assert.match(body, /InspectorUnavailable/)
     assert.doesNotMatch(body, /RawEvidence/)
-    assert.match(body, /statusPending\(status\(\)\)/)
   }
+  const batch = await source("lib/batch.js")
+  assert.match(batch, /export function reconcileBatch/)
+  assert.match(batch, /detailAvailable: false/)
+  assert.match(batch, /plannedCount: requested\.length/)
   const read = await source("components/read-many.jsx")
   assert.match(read, /label="Read"/)
   assert.doesNotMatch(read, /Read \$\{items\(\)\.length\} targets/)

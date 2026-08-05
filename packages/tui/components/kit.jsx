@@ -212,8 +212,17 @@ export function DetailLines(props) {
 
 export function InspectorUnavailable(props) {
   return (
-    <InspectorCard title="Inspector unavailable" skin={props.skin} status="FAILED" subtitle="The tool response could not be mapped to its dedicated inspector.">
-      <ContentPane skin={props.skin} title="What to do" lines={[props.message ?? "The execution result is preserved, but this renderer needs a parser update. Use the saved tool-output path if present and report this as a renderer defect."]} limit={5} tail={false} color={props.skin.error} />
+    <InspectorCard title="Inspector unavailable" skin={props.skin} status="FAILED" subtitle="The tool execution failed or returned an invalid response.">
+      <ContentPane skin={props.skin} title="What to do" lines={[props.message ?? "The execution result is preserved. Review the tool error and saved output path when present."]} limit={5} tail={false} color={props.skin.error} />
+    </InspectorCard>
+  )
+}
+
+export function InspectorDegraded(props) {
+  return (
+    <InspectorCard title={props.title ?? "Details omitted"} skin={props.skin} status="PARTIAL SUCCESS" subtitle={props.subtitle ?? "The request plan is intact, but bounded transcript output did not include the structured result details."}>
+      {props.items?.length ? <PreviewList skin={props.skin} items={props.items} limit={props.limit ?? 12} /> : null}
+      <ContentPane skin={props.skin} title="What this means" lines={[props.message ?? "OpenCode preserved the original tool output separately. This inspector will not treat missing bounded detail as a renderer or execution failure."]} limit={5} tail={false} color={props.skin.warning} />
     </InspectorCard>
   )
 }

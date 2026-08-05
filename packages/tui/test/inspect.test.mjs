@@ -10,6 +10,12 @@ test("web fetch inspector preserves per-URL mixed outcomes", () => {
   assert.match(parsed.items[1].error, /blocked/)
 })
 
+test("web fetch parser keeps declared batch counts separate from visible truncated blocks", () => {
+  const parsed = parseWebFetch(`WEB FETCH RESULT: SUCCESS\nWHAT HAPPENED: 3 of 3 URL request(s) returned successful HTTP responses.\n\n=== URL 1: https://one.test ===\nOutcome: HTTP 200 OK\nFinal URL: https://one.test/`)
+  assert.equal(parsed.items.length, 1)
+  assert.match(parsed.summary, /3 of 3/)
+})
+
 test("web search inspector exposes query and result provenance", () => {
   const parsed = parseWebSearch(`WEB SEARCH RESULT: PARTIAL SUCCESS\nWHAT HAPPENED: 1 of 2 query(s) returned results. Strategy: fallback.\n\n=== QUERY 1: solid open tui ===\nOutcome: RESULTS FOUND (1)\nCache: miss\nBackend attempts:\n  - searxng: ok (1)\n\n1. OpenTUI\n   URL: https://example.test\n   Terminal renderer\n   Source: searxng/meta\n\n=== QUERY 2: absent ===\nOutcome: NO RESULTS\nCache: hit; no external backend request was needed\nBackend attempts:\n  - duckduckgo: 0 results\nNo results found.`)
   assert.deepEqual(parsed.items.map((item) => item.status), ["SUCCESS", "FAILED"])

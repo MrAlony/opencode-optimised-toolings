@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
 import { parseReadResult } from "../lib/read-many.js"
+import { reconcileBatch } from "../lib/batch.js"
 import { inputItems } from "../lib/inspect.js"
-import { Activity, ContentPane, displayPath, InspectorCard, InspectorUnavailable, lifecycleOf, MetaGrid, OutcomeOverview, PreviewList, resolvedStatus, Section, statusLabel, statusPending } from "./kit.jsx"
+import { Activity, ContentPane, displayPath, InspectorCard, InspectorDegraded, InspectorUnavailable, lifecycleOf, MetaGrid, OutcomeOverview, PreviewList, resolvedStatus, Section, statusLabel, statusPending } from "./kit.jsx"
 
 function requestedCount(input) { return new Set([...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)]).size }
 function omissionFor(parsed, path) { return parsed.omitted.filter((item) => item.path === path) }
@@ -28,19 +29,24 @@ export function ReadManyView(props) {
   const parsed = createMemo(() => parseReadResult(String(props.output ?? "")))
   const lifecycle = createMemo(() => lifecycleOf(props.part))
   const status = createMemo(() => resolvedStatus(props.part, parsed()?.status))
-  const items = createMemo(() => parsed() ? [...parsed().files.map((file) => ({ status: fileStatus(file, parsed()), label: displayPath(file.path, 84), meta: file.bounded ? "partial" : file.kind })), ...parsed().unavailable.map((item) => ({ status: "FAILED", label: displayPath(item.path, 84), meta: "unavailable" }))] : inputItems("alonix-read-many", props.input))
-  const summary = createMemo(() => parsed() ? `${parsed().files.length} returned${parsed().unavailable.length ? ` · ${parsed().unavailable.length} unavailable` : ""}` : `${requestedCount(props.input)} target${requestedCount(props.input) === 1 ? "" : "s"}`)
+  const plan = createMemo(() => inputItems("alonix-read-many", props.input))
+  const observed = createMemo(() => parsed() ? [...parsed().files.map((file) => ({ status: fileStatus(file, parsed()), label: file.path, meta: file.bounded ? "partial" : file.kind })), ...parsed().unavailable.map((item) => ({ status: "FAILED", label: item.path, meta: "unavailable" }))] : [])
+  const batch = createMemo(() => reconcileBatch(plan(), observed()))
+  const items = createMemo(() => batch().records.map((item) => ({ ...item, label: displayPath(item.label, 84) })))
+  const summary = createMemo(() => parsed() ? `${batch().plannedCount} target${batch().plannedCount === 1 ? "" : "s"} · ${parsed().files.length} returned${parsed().unavailable.length ? ` · ${parsed().unavailable.length} unavailable` : ""}${batch().omitted.length ? ` · ${batch().omitted.length} details omitted` : ""}` : `${requestedCount(props.input)} target${requestedCount(props.input) === 1 ? "" : "s"}`)
   const details = () => {
     const result = parsed()
     if (!result) {
-      if (statusPending(status())) return <InspectorCard title="Read plan" skin={props.skin} status={status()} pending meta={`${requestedCount(props.input)} target(s)`}><PreviewList skin={props.skin} items={inputItems("alonix-read-many", props.input)} limit={12} /></InspectorCard>
-      return <InspectorUnavailable skin={props.skin} message={lifecycle().error || "The completed read response did not match the alonix-read-many report contract. The original tool output remains saved by OpenCode."} />
+      if (statusPending(status())) return <InspectorCard title="Read plan" skin={props.skin} status={status()} pending meta={`${requestedCount(props.input)} target(s)`}><PreviewList skin={props.skin} items={items()} limit={12} /></InspectorCard>
+      if (lifecycle().phase === "error") return <InspectorUnavailable skin={props.skin} message={lifecycle().error} />
+      return <InspectorDegraded skin={props.skin} items={items()} message={`The completed read output was bounded before the READ RESULT header. All ${requestedCount(props.input)} requested targets remain visible; source evidence is preserved in OpenCode's saved tool output.`} />
     }
     const partial = result.files.filter((file) => fileStatus(file, result) === "PARTIAL SUCCESS").length
     return <>
-      <OutcomeOverview skin={props.skin} status={result.status} summary={result.outcome} facts={[["requested", requestedCount(props.input)], ["returned", result.files.length], ["partial", partial], ["unavailable", result.unavailable.length]]} meaning={result.status === "SUCCESS" ? ["Every requested target was returned completely and stably."] : result.status === "FAILED" ? ["No usable text was returned. Review unavailable targets and path guidance."] : ["Usable evidence was returned, but part of the request is missing.", "Each target below states exactly what was returned and omitted.", "Request an exact omitted range when the missing middle matters."]} />
+      <OutcomeOverview skin={props.skin} status={result.status} summary={result.outcome} facts={[["requested", requestedCount(props.input)], ["returned", result.files.length], ["partial", partial], ["unavailable", result.unavailable.length], ["details omitted", batch().omitted.length]]} meaning={batch().omitted.length ? ["The request plan remains authoritative; bounded output omitted structured details for some targets.", "Use the saved tool output when the omitted source evidence is needed."] : result.status === "SUCCESS" ? ["Every requested target was returned completely and stably."] : result.status === "FAILED" ? ["No usable text was returned. Review unavailable targets and path guidance."] : ["Usable evidence was returned, but part of the request is missing.", "Each target below states exactly what was returned and omitted.", "Request an exact omitted range when the missing middle matters."]} />
       {result.files.length ? <Section title="Returned targets" skin={props.skin} meta={`${result.files.length}`} >{result.files.map((file) => <FileEvidenceCard file={file} parsed={result} skin={props.skin} />)}</Section> : null}
       {result.unavailable.length ? <Section title="Unavailable targets" skin={props.skin} meta={`${result.unavailable.length}`} color={props.skin.error}>{result.unavailable.map((item) => <InspectorCard title={displayPath(item.path, 100)} skin={props.skin} status="FAILED" meta="not returned" subtitle={item.reason}><ContentPane title="Next action" skin={props.skin} lines={result.possiblePaths.filter((line) => line.startsWith(item.path)).length ? result.possiblePaths.filter((line) => line.startsWith(item.path)) : ["Verify the path or run a directory/search baseline before reading again."]} limit={8} tail={false} /></InspectorCard>)}</Section> : null}
+      {batch().omitted.length ? <Section title="Requested targets without visible detail" skin={props.skin} meta={`${batch().omitted.length}`}>{batch().omitted.map((item) => <InspectorDegraded skin={props.skin} title={displayPath(item.label, 100)} />)}</Section> : null}
       {result.consolidation.length ? <InspectorCard title="Requests consolidated" skin={props.skin} status="SUCCESS" meta={`${result.consolidation.length}`}><ContentPane skin={props.skin} lines={result.consolidation} limit={12} tail={false} /></InspectorCard> : null}
       <InspectorCard title="Provenance" skin={props.skin} status={result.recovery.length ? "PARTIAL SUCCESS" : "SUCCESS"}><MetaGrid skin={props.skin} entries={[["shared budget", result.budget["Shared total"]], ["evidence used", result.budget["Complete-file evidence used"]], ["remaining range budget", result.budget["Remaining range budget"]], ["unstable sources", result.editContext["Unstable sources"]]]} />{result.recovery.length ? <ContentPane title="Recovery" skin={props.skin} lines={result.recovery} limit={10} tail={false} /> : null}</InspectorCard>
     </>
