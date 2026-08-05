@@ -37,9 +37,25 @@ test("all tool families have dedicated inspectors and compact item previews", as
     const body = await source(`components/${file}`)
     assert.match(body, /<Activity/)
     assert.match(body, /preview=/)
-    assert.match(body, /details=\{\(\) =>/)
+    assert.ok(body.includes("details={() =>") || body.includes("details={details}"), `missing details factory in ${file}`)
     assert.doesNotMatch(body, /<box\s+border/)
   }
+})
+
+test("expanded inspectors lead with understandable outcomes before technical provenance", async () => {
+  const kit = await source("components/kit.jsx")
+  assert.match(kit, /export function OutcomeOverview/)
+  assert.match(kit, /What this means/)
+  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx", "report.jsx"]) {
+    const body = await source(`components/${file}`)
+    assert.match(body, /<OutcomeOverview/)
+  }
+  const read = await source("components/read-many.jsx")
+  assert.match(read, /What you received/)
+  assert.match(read, /What could not be read/)
+  assert.match(read, /Not returned/)
+  assert.match(read, /Technical provenance/)
+  assert.match(read, /Request an exact omitted range/)
 })
 
 test("expanded inspectors use separated status-aware cards and bounded content panes", async () => {
@@ -59,7 +75,7 @@ test("expanded inspectors use separated status-aware cards and bounded content p
   assert.match(edit, /Transaction safety/)
   const web = await source("components/web.jsx")
   assert.match(web, /backend attempts/)
-  assert.match(web, /Extracted content/)
+  assert.match(web, /Useful content returned/)
   assert.match(web, /<InspectorCard/)
   assert.match(web, /nested>/)
   const editNested = await source("components/edit-many.jsx")

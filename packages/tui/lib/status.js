@@ -4,22 +4,22 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 export const customTools = [
-  "fs_edit_many",
-  "fs_read_many",
-  "fs_search",
-  "fs_explore",
-  "shell",
-  "background_process",
-  "cbm_project",
-  "cbm_context",
-  "cbm_investigate",
-  "cbm_memory",
-  "web_search",
-  "web_fetch_many",
-  "stealth_fetch_many",
-  "stealth_search_many",
-  "stealth_rotate_tor",
-  "stealth_status",
+  "alonix-edit-many",
+  "alonix-read-many",
+  "alonix-search",
+  "alonix-explore",
+  "alonix-shell",
+  "alonix-background-process",
+  "alonix-index-project",
+  "alonix-index-context",
+  "alonix-index-investigate",
+  "alonix-index-memory",
+  "alonix-web-search",
+  "alonix-web-fetch-many",
+  "alonix-stealth-fetch-many",
+  "alonix-stealth-search-many",
+  "alonix-stealth-rotate-tor",
+  "alonix-stealth-status",
 ]
 
 export function findRoot(startDir) {
@@ -110,7 +110,7 @@ export function toastForTransition(prev, next) {
     return { variant: "success", title: "Tooling active", message: "Patched binary loaded — rich renderers enabled for all custom tools." }
   }
   if (next?.status === "error" && prev?.status !== "error") {
-    return { variant: "error", title: "Self-patch failed", message: next.lastError ?? "Check the toolings status for details." }
+    return { variant: "error", title: "Self-patch failed", message: next.lastError ?? "Check the alonix-toolings status for details." }
   }
   return null
 }

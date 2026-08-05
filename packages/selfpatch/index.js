@@ -60,7 +60,7 @@ export async function SelfPatchPlugin() {
 
   return {
     tool: {
-      toolings: {
+      "alonix-toolings": {
         description:
           "Reports the Sparkly tooling self-patch state: status, OpenCode version, progress, errors, and whether rich tool renderers are active.",
         inputSchema: {

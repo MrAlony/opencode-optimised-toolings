@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { ensureTuiCompanion, tuiCompanionSpec } from "../lib/tui-registration.js"
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "toolings-tui-registration-"))
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-tui-registration-"))
   const configDirectory = join(root, "config")
   return { root, configDirectory, configPath: join(configDirectory, "tui.json") }
 }

@@ -17,7 +17,7 @@ async function exists(file) {
  * their already-mapped image, so no process is ever stopped, killed, or
  * restarted: the file is swapped exactly like a package update, and the user
  * restarts OpenCode at their convenience to activate it. The original
- * official binary is preserved once under `<official>.toolings-backup` for
+ * official binary is preserved once under `<official>.alonix-toolings-backup` for
  * restore.
  *
  * Windows refuses to overwrite (or copy onto) an executable image that a
@@ -37,11 +37,11 @@ export async function installPatchedBinary({ officialPath, patchedPath }) {
   if (officialSha === patchedSha) {
     return { installed: false, alreadyPatched: true, officialSha, patchedSha, backupPath: null }
   }
-  const backupPath = `${officialPath}.toolings-backup`
+  const backupPath = `${officialPath}.alonix-toolings-backup`
   if (!(await exists(backupPath))) {
     await fs.copyFile(officialPath, backupPath)
   }
-  const stash = `${officialPath}.toolings-incoming-${Date.now()}`
+  const stash = `${officialPath}.alonix-toolings-incoming-${Date.now()}`
   await fs.rename(officialPath, stash)
   try {
     await fs.copyFile(patchedPath, officialPath)

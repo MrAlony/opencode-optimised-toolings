@@ -11,7 +11,7 @@ export function loadSecrets() {
 }
 
 export function webConfig() {
-  const local = loadSecrets().web_search ?? {};
+  const local = loadSecrets()["alonix-web-search"] ?? {};
   return {
     serper_api_key: process.env.SERPER_API_KEY || local.serper_api_key || "",
     firecrawl_api_key: process.env.FIRECRAWL_API_KEY || local.firecrawl_api_key || "",

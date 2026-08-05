@@ -4,19 +4,19 @@ An OpenCode plugin wrapping Codebase-Memory-MCP with a deliberately small, high-
 
 ## Public tools
 
-- `cbm_project` — list, index, check status, or delete indexed projects. Creating or explicitly reindexing requires a direct user request and `user_authorized=true`.
-- `cbm_context` — fixed repository baseline containing architecture, graph schema, and current change blast radius.
-- `cbm_investigate` — fixed investigation package containing architecture, structured graph search, indexed-code search, automatic relevant source snippets, and a call-chain trace. Optional read-only Cypher can add information but cannot remove mandatory sections.
-- `cbm_memory` — grouped ADR and runtime-trace maintenance.
+- `alonix-index-project` — list, index, check status, or delete indexed projects. Creating or explicitly reindexing requires a direct user request and `user_authorized=true`.
+- `alonix-index-context` — fixed repository baseline containing architecture, graph schema, and current change blast radius.
+- `alonix-index-investigate` — fixed investigation package containing architecture, structured graph search, indexed-code search, automatic relevant source snippets, and a call-chain trace. Optional read-only Cypher can add information but cannot remove mandatory sections.
+- `alonix-index-memory` — grouped ADR and runtime-trace maintenance.
 
 The underlying CBM capabilities remain available internally, but agents are not presented with fourteen separate micro-tools.
 
 ## Recommended workflow
 
-1. `cbm_project(action="list")`
-2. If absent, use filesystem tools unless the user explicitly requested indexing. Only with that request: `cbm_project(action="index", repo_path="...", mode="fast", user_authorized=true)`.
-3. `cbm_context(project="...")` for the baseline of an already indexed repository.
-4. `cbm_investigate(project="...", query="full feature or bug intent")` for focused work.
+1. `alonix-index-project(action="list")`
+2. If absent, use filesystem tools unless the user explicitly requested indexing. Only with that request: `alonix-index-project(action="index", repo_path="...", mode="fast", user_authorized=true)`.
+3. `alonix-index-context(project="...")` for the baseline of an already indexed repository.
+4. `alonix-index-investigate(project="...", query="full feature or bug intent")` for focused work.
 5. Move to implementation and verification instead of restarting broad filesystem exploration.
 
 ## Installation

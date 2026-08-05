@@ -9,19 +9,19 @@ Use CBM before broad filesystem crawling whenever the repository may already be 
 
 ## Workflow
 
-1. Call `cbm_project` with `action="list"`.
-2. If the repository is absent, do not create an index unless the user explicitly requested indexing or reindexing it. Only then call `cbm_project` with `action="index"`, its absolute `repo_path`, normally `mode="fast"`, and `user_authorized=true`.
-3. Call `cbm_context` once for architecture, graph schema, and change blast radius on an already indexed project.
-4. Call `cbm_investigate` once with the complete feature, bug, behavior, or symbol intent.
+1. Call `alonix-index-project` with `action="list"`.
+2. If the repository is absent, do not create an index unless the user explicitly requested indexing or reindexing it. Only then call `alonix-index-project` with `action="index"`, its absolute `repo_path`, normally `mode="fast"`, and `user_authorized=true`.
+3. Call `alonix-index-context` once for architecture, graph schema, and change blast radius on an already indexed project.
+4. Call `alonix-index-investigate` once with the complete feature, bug, behavior, or symbol intent.
 5. Use the returned architecture, symbol matches, indexed text matches, source snippets, and call chain together. Move to implementation or only the precise remaining gap.
 
 ## Tools
 
-### `cbm_project`
+### `alonix-index-project`
 
 Grouped index management: `list`, `index`, `status`, and `delete`. New index creation is explicit, bounded, and requires both a direct user request and `user_authorized=true`. Never start duplicate indexing. Query tools may automatically repair only an already indexed project.
 
-### `cbm_context`
+### `alonix-index-context`
 
 Always returns all of:
 
@@ -32,7 +32,7 @@ Always returns all of:
 
 The agent cannot request a reduced subset.
 
-### `cbm_investigate`
+### `alonix-index-investigate`
 
 Always returns all of:
 
@@ -44,7 +44,7 @@ Always returns all of:
 
 An optional read-only Cypher query adds a section but never replaces the mandatory package. Put the full task intent into `query`; do not make several tiny investigations that could have been one.
 
-### `cbm_memory`
+### `alonix-index-memory`
 
 Groups ADR CRUD and runtime-trace ingestion. Use it to preserve architectural decisions or enrich static relationships with observed runtime calls.
 

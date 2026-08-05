@@ -69,11 +69,11 @@ Before the first discovery call on any non-trivial task, pause and choose the mo
 
 Use this default hierarchy unless the task gives a concrete reason not to:
 
-1. **Indexed repository:** `cbm_context` for the fixed architecture/schema/change baseline, then `cbm_investigate` for a full feature, bug, behavior, or symbol investigation.
-2. **Unindexed repository exploration:** use one `fs_explore` call to obtain project metadata, a bounded structure tree, important instructions/manifests, entry-point candidates, and optional search results together.
-3. **Multiple known filesystem targets:** `fs_read_many`, `fs_search`, or `fs_edit_many`.
+1. **Indexed repository:** `alonix-index-context` for the fixed architecture/schema/change baseline, then `alonix-index-investigate` for a full feature, bug, behavior, or symbol investigation.
+2. **Unindexed repository exploration:** use one `alonix-explore` call to obtain project metadata, a bounded structure tree, important instructions/manifests, entry-point candidates, and optional search results together.
+3. **Multiple known filesystem targets:** `alonix-read-many`, `alonix-search`, or `alonix-edit-many`.
 4. **Independent calls:** issue them together through the available parallel/multi-tool mechanism.
-5. **Single precise target or uncovered gap:** use `fs_read_many` with one path when exactly one file is genuinely needed; otherwise use `fs_search` for a precise filename/content query. Built-in `read`, `glob`, `grep`, `edit`, `write`, and `apply_patch` are globally disabled.
+5. **Single precise target or uncovered gap:** use `alonix-read-many` with one path when exactly one file is genuinely needed; otherwise use `alonix-search` for a precise filename/content query.
 
 ### Prohibited wasteful patterns
 
@@ -90,16 +90,16 @@ Use this default hierarchy unless the task gives a concrete reason not to:
 
 The filesystem tools track usage per session and may append escalating advisories. Treat warning and critical records as execution directives while still reading the underlying structured result independently.
 
-- `fs_explore` and `fs_search` share one filesystem-discovery counter. Any mixture counts: explore→search, search→explore, repeated search, or repeated explore.
-- On the **second** filesystem-discovery call, stop before making another broad discovery call and run `cbm_project(action="list")`. If the repository is indexed, switch to `cbm_context` or one complete `cbm_investigate` call.
+- `alonix-explore` and `alonix-search` share one filesystem-discovery counter. Any mixture counts: explore→search, search→explore, repeated search, or repeated explore.
+- On the **second** filesystem-discovery call, stop before making another broad discovery call and run `alonix-index-project(action="list")`. If the repository is indexed, switch to `alonix-index-context` or one complete `alonix-index-investigate` call.
 - On the **third or later** filesystem-discovery call, broad filesystem exploration must stop unless the repository is demonstrably unindexed/unindexable or a precise remaining gap cannot be represented by CBM. Do not ignore a `[CRITICAL CBM ESCALATION]` notice.
-- One-path `fs_read_many` calls emit a `[READ BATCH SIGNAL]` with session-aware wording. Treat repeated signals as evidence of serial discovery: gather every already-known related source file, test, config, caller, and dependency into the next batch unless the next path genuinely depends on the current file's contents.
+- One-path `alonix-read-many` calls emit a `[READ BATCH SIGNAL]` with session-aware wording. Treat repeated signals as evidence of serial discovery: gather every already-known related source file, test, config, caller, and dependency into the next batch unless the next path genuinely depends on the current file's contents.
 - Consecutive calls to the same filesystem tool emit `[NOTICE REPEATED-TOOL ADVICE]` on call 2 and `[STRONG REPEATED-TOOL ADVICE]` on call 3 and later, with tool-specific consolidation guidance. Correct the call pattern unless dependency ordering prevents batching.
 - Advisories do not change `SUCCESS`, `PARTIAL SUCCESS`, or `FAILED` result status. Never respond by doing less work, omitting verification, or stopping early; correct the call pattern and continue completing the full task.
 
 ## Read side: adaptive evidence and efficient batching
 
-`fs_read_many` accepts up to 10 complete-file paths and up to 20 ranged requests. It uses one adaptive call-level output budget rather than a rigid per-file cap: smaller evidence needs are satisfied first, every remaining demanded budget byte is redistributed across larger needs, and a file may use the remaining pool when peers do not need it.
+`alonix-read-many` accepts up to 10 complete-file paths and up to 20 ranged requests. It uses one adaptive call-level output budget rather than a rigid per-file cap: smaller evidence needs are satisfied first, every remaining demanded budget byte is redistributed across larger needs, and a file may use the remaining pool when peers do not need it.
 
 - Batch every already-known related file or range that can be read independently. A single-target call remains appropriate when only one target is known or its contents determine the next request.
 - Canonical duplicate complete reads and identical normalized ranges are consolidated. A complete read supersedes only requested ranges actually covered by the evidence returned; ranges outside a truncated complete read are retained separately.
@@ -107,14 +107,14 @@ The filesystem tools track usage per session and may append escalating advisorie
 - When full content cannot fit, the result is `PARTIAL SUCCESS` and returns separated head/tail evidence with exact omitted line and decoded-byte bounds. Do not describe a truncated file as completely read.
 - Stable-read recovery uses bounded retries. If content remains unstable, the latest snapshot is returned with first/latest fingerprints and recovery signals. Missing paths may include bounded filename candidates as evidence only; candidate content is never substituted for the requested path.
 - Reversed ranges are normalized, overflowing windows shift toward the available edge, and large ranges are bounded. Inspect `CONSOLIDATED`, `TRUNCATED`, `UNAVAILABLE`, `PATH CANDIDATES`, `READ RECOVERY`, `OUTPUT BUDGET`, and `EDIT CONTEXT` before deciding whether more evidence is needed.
-- Use `fs_search` when both filename-glob and regex-content discovery are needed. It returns structured enumeration and scan completeness, preserves whole records at truncation boundaries, decodes through the stable text reader, and falls back to bounded native enumeration if ripgrep is unavailable or unsuccessful.
-- Use `fs_explore` for one broad unindexed-project baseline with independent component status. Its shared manifest budget is also adaptively distributed without a legacy per-file ceiling. Partial tree, manifest, entry, or search evidence remains usable when another component fails.
+- Use `alonix-search` when both filename-glob and regex-content discovery are needed. It returns structured enumeration and scan completeness, preserves whole records at truncation boundaries, decodes through the stable text reader, and falls back to bounded native enumeration if ripgrep is unavailable or unsuccessful.
+- Use `alonix-explore` for one broad unindexed-project baseline with independent component status. Its shared manifest budget is also adaptively distributed without a legacy per-file ceiling. Partial tree, manifest, entry, or search evidence remains usable when another component fails.
 
 ## Write side: batch, but respect the 128k output cap
 
-**128k output tokens is a LOT — treat it as a large budget, not a tight one.** For scale, 128k tokens is roughly 90k–100k words, i.e. hundreds of pages of code. A typical source file is a few hundred to a couple thousand tokens, so one `fs_edit_many` call can comfortably carry **many complete files and targeted patches together** (often 10–30+ real-world files) before approaching the cap. Do not be timid: combine coherent ready file transactions by default.
+**128k output tokens is a LOT — treat it as a large budget, not a tight one.** For scale, 128k tokens is roughly 90k–100k words, i.e. hundreds of pages of code. A typical source file is a few hundred to a couple thousand tokens, so one `alonix-edit-many` call can comfortably carry **many complete files and targeted patches together** (often 10–30+ real-world files) before approaching the cap. Do not be timid: combine coherent ready file transactions by default.
 
-- Use `fs_edit_many` for text-file creation and modification. Its globally ordered actions are `create` (establish missing staged content), `overwrite` (replace existing staged content), and `patch` (apply ordered exact replacements). Canonical path aliases and repeated same-file actions form one in-memory transaction that is written at most once.
+- Use `alonix-edit-many` for text-file creation and modification. Its globally ordered actions are `create` (establish missing staged content), `overwrite` (replace existing staged content), and `patch` (apply ordered exact replacements). Canonical path aliases and repeated same-file actions form one in-memory transaction that is written at most once.
 - Failure is isolated per canonical file transaction: any failed action rejects that file's complete chain, while independent valid files may still be applied. Inspect `EDIT RESULT`, `APPLIED`, `UNCHANGED`, `REJECTED`, and `RECOVERY SIGNALS` before deciding what remains.
 - `patch` is strict: every replacement must satisfy `expected_count`. The tool never chooses among ambiguous matches, performs fuzzy mutation, reinterprets create as overwrite (or vice versa), or bypasses `expected_sha256`.
 - A patch-only transaction may be rebased over unrelated concurrent changes only by re-running the same exact replacements against the latest stable content. If exact counts no longer hold, the transaction remains rejected. Create/overwrite transactions are not rebased.
@@ -126,9 +126,9 @@ The filesystem tools track usage per session and may append escalating advisorie
 
 ## Shell / process calls — batch by default
 
-There are two command tools. Pick by whether the work is **finite** or **long-running**.
+`alonix-background-process` is denied in this installation. Use `alonix-shell` only for finite commands that exit within its bounded deadline; do not launch servers, watchers, daemons, or intentionally persistent processes.
 
-### `shell` — foreground, blocking (use this by default)
+### `alonix-shell` — foreground, blocking
 
 Runs a command and **waits** for it to finish, returning output + exit code in the same call.
 
@@ -138,33 +138,14 @@ Runs a command and **waits** for it to finish, returning output + exit code in t
 - **Timeout:** default **30s**, hard max **180000ms (3 min)**. Pass `timeout_ms` to raise it within that cap (e.g. `timeout_ms: 120000` for a slow test suite). If exceeded, the command is **killed** and partial output returned — it NEVER hangs forever.
 - **Blocking:** yes — the call blocks until the command exits or times out.
 - **Shell:** PowerShell on Windows. Chain with `;` (NOT `&&`). State does not persist between calls.
-- **Do NOT** use it for dev servers, watchers, daemons, or infinite processes — that's what `background_process` is for.
-
-### `background_process` — non-blocking, tracked (use for long-running work)
-
-Starts processes that keep running and **returns immediately** so you can keep working. Pass 1–20 ordered items in `operations`; batch independent starts, checks, log reads, and stops in one call.
-
-| action | purpose | needs |
-|---|---|---|
-| `start` | launch a command in the background; returns `id`, `pid`, `status` | `command` |
-| `list` | list all tracked processes and their status | — |
-| `status` | status of one process (running / exited) | `id` |
-| `logs` | captured output of a process | `id` |
-| `stop` | kill a process | `id` |
-| `restart` | re-run the same command | `id` |
-
-- **Use for:** `npm run dev`, `vite`, file watchers, local services, test watchers, long builds you want to monitor.
-- **It does NOT push notifications.** After `start`, go do other work, then call `logs`/`status` to check on it. A finished process sits as `exited` until you look — nothing interrupts you.
-- **STRICT: never spam `status` or `logs`.** After `start`, do useful independent work and estimate when the process should be ready. Check once at that point. A second immediate poll is acceptable only when the first result revealed a concrete reason to recheck; do not issue repeated or concurrently submitted polling calls merely to wait for completion. Batch checks for every known process ID into one call.
-- **Always `stop`** processes you no longer need so they don't accumulate.
+- **Do NOT** use it for dev servers, watchers, daemons, or infinite processes.
 
 ### Rules of thumb
 
-- **Finite command → `shell`.** Long-running/infinite → `background_process`. Never run a dev server with `shell`.
-- **Raise `shell` `timeout_ms`** (up to 3 min) for known-slow finite commands instead of reaching for `background_process`.
-- **Never poll in a loop.** After `start`, do other useful work, then check `logs` or `status` once when the process is likely ready or done. If it is not ready, return to useful work instead of immediately checking again.
-- **Launch independent commands together.** Put multiple independent finite commands in one `shell.commands` batch and multiple background lifecycle actions in one `background_process.operations` batch.
-- Treat singleton-command, duplicate-command, repeated-tool, singleton-operation, and polling advisories as execution directives. Advisories do not block or delay calls, so the agent is responsible for stopping repeated polling immediately and returning to useful work.
+- **Finite command → `alonix-shell`.** Persistent commands are unsupported because `alonix-background-process` is denied.
+- **Raise `alonix-shell` `timeout_ms`** for known-slow finite commands within the tool's declared hard maximum.
+- **Launch independent commands together.** Put multiple independent finite commands in one `alonix-shell.commands` batch.
+- Treat singleton-command, duplicate-command, and repeated-tool advisories as execution directives. Advisories do not block or delay calls.
 
 ## Parallelism: independent calls go together
 
@@ -176,26 +157,26 @@ Starts processes that keep running and **returns immediately** so you can keep w
 For a project that is already indexed in the CBM knowledge graph, **CBM is your most call-efficient way to understand a codebase** — one CBM call can answer questions that would otherwise cost dozens of reads, greps, and traces. When working on an indexed project, reach for CBM FIRST instead of manually crawling files.
 
 **Index-creation boundary:**
-- Use `cbm_project(action="list")` to see what is already indexed. Never create a new CBM index merely because it would be useful. `cbm_project(action="index")` is allowed only when the user explicitly requested indexing or reindexing that repository; set `user_authorized=true` only in that case. If absent and the user did not explicitly request indexing, use `fs_explore` and precise filesystem tools instead. Status and deletion remain explicit maintenance actions.
+- Use `alonix-index-project(action="list")` to see what is already indexed. Never create a new CBM index merely because it would be useful. `alonix-index-project(action="index")` is allowed only when the user explicitly requested indexing or reindexing that repository; set `user_authorized=true` only in that case. If absent and the user did not explicitly request indexing, use `alonix-explore` and precise filesystem tools instead. Status and deletion remain explicit maintenance actions.
 
 **Why CBM saves massive amounts of tool calls — use these instead of manual exploration:**
-- `cbm_context` always returns index-readiness evidence, source-fingerprint freshness, graph/source structural consistency, architecture, packages, entry points, routes, hotspots, graph schema, and current change blast radius together. The agent cannot request a low-information subset. **Start here on an unfamiliar indexed project.** If an existing index is stale, lacks a freshness baseline, or its graph file inventory disagrees with current indexable source files, the same `cbm_context` call performs bounded internal repair and structural re-verification. Persistent mismatch fails closed with exact missing/removed paths instead of returning stale architecture; do not spend another agent-visible tool call preparing it.
-- `cbm_investigate` always returns the same fingerprint and structural readiness evidence before architecture, structured/semantic symbol search, indexed-code search, up to three relevant source snippets, and inbound/outbound call-chain context. Put the complete task intent into one call instead of chaining micro-queries. Stale, unknown-baseline, or structurally inconsistent indexes repair inside that same tool call before investigation subqueries run; concurrent callers for the same root share the repair.
-- Optional read-only Cypher in `cbm_investigate` adds custom graph information but never replaces the mandatory context package.
-- `cbm_memory` groups ADR management and runtime-trace ingestion when persistent design or observed-call information is needed.
+- `alonix-index-context` always returns index-readiness evidence, source-fingerprint freshness, graph/source structural consistency, architecture, packages, entry points, routes, hotspots, graph schema, and current change blast radius together. The agent cannot request a low-information subset. **Start here on an unfamiliar indexed project.** If an existing index is stale, lacks a freshness baseline, or its graph file inventory disagrees with current indexable source files, the same `alonix-index-context` call performs bounded internal repair and structural re-verification. Persistent mismatch fails closed with exact missing/removed paths instead of returning stale architecture; do not spend another agent-visible tool call preparing it.
+- `alonix-index-investigate` always returns the same fingerprint and structural readiness evidence before architecture, structured/semantic symbol search, indexed-code search, up to three relevant source snippets, and inbound/outbound call-chain context. Put the complete task intent into one call instead of chaining micro-queries. Stale, unknown-baseline, or structurally inconsistent indexes repair inside that same tool call before investigation subqueries run; concurrent callers for the same root share the repair.
+- Optional read-only Cypher in `alonix-index-investigate` adds custom graph information but never replaces the mandatory context package.
+- `alonix-index-memory` groups ADR management and runtime-trace ingestion when persistent design or observed-call information is needed.
 
-**CBM operating rule:** On an already indexed project, use `cbm_context` once and one complete `cbm_investigate` request rather than a long sequence of read/grep calls. Source-fingerprint validation, graph/source structural validation, and bounded repair of that existing index occur internally within the same call. These query tools never create an index for an unknown project. If structural repair still cannot produce a consistent graph, CBM fails closed and names the mismatched paths; use precise filesystem evidence for that gap rather than trusting stale graph output. Do not add a separate status/reindex round trip for an existing project; new index creation still requires the user's explicit request.
+**CBM operating rule:** On an already indexed project, use `alonix-index-context` once and one complete `alonix-index-investigate` request rather than a long sequence of read/grep calls. Source-fingerprint validation, graph/source structural validation, and bounded repair of that existing index occur internally within the same call. These query tools never create an index for an unknown project. If structural repair still cannot produce a consistent graph, CBM fails closed and names the mismatched paths; use precise filesystem evidence for that gap rather than trusting stale graph output. Do not add a separate status/reindex round trip for an existing project; new index creation still requires the user's explicit request.
 
-**Enforcement:** Blind filesystem crawling of an indexed project is a tool-selection failure. Before broad repository grep/glob/read work, use `cbm_project(action="list")` if index status is unknown. After two filesystem discovery calls, check CBM; after three, stop broad explore/grep loops and switch to CBM unless the repository is not indexable. After CBM identifies exact files or symbols, use batch filesystem reads only for precise edit or verification source.
+**Enforcement:** Blind filesystem crawling of an indexed project is a tool-selection failure. Before broad repository grep/glob/read work, use `alonix-index-project(action="list")` if index status is unknown. After two filesystem discovery calls, check CBM; after three, stop broad explore/grep loops and switch to CBM unless the repository is not indexable. After CBM identifies exact files or symbols, use batch filesystem reads only for precise edit or verification source.
 
 ## Search / web — batched, evidence-first, and available when useful
 
-- Built-in `webfetch` and `websearch` are disabled. Use native custom `web_search`, `web_fetch_many`, and—when normal retrieval is unsuitable—`stealth_*` tools.
-- Use `web_search` for 1–10 independent research questions. Prefer `strategy: "fallback"`; local SearXNG and DuckDuckGo are tried before optional paid backends. Use `aggregate` when breadth or corroboration genuinely warrants parallel engines.
-- Use `web_fetch_many` for 1–10 known URLs. It validates DNS and every redirect, blocks private/reserved destinations by default, bounds time/source/output, extracts HTML/JSON/XML/PDF/text, caches exact requests, and adaptively shares output capacity. Set `allow_private=true` only for deliberate local-service access.
+- Use native `alonix-web-search`, `alonix-web-fetch-many`, and—when normal retrieval is unsuitable—Alonix stealth tools.
+- Use `alonix-web-search` for 1–10 independent research questions. Prefer `strategy: "fallback"`; local SearXNG and DuckDuckGo are tried before optional paid backends. Use `aggregate` when breadth or corroboration genuinely warrants parallel engines.
+- Use `alonix-web-fetch-many` for 1–10 known URLs. It validates DNS and every redirect, blocks private/reserved destinations by default, bounds time/source/output, extracts HTML/JSON/XML/PDF/text, caches exact requests, and adaptively shares output capacity. Set `allow_private=true` only for deliberate local-service access.
 - Prefer primary and official sources for behavioral contracts. Fetch several known official URLs in one call when independent; dependent follow-up fetches should wait for the first evidence.
 - Frequent web research is appropriate when it improves correctness or resolves uncertainty. Additional calls are expected for new questions, dependent discoveries, current facts, or source corroboration. Avoid only unchanged consecutive duplicate batches and serial rephrasings that add no information.
-- Use `stealth_fetch_many` or `stealth_search_many` when normal retrieval is blocked, JavaScript rendering is required, or Tor/privacy is a concrete requirement—not as a slower default. `stealth_rotate_tor` changes circuit and rebuilds browser context; `stealth_status` reports readiness.
+- Use `alonix-stealth-fetch-many` or `alonix-stealth-search-many` when normal retrieval is blocked, JavaScript rendering is required, or Tor/privacy is a concrete requirement—not as a slower default. `alonix-stealth-rotate-tor` changes circuit and rebuilds browser context; `alonix-stealth-status` reports readiness.
 
 ## Planning to minimize calls
 

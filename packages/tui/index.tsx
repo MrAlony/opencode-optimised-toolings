@@ -85,14 +85,14 @@ type RenderProps = {
 type RendererView = (props: RenderProps & { skin: Skin }) => JSX.Element
 
 function rendererFor(tool: string): RendererView {
-  if (tool === "fs_read_many") return ReadManyView
-  if (tool === "fs_edit_many") return EditManyView
-  if (tool === "shell") return ShellView
-  if (tool === "background_process") return BackgroundView
-  if (tool === "fs_search" || tool === "fs_explore") return DiscoveryView
-  if (tool === "web_search" || tool === "web_fetch_many") return WebView
-  if (tool.startsWith("stealth_")) return StealthView
-  if (tool.startsWith("cbm_")) return CbmView
+  if (tool === "alonix-read-many") return ReadManyView
+  if (tool === "alonix-edit-many") return EditManyView
+  if (tool === "alonix-shell") return ShellView
+  if (tool === "alonix-background-process") return BackgroundView
+  if (tool === "alonix-search" || tool === "alonix-explore") return DiscoveryView
+  if (tool === "alonix-web-search" || tool === "alonix-web-fetch-many") return WebView
+  if (tool.startsWith("alonix-stealth-")) return StealthView
+  if (tool.startsWith("alonix-index-")) return CbmView
   return ReportView
 }
 
@@ -186,15 +186,15 @@ const tui: TuiPlugin = async (api, options) => {
     // slots.register is plugin-context only; ignore otherwise.
   }
 
-  // Command: toolings status details dialog.
+  // Command: alonix-toolings status details dialog.
   api.keymap.registerLayer({
     commands: [
       {
-        name: "toolings.status",
+        name: "alonix-toolings.status",
         title: "Tooling status",
         category: "Plugin",
         namespace: "palette",
-        slashName: "toolings",
+        slashName: "alonix-toolings",
         run() {
           const state = readStateSync(statePath)
           const skin = skinOf(api.theme)
@@ -231,7 +231,7 @@ const tui: TuiPlugin = async (api, options) => {
 }
 
 const plugin: TuiPluginModule & { id: string } = {
-  id: "sparkly-toolings",
+  id: "sparkly-alonix-toolings",
   tui,
 }
 

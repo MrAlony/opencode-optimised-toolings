@@ -169,6 +169,23 @@ export function InspectorCard(props) {
   )
 }
 
+export function OutcomeOverview(props) {
+  const facts = createMemo(() => Array.from(props.facts ?? []).filter((entry) => entry && entry[1] !== null && entry[1] !== undefined && entry[1] !== ""))
+  const meaning = createMemo(() => Array.from(props.meaning ?? []).filter((line) => String(line ?? "").trim()))
+  return (
+    <InspectorCard
+      title={props.title ?? "What happened"}
+      skin={props.skin}
+      status={props.status}
+      meta={props.meta}
+      subtitle={props.summary}
+    >
+      {facts().length ? <MetaGrid skin={props.skin} entries={facts()} limit={8} /> : null}
+      {meaning().length ? <ContentPane title="What this means" skin={props.skin} lines={meaning()} limit={6} tail={false} color={props.status === "FAILED" ? props.skin.error : props.skin.text} /> : null}
+    </InspectorCard>
+  )
+}
+
 export function ContentPane(props) {
   return (
     <box flexDirection="column" backgroundColor={props.skin.surface} paddingTop={1} paddingBottom={1} paddingLeft={1} paddingRight={1}>

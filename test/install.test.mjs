@@ -11,7 +11,7 @@ test("migration preserves provider, model, DCP, unrelated plugins, and unrelated
     provider: { private: { options: { apiKey: "local-secret-preserved" } } },
     plugin: ["@tarquinen/opencode-dcp@latest", "file:///old/oc-cbm/dist/index.js", ["unrelated-plugin", { option: true }]],
     mcp: { stealth: { type: "local" }, other: { type: "remote", url: "https://example.com" } },
-    permission: { "*": "allow", bash: "deny" },
+    permission: { "*": "allow", bash: "deny", fs_read_many: "allow", background_process: "allow", web_search: "allow" },
     tools: { custom_existing: true },
     skills: { paths: ["C:/old/oc-cbm/SKILL.md", "C:/other/skills"] },
     tui: { scroll_speed: 5 },
@@ -30,7 +30,12 @@ test("migration preserves provider, model, DCP, unrelated plugins, and unrelated
   assert.equal(output.tools.webfetch, false);
   assert.equal(output.permission.bash, "deny");
   assert.equal(output.permission.webfetch, "deny");
-  assert.equal(output.permission.web_fetch_many, "allow");
+  assert.equal(output.permission["alonix-web-fetch-many"], "allow");
+  assert.equal(output.permission["alonix-read-many"], "allow");
+  assert.equal(output.permission["alonix-background-process"], "deny");
+  assert.equal(output.permission.fs_read_many, undefined);
+  assert.equal(output.permission.background_process, undefined);
+  assert.equal(output.permission.web_search, undefined);
   assert.deepEqual(output.skills.paths, ["C:/other/skills", options.cbmSkillPath]);
   assert.notEqual(output, input);
 });

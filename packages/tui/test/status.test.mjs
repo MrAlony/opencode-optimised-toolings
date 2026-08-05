@@ -18,11 +18,12 @@ import {
 test("custom tool registry has 16 unique names covering every family", () => {
   assert.equal(customTools.length, 16)
   assert.equal(new Set(customTools).size, 16)
-  for (const prefix of ["fs_", "cbm_", "web_", "stealth_"]) {
-    assert.ok(customTools.some((name) => name.startsWith(prefix)), `missing ${prefix} tool`)
+  assert.ok(customTools.every((name) => name.startsWith("alonix-")))
+  for (const family of ["alonix-read-", "alonix-edit-", "alonix-index-", "alonix-web-", "alonix-stealth-"]) {
+    assert.ok(customTools.some((name) => name.startsWith(family)), `missing ${family} tool`)
   }
-  assert.ok(customTools.includes("shell"))
-  assert.ok(customTools.includes("background_process"))
+  assert.ok(customTools.includes("alonix-shell"))
+  assert.ok(customTools.includes("alonix-background-process"))
 })
 
 test("indicatorFor maps statuses to visible levels", () => {
@@ -60,8 +61,8 @@ test("toastForTransition only fires on meaningful transitions", () => {
   assert.equal(toastForTransition({ status: "building" }, { status: "restarting" }), null)
 })
 
-test("root discovery climbs to the toolings package.json", () => {
-  const dir = mkdtempSync(join(tmpdir(), "toolings-root-"))
+test("root discovery climbs to the tooling package.json", () => {
+  const dir = mkdtempSync(join(tmpdir(), "alonix-toolings-root-"))
   try {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings" }))
     mkdirSync(join(dir, "deep", "down"), { recursive: true })

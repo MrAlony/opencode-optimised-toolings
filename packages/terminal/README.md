@@ -1,6 +1,6 @@
 # Enhanced terminal tools
 
-`oc-enhanced-terminal` exposes `shell` for finite foreground work and `background_process` for managed long-running processes.
+`oc-enhanced-terminal` exposes `shell` for finite foreground work and `alonix-background-process` for managed long-running processes.
 
 ## Same-call recovery
 

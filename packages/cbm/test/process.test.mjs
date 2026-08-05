@@ -91,17 +91,17 @@ test("Git freshness changes when an already-dirty tracked file changes again", (
 
 test("new CBM index creation requires explicit user authorization", async () => {
   const tools = buildToolDefs();
-  const result = await tools.cbm_project.execute({ action: "index", repo_path: process.cwd(), mode: "fast", user_authorized: false }, { abort: new AbortController().signal });
+  const result = await tools["alonix-index-project"].execute({ action: "index", repo_path: process.cwd(), mode: "fast", user_authorized: false }, { abort: new AbortController().signal });
   assert.match(result, /requires user_authorized=true/);
 });
 
 test("four consolidated high-information CBM tools are registered", () => {
   const tools = buildToolDefs();
   assert.deepEqual(Object.keys(tools).sort(), [
-    "cbm_context",
-    "cbm_investigate",
-    "cbm_memory",
-    "cbm_project",
+    "alonix-index-context",
+    "alonix-index-investigate",
+    "alonix-index-memory",
+    "alonix-index-project",
   ]);
   for (const [name, definition] of Object.entries(tools)) {
     assert.equal(typeof definition.execute, "function", `${name} must expose execute`);

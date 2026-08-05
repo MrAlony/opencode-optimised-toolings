@@ -73,7 +73,7 @@ export async function ensureTuiCompanion(root, options = {}) {
   const directory = options.configDirectory ?? openCodeConfigDirectory(options.env)
   const configPath = path.join(directory, "tui.json")
   const markerPath = path.join(directory, ".sparkly-toolings-tui.json")
-  const lockPath = path.join(directory, ".sparkly-toolings-tui.lock")
+  const lockPath = path.join(directory, ".sparkly-alonix-toolings-tui.lock")
   const spec = tuiCompanionSpec(root)
   await fs.mkdir(directory, { recursive: true })
   await acquireLock(lockPath)

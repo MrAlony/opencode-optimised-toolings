@@ -1,12 +1,12 @@
 const STATUS_RE = {
-  fs_search: /^SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  fs_explore: /^EXPLORE RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  web_fetch_many: /^WEB FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  web_search: /^WEB SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  stealth_fetch_many: /^STEALTH FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  stealth_search_many: /^STEALTH SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  stealth_rotate_tor: /^STEALTH TOR ROTATION: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  stealth_status: /^STEALTH STATUS: (READY|[\w ]+)$/m,
+  "alonix-search": /^SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-explore": /^EXPLORE RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-web-fetch-many": /^WEB FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-web-search": /^WEB SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-stealth-fetch-many": /^STEALTH FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-stealth-search-many": /^STEALTH SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-stealth-rotate-tor": /^STEALTH TOR ROTATION: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-stealth-status": /^STEALTH STATUS: (READY|[\w ]+)$/m,
 }
 
 export function reportStatus(text, tool) {

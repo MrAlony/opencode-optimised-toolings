@@ -22,13 +22,13 @@ EVIDENCE MEANING: Candidate enumeration and returned content evidence are comple
 `
 
 test("reportStatus recognizes the search header", () => {
-  assert.equal(reportStatus(SEARCH, "fs_search"), "SUCCESS")
+  assert.equal(reportStatus(SEARCH, "alonix-search"), "SUCCESS")
 })
 
 test("reportSummary prefers the human outcome and stays transcript-sized", () => {
-  assert.equal(reportSummary(SEARCH, "fs_search"), "Search completed within all configured bounds. 1 content match(es) were found.")
-  assert.equal(reportSummary("", "web_search"), "Running web_search")
-  assert.ok(reportSummary(`WHAT HAPPENED: ${"x".repeat(180)}`, "fs_search").length <= 120)
+  assert.equal(reportSummary(SEARCH, "alonix-search"), "Search completed within all configured bounds. 1 content match(es) were found.")
+  assert.equal(reportSummary("", "alonix-web-search"), "Running alonix-web-search")
+  assert.ok(reportSummary(`WHAT HAPPENED: ${"x".repeat(180)}`, "alonix-search").length <= 120)
 })
 
 test("parseReportBlocks splits sections, key-values and lists", () => {
@@ -41,16 +41,16 @@ test("parseReportBlocks splits sections, key-values and lists", () => {
 })
 
 test("reportStatus maps explore and web headers", () => {
-  assert.equal(reportStatus(`EXPLORE RESULT: SUCCESS\nWHAT HAPPENED: baseline complete`, "fs_explore"), "SUCCESS")
-  assert.equal(reportStatus(`WEB SEARCH RESULT: SUCCESS\nWHAT HAPPENED: ok`, "web_search"), "SUCCESS")
-  assert.equal(reportStatus(`STEALTH STATUS: READY\nTor bootstrapped: no`, "stealth_status"), "SUCCESS")
-  assert.equal(reportStatus(`STEALTH FETCH RESULT: SUCCESS\nOutcome: SUCCESS`, "stealth_fetch_many"), "SUCCESS")
+  assert.equal(reportStatus(`EXPLORE RESULT: SUCCESS\nWHAT HAPPENED: baseline complete`, "alonix-explore"), "SUCCESS")
+  assert.equal(reportStatus(`WEB SEARCH RESULT: SUCCESS\nWHAT HAPPENED: ok`, "alonix-web-search"), "SUCCESS")
+  assert.equal(reportStatus(`STEALTH STATUS: READY\nTor bootstrapped: no`, "alonix-stealth-status"), "SUCCESS")
+  assert.equal(reportStatus(`STEALTH FETCH RESULT: SUCCESS\nOutcome: SUCCESS`, "alonix-stealth-fetch-many"), "SUCCESS")
 })
 
 test("reportStatus detects failure and CBM outcomes", () => {
-  assert.equal(reportStatus(`SEARCH RESULT: FAILED\nWHAT HAPPENED: boom`, "fs_search"), "FAILED")
-  assert.equal(reportStatus(`=== INDEX READINESS ===\nOutcome: EXISTING VERIFIED INDEX USED`, "cbm_context"), "SUCCESS")
-  assert.equal(reportStatus(`=== INDEX READINESS ===\nOutcome: FAILED`, "cbm_project"), "FAILED")
+  assert.equal(reportStatus(`SEARCH RESULT: FAILED\nWHAT HAPPENED: boom`, "alonix-search"), "FAILED")
+  assert.equal(reportStatus(`=== INDEX READINESS ===\nOutcome: EXISTING VERIFIED INDEX USED`, "alonix-index-context"), "SUCCESS")
+  assert.equal(reportStatus(`=== INDEX READINESS ===\nOutcome: FAILED`, "alonix-index-project"), "FAILED")
 })
 
 test("reportStatus falls back to neutral for unknown text", () => {

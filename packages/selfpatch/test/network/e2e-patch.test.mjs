@@ -37,8 +37,9 @@ try {
   if (marker && marker.manifestSha256 === manifestSha) {
     // Already patched from a prior run; verify the anchors are still present.
   } else {
-    if (marker) {
-      // Patch set changed: reset to pristine source and re-extract.
+    if (marker || manifest.create.some((item) => existsSync(join(sourceRoot, item.path)))) {
+      // Patch set changed or the cache contains an unmarked prior patch. Reset
+      // to pristine source and re-extract before applying create-only anchors.
       await rm(sourceRoot, { recursive: true, force: true })
       sourceRoot = await ensureSource(root, VERSION)
     }

@@ -80,7 +80,7 @@ export function formatProjectList(raw: string): string {
   }));
   return [
     section("ACTIVE CBM PROJECTS", JSON.stringify({ count: active.length, projects: compact(active) }, null, 2)),
-    section("MISSING-ROOT CBM PROJECTS", JSON.stringify({ count: missing.length, projects: compact(missing), note: "These indexes are preserved but separated because their source roots no longer exist. Delete them explicitly with cbm_project(action=\"delete\")." }, null, 2)),
+    section("MISSING-ROOT CBM PROJECTS", JSON.stringify({ count: missing.length, projects: compact(missing), note: "These indexes are preserved but separated because their source roots no longer exist. Delete them explicitly with alonix-index-project(action=\"delete\")." }, null, 2)),
     `=== PROJECT LIST SUMMARY ===\nactive=${active.length}; missing_root=${missing.length}; total=${projects.length}; automatic_deletion=false.`,
   ].join("\n\n");
 }
@@ -468,7 +468,7 @@ function compactArchitecture(raw: string): string {
     boundaries: cap("boundaries", 12),
     layers: cap("layers", 12),
     routes: cap("routes", 12),
-    note: "Architecture arrays are deliberately capped; use cbm_context for the full repository baseline.",
+    note: "Architecture arrays are deliberately capped; use alonix-index-context for the full repository baseline.",
   }, null, 2);
 }
 
@@ -626,7 +626,7 @@ export const context = tool({
       safeInvoke("get_graph_schema", { project: args.project }, context),
       changePromise,
     ]);
-    return [repairSection(health.repair), freshnessSection(health.freshness), section("ARCHITECTURE", architecture), section("GRAPH SCHEMA", schema), section("CURRENT CHANGE BLAST RADIUS", changes), "=== NEXT-STEP DIRECTIVE ===\nUse this baseline before further discovery. For a concrete feature, bug, or symbol question, call cbm_investigate once with the full intent instead of chaining filesystem grep/explore calls."].join("\n\n");
+    return [repairSection(health.repair), freshnessSection(health.freshness), section("ARCHITECTURE", architecture), section("GRAPH SCHEMA", schema), section("CURRENT CHANGE BLAST RADIUS", changes), "=== NEXT-STEP DIRECTIVE ===\nUse this baseline before further discovery. For a concrete feature, bug, or symbol question, call alonix-index-investigate once with the full intent instead of chaining filesystem grep/explore calls."].join("\n\n");
   },
 });
 
@@ -707,7 +707,7 @@ export const investigate = tool({
       const validation = validateReadOnlyCypher(args.cypher);
       outputSections.push(section("OPTIONAL CYPHER", validation || await safeInvoke("query_graph", { project: args.project, query: args.cypher }, context), 4 * 1024));
     }
-    outputSections.push("=== EXECUTION DIRECTIVE ===\nUse the priority call chain and source first. Treat omitted weak semantic matches as non-evidence. If a precise source gap remains, use fs_read_many range requests rather than shell-based Get-Content/rg discovery. Do not restart broad exploration.");
+    outputSections.push("=== EXECUTION DIRECTIVE ===\nUse the priority call chain and source first. Treat omitted weak semantic matches as non-evidence. If a precise source gap remains, use alonix-read-many range requests rather than shell-based Get-Content/rg discovery. Do not restart broad exploration.");
     return joinBudgeted(outputSections);
   },
 });

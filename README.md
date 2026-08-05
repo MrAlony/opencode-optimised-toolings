@@ -5,7 +5,7 @@ A portable, shareable distribution of the custom OpenCode tools used in this env
 - **Filesystem:** adaptive batched reads, strict safe multi-file edits, structured search and exploration.
 - **Terminal:** bounded foreground commands with safe same-call recovery for proven no-execution failures, plus background startup/readiness evidence and confirmed lifecycle cleanup.
 - **CBM:** indexed architecture, symbol/call-chain investigation, freshness/structure repair, ADRs and runtime traces.
-- **Web:** multi-backend batched search plus an SSRF-aware `web_fetch_many` replacement for the built-in fetch tool.
+- **Web:** multi-backend batched search plus an SSRF-aware `alonix-web-fetch-many` replacement for the built-in fetch tool.
 - **Stealth:** native OpenCode Tor/Patchright tools, no MCP server, cookie-authenticated dedicated Tor process.
 - **SearXNG:** loopback-only local search service with generated local secret and owned PID lifecycle.
 - **Guidance:** production-oriented global AGENTS and Kilo Implementer configuration.
@@ -43,13 +43,13 @@ Safeguards: version-specific manifests with source fingerprints, fail-closed beh
 
 ## Web contract
 
-The installer disables and denies built-in `webfetch` and registers `web_fetch_many`. The replacement fetches up to ten URLs with one adaptive shared output budget, DNS-pinned connections, redirect revalidation, private-network blocking by default, bounded bodies/timeouts/retries, caching, fingerprints, and HTML/JSON/XML/PDF/text extraction. Use `allow_private=true` only for deliberate local-service access.
+The installer disables and denies built-in `webfetch` and registers `alonix-web-fetch-many`. The replacement fetches up to ten URLs with one adaptive shared output budget, DNS-pinned connections, redirect revalidation, private-network blocking by default, bounded bodies/timeouts/retries, caching, fingerprints, and HTML/JSON/XML/PDF/text extraction. Use `allow_private=true` only for deliberate local-service access.
 
-`web_search` supports frequent legitimate research. Batch independent questions, use additional calls for new or dependent questions, and avoid only unchanged consecutive duplicate requests.
+`alonix-web-search` supports frequent legitimate research. Batch independent questions, use additional calls for new or dependent questions, and avoid only unchanged consecutive duplicate requests.
 
 ## Stealth contract
 
-`stealth_fetch_many`, `stealth_search_many`, `stealth_rotate_tor`, and `stealth_status` are native plugin tools. Tor starts on dedicated ports 19050/19051 by default, uses cookie authentication, waits for bootstrap, and is stopped only if this package launched it. Configure Tor in local secrets or place it on PATH.
+`alonix-stealth-fetch-many`, `alonix-stealth-search-many`, `alonix-stealth-rotate-tor`, and `alonix-stealth-status` are native plugin tools. Tor starts on dedicated ports 19050/19051 by default, uses cookie authentication, waits for bootstrap, and is stopped only if this package launched it. Configure Tor in local secrets or place it on PATH.
 
 ## Service lifecycle
 

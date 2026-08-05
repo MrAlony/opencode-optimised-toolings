@@ -7,9 +7,9 @@ import * as consolidated from "../consolidated.js";
  */
 export function buildToolDefs(): Record<string, unknown> {
   return {
-    cbm_project: consolidated.project,
-    cbm_context: consolidated.context,
-    cbm_investigate: consolidated.investigate,
-    cbm_memory: consolidated.memory,
+    "alonix-index-project": consolidated.project,
+    "alonix-index-context": consolidated.context,
+    "alonix-index-investigate": consolidated.investigate,
+    "alonix-index-memory": consolidated.memory,
   };
 }

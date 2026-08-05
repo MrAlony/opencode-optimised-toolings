@@ -38,7 +38,7 @@ test.after(() => {
 test("batches independent fallback queries", async () => {
   responses.set("serper:alpha", { organic: [{ title: "Alpha", link: "https://example.com/a", snippet: "A result" }] });
   responses.set("serper:beta", { organic: [{ title: "Beta", link: "https://example.com/b", snippet: "B result" }] });
-  const output = await plugin.tool.web_search.execute({
+  const output = await plugin.tool["alonix-web-search"].execute({
     queries: [{ query: "alpha" }, { query: "beta" }],
     backends: ["serper"],
   }, { sessionID: "batch" });
@@ -52,7 +52,7 @@ test("batches independent fallback queries", async () => {
 test("fallback records a failed backend before success", async () => {
   responses.set("serper:fallback", new Error("serper down"));
   responses.set("tavily:fallback", { answer: "Recovered answer", results: [] });
-  const output = await plugin.tool.web_search.execute({
+  const output = await plugin.tool["alonix-web-search"].execute({
     queries: [{ query: "fallback" }],
     backends: ["serper", "tavily"],
     cache_ttl_seconds: 0,
@@ -68,7 +68,7 @@ test("fallback records a failed backend before success", async () => {
 test("aggregate deduplicates canonical URLs", async () => {
   responses.set("serper:dedupe", { organic: [{ title: "One", link: "https://example.com/page?utm_source=x", snippet: "first" }] });
   responses.set("tavily:dedupe", { results: [{ title: "One duplicate", url: "https://example.com/page", content: "second" }] });
-  const output = await plugin.tool.web_search.execute({
+  const output = await plugin.tool["alonix-web-search"].execute({
     queries: [{ query: "dedupe", max_results: 10 }],
     strategy: "aggregate",
     backends: ["serper", "tavily"],
@@ -81,8 +81,8 @@ test("exact consecutive duplicate queries warn without discouraging legitimate s
   responses.set("serper:repeat", { organic: [{ title: "Repeat", link: "https://example.com/r", snippet: "result" }] });
   const args = { queries: [{ query: "repeat" }], backends: ["serper"] };
   const context = { sessionID: "repeat" };
-  const first = await plugin.tool.web_search.execute(args, context);
-  const second = await plugin.tool.web_search.execute(args, context);
+  const first = await plugin.tool["alonix-web-search"].execute(args, context);
+  const second = await plugin.tool["alonix-web-search"].execute(args, context);
   assert.doesNotMatch(first, /EFFICIENCY NOTICE|BATCHING ADVICE|DUPLICATE/);
   assert.match(second, /DUPLICATE WEB SEARCH WARNING/);
   assert.match(second, /cache: hit/);
@@ -93,10 +93,10 @@ test("quota error trips breaker and later calls skip the cooled-down backend", a
   responses.set("serper:quota", { __http: 400, body: '{"message":"Not enough credits"}' });
   responses.set("tavily:quota", { answer: "Fallback answer", results: [] });
   const args = { queries: [{ query: "quota" }], backends: ["serper", "tavily"], cache_ttl_seconds: 0 };
-  const first = await plugin.tool.web_search.execute(args, { sessionID: "breaker" });
+  const first = await plugin.tool["alonix-web-search"].execute(args, { sessionID: "breaker" });
   assert.match(first, /serper=error: HTTP 400: \{"message":"Not enough credits"\}/);
   assert.match(first, /tavily=ok/);
-  const second = await plugin.tool.web_search.execute(args, { sessionID: "breaker" });
+  const second = await plugin.tool["alonix-web-search"].execute(args, { sessionID: "breaker" });
   assert.match(second, /serper=skipped \(cooldown/);
   assert.match(second, /tavily=ok/);
   resetBreaker();
@@ -114,7 +114,7 @@ test("duckduckgo parser drops ad results", async () => {
     "</div>",
   ].join("");
   responses.set("other:ads", html);
-  const output = await plugin.tool.web_search.execute({
+  const output = await plugin.tool["alonix-web-search"].execute({
     queries: [{ query: "ads", backend: "duckduckgo" }],
     cache_ttl_seconds: 0,
   }, { sessionID: "ads" });

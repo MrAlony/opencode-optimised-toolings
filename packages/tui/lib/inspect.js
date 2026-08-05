@@ -58,7 +58,7 @@ export function parseStealth(text) {
 }
 
 export function parseDiscovery(text, tool) {
-  if (tool === "fs_search") {
+  if (tool === "alonix-search") {
     const status = String(text).match(/^SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m)?.[1]
     if (!status) return null
     const pairs = Object.fromEntries([...String(text).matchAll(/^\s{2}([^:]+): (.+)$/gm)].map((match) => [match[1], match[2]]))
@@ -94,11 +94,11 @@ export function parseCbm(text) {
 }
 
 export function inputItems(tool, input) {
-  if (tool === "web_fetch_many" || tool === "stealth_fetch_many") return (input?.requests ?? []).map((item) => ({ status: "PENDING", label: item.url, meta: item.format ?? "" }))
-  if (tool === "web_search" || tool === "stealth_search_many") return (input?.queries ?? []).map((item) => ({ status: "PENDING", label: item.query, meta: item.backend ?? "" }))
-  if (tool === "shell") return (input?.commands ?? []).map((item) => ({ status: "PENDING", label: item.label || item.command, meta: "queued" }))
-  if (tool === "background_process") return (input?.operations ?? []).map((item, index) => ({ status: "PENDING", label: item.label || item.action || `operation ${index + 1}`, meta: item.action ?? "" }))
-  if (tool === "fs_read_many") return [...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
-  if (tool === "fs_edit_many") return (input?.actions ?? []).map((item) => ({ status: "PENDING", label: item.path, meta: item.operation }))
+  if (tool === "alonix-web-fetch-many" || tool === "alonix-stealth-fetch-many") return (input?.requests ?? []).map((item) => ({ status: "PENDING", label: item.url, meta: item.format ?? "" }))
+  if (tool === "alonix-web-search" || tool === "alonix-stealth-search-many") return (input?.queries ?? []).map((item) => ({ status: "PENDING", label: item.query, meta: item.backend ?? "" }))
+  if (tool === "alonix-shell") return (input?.commands ?? []).map((item) => ({ status: "PENDING", label: item.label || item.command, meta: "queued" }))
+  if (tool === "alonix-background-process") return (input?.operations ?? []).map((item, index) => ({ status: "PENDING", label: item.label || item.action || `operation ${index + 1}`, meta: item.action ?? "" }))
+  if (tool === "alonix-read-many") return [...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
+  if (tool === "alonix-edit-many") return (input?.actions ?? []).map((item) => ({ status: "PENDING", label: item.path, meta: item.operation }))
   return []
 }

@@ -1,6 +1,6 @@
 # oc-webtooling
 
-OpenCode plugin exposing one high-information `web_search` tool instead of overlapping per-provider tools.
+OpenCode plugin exposing one high-information `alonix-web-search` tool instead of overlapping per-provider tools.
 
 ## Capabilities
 

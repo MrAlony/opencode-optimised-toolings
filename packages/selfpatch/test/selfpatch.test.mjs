@@ -10,16 +10,16 @@ import { detectBinary, isDevRuntime } from "../lib/detect.js"
 import { SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
 
-test("toolings tool registration exposes a callable execute", async () => {
+test("alonix-toolings tool registration exposes a callable execute", async () => {
   const previous = process.env.OPENCODE_CONFIG_DIR
-  const configRoot = mkdtempSync(join(tmpdir(), "toolings-plugin-config-"))
+  const configRoot = mkdtempSync(join(tmpdir(), "alonix-toolings-plugin-config-"))
   process.env.OPENCODE_CONFIG_DIR = configRoot
   const plugin = await SelfPatchPlugin()
   try {
-    assert.equal(typeof plugin.tool.toolings, "object")
-    assert.equal(typeof plugin.tool.toolings.execute, "function")
-    assert.equal(typeof plugin.tool.toolings.invoke, "undefined")
-    assert.equal(typeof plugin.tool.toolings.inputSchema, "object")
+    assert.equal(typeof plugin.tool["alonix-toolings"], "object")
+    assert.equal(typeof plugin.tool["alonix-toolings"].execute, "function")
+    assert.equal(typeof plugin.tool["alonix-toolings"].invoke, "undefined")
+    assert.equal(typeof plugin.tool["alonix-toolings"].inputSchema, "object")
   } finally {
     await plugin.dispose?.()
     if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
@@ -33,7 +33,7 @@ function sha256Of(text) {
 }
 
 test("state defaults merge and atomic persistence", async () => {
-  const root = mkdtempSync(join(tmpdir(), "toolings-state-"))
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-state-"))
   try {
     const initial = await readState(root)
     assert.equal(initial.status, "idle")
@@ -51,7 +51,7 @@ test("state defaults merge and atomic persistence", async () => {
 })
 
 test("sha256File streams a stable fingerprint", async () => {
-  const root = mkdtempSync(join(tmpdir(), "toolings-hash-"))
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-hash-"))
   try {
     const file = join(root, "payload.bin")
     const body = `${"a".repeat(2 * 1024 * 1024)}tail`
@@ -63,7 +63,7 @@ test("sha256File streams a stable fingerprint", async () => {
 })
 
 test("patchFileContent enforces exact occurrence counts", async () => {
-  const root = mkdtempSync(join(tmpdir(), "toolings-patch-"))
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-patch-"))
   try {
     const file = join(root, "a.txt")
     writeFileSync(file, "one one two\n")
@@ -76,7 +76,7 @@ test("patchFileContent enforces exact occurrence counts", async () => {
 })
 
 test("applyManifest validates everything before writing anything", async () => {
-  const root = mkdtempSync(join(tmpdir(), "toolings-manifest-"))
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-manifest-"))
   try {
     const src = join(root, "src")
     mkdirSync(src, { recursive: true })

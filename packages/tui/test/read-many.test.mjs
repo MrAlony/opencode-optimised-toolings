@@ -22,6 +22,9 @@ test("parseReadResult handles a real complete read report", () => {
     assert.ok(parsed.budget["Shared total"].includes("bytes"));
     assert.equal(parsed.editContext["Complete files"], "2");
     assert.match(parsed.outcome, /returned completely and stably/);
+    assert.equal(parsed.evidence.length, 2);
+    assert.match(parsed.files[0].evidence.contentLines.join("\n"), /alpha/);
+    assert.equal(parsed.files[0].evidence.stable, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -38,6 +41,8 @@ test("parseReadResult surfaces bounded evidence and omitted ranges", () => {
     assert.equal(parsed.files[0].bounded, true);
     assert.ok(parsed.omitted.length >= 1);
     assert.ok(parsed.omitted[0].bytes > 0 || Boolean(parsed.omitted[0].note));
+    assert.ok(parsed.files[0].evidence.contentLines.length > 0);
+    assert.ok(parsed.files[0].evidence.signals.some((line) => /TRUNCATION BOUNDS|BOUNDARY SIGNAL/.test(line)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -54,6 +59,7 @@ test("parseReadResult parses ranged section evidence", () => {
     assert.equal(parsed.files.length, 1);
     assert.equal(parsed.files[0].kind, "ranged");
     assert.equal(parsed.files[0].ranges, 1);
+    assert.match(parsed.files[0].evidence.contentLines.join("\n"), /5: line 4/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

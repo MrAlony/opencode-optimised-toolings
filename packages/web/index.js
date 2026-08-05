@@ -8,7 +8,7 @@ function duplicateAdvice(context, signature, kind) { const state = getSession(co
 
 export const WebToolingPlugin = async () => ({
   tool: {
-    web_search: tool({
+    "alonix-web-search": tool({
       description: "Search 1-10 independent web questions in one call. fallback tries ordered backends until useful results exist; aggregate queries selected backends concurrently and deduplicates URLs. Local SearXNG and DuckDuckGo are preferred by default so paid keys are optional. Exact requests are cached and all backend attempts remain visible. Multiple web calls are acceptable when new evidence or dependent questions justify them; only exact consecutive duplicates are warned.",
       args: {
         queries: tool.schema.array(tool.schema.object({ query: tool.schema.string().min(1), max_results: tool.schema.number().optional(), backend: tool.schema.string().optional() })).min(1).max(10),
@@ -24,7 +24,7 @@ export const WebToolingPlugin = async () => ({
         } catch (error) { return `WEB SEARCH FAILED\nWhat happened: ${error instanceof Error ? error.message : String(error)}`; }
       },
     }),
-    web_fetch_many: tool({
+    "alonix-web-fetch-many": tool({
       description: "Fetch and extract 1-10 URLs concurrently with per-hop DNS/redirect safety, private-network blocking by default, bounded retries/timeouts/body sizes, HTML readability or CSS extraction, Markdown/text/HTML/JSON/PDF support, exact metadata/fingerprints, caching, and one adaptive shared output budget. Set allow_private only for deliberate local service access.",
       args: {
         requests: tool.schema.array(tool.schema.object({

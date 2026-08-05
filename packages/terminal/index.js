@@ -129,7 +129,7 @@ function getSession(context) {
 function repeatedToolAdvice(toolName, streak) {
   if (streak < 2) return "";
   const strength = streak >= 3 ? "STRONG" : "NOTICE";
-  const guidance = toolName === "shell"
+  const guidance = toolName === "alonix-shell"
     ? "Batch independent finite commands and avoid serial shell micro-calls."
     : "Batch independent lifecycle operations and avoid repeated polling calls.";
   return `[${strength} REPEATED-TOOL ADVICE] Consecutive ${toolName} call #${streak}. ${guidance}`;
@@ -139,7 +139,7 @@ function trackToolUse(context, toolName) {
   const state = getSession(context);
   state.toolStreak = state.lastTool === toolName ? state.toolStreak + 1 : 1;
   state.lastTool = toolName;
-  if (toolName !== "background_process") state.pollStreak = 0;
+  if (toolName !== "alonix-background-process") state.pollStreak = 0;
   return repeatedToolAdvice(toolName, state.toolStreak);
 }
 
@@ -152,20 +152,20 @@ function singletonAdvice(kind, count) {
 
 function detectFilesystemSubstitution(command) {
   const patterns = [
-    { regex: /\b(Get-Content|gc|cat|type)\b/i, kind: "source/file reading", replacement: "fs_read_many with `paths` or exact `requests[].ranges`" },
-    { regex: /\b(rg|ripgrep|Select-String|findstr|grep)\b/i, kind: "content search", replacement: "fs_search with both `file_pattern` and `query`" },
-    { regex: /\b(Get-ChildItem|gci|dir)\b[^\r\n]*(?:-Recurse|-Filter)|\bfind\b[^\r\n]*-name/i, kind: "recursive filename discovery", replacement: "fs_search or one fs_explore baseline" },
+    { regex: /\b(Get-Content|gc|cat|type)\b/i, kind: "source/file reading", replacement: "alonix-read-many with `paths` or exact `requests[].ranges`" },
+    { regex: /\b(rg|ripgrep|Select-String|findstr|grep)\b/i, kind: "content search", replacement: "alonix-search with both `file_pattern` and `query`" },
+    { regex: /\b(Get-ChildItem|gci|dir)\b[^\r\n]*(?:-Recurse|-Filter)|\bfind\b[^\r\n]*-name/i, kind: "recursive filename discovery", replacement: "alonix-search or one alonix-explore baseline" },
   ];
   return patterns.find((item) => item.regex.test(command)) ?? null;
 }
 
 function commandAdvice(context, commands) {
   const state = getSession(context);
-  const notes = [trackToolUse(context, "shell")];
+  const notes = [trackToolUse(context, "alonix-shell")];
   const substitutions = commands.map((item, index) => ({ index, match: detectFilesystemSubstitution(item.command) })).filter((item) => item.match);
   if (substitutions.length) {
     const details = substitutions.map((item) => `command ${item.index + 1}: ${item.match.kind} -> ${item.match.replacement}`).join("; ");
-    notes.push(`[DEDICATED FILESYSTEM TOOL ADVISORY] Shell appears to be substituting for optimized filesystem tools (${details}). The commands were allowed because shell must remain general-purpose, but future source inspection/discovery should use the dedicated tools. This preserves binary detection, fixed output budgets, batched range reads, CBM escalation, and tool-call accounting. Use shell for actual execution/build/test/git work.`);
+    notes.push(`[DEDICATED FILESYSTEM TOOL ADVISORY] Shell appears to be substituting for optimized filesystem tools (${details}). The commands were allowed because alonix-shell must remain general-purpose, but future source inspection/discovery should use the dedicated tools. This preserves binary detection, fixed output budgets, batched range reads, CBM escalation, and tool-call accounting. Use alonix-shell for actual execution/build/test/git work.`);
   }
   if (commands.length === 1) {
     state.shellSingletons += 1;
@@ -185,7 +185,7 @@ function commandAdvice(context, commands) {
 
 function backgroundAdvice(context, operations) {
   const state = getSession(context);
-  const notes = [trackToolUse(context, "background_process")];
+  const notes = [trackToolUse(context, "alonix-background-process")];
   if (operations.length === 1) {
     state.backgroundSingletons += 1;
     notes.push(singletonAdvice("operation", state.backgroundSingletons));
@@ -452,7 +452,7 @@ function formatCommandResults(results, mode, notes) {
     if (result.requestedTimeoutMs > MAX_TIMEOUT_MS) body += `\n[TIMEOUT CLAMPED] Requested ${result.requestedTimeoutMs}ms, but the absolute maximum is ${MAX_TIMEOUT_MS}ms.`;
     if (result.timedOut) body += `\n[TIMEOUT ENFORCEMENT] The command exceeded ${result.timeoutMs}ms. Full process-tree termination was requested (${result.termination || "termination initiated"}).\n[TIMEOUT ADVISORY] Do not retry the same long-running command unchanged. Investigate why it exceeded the deadline, use a finite readiness-bounded command, or split the work without weakening verification.`;
     if (result.aborted) body += `\n[ABORT ENFORCEMENT] Full process-tree termination was requested (${result.termination || "termination initiated"}).`;
-    if (!result.timedOut && !result.aborted && result.termination) body += `\n[DETACHED PROCESS CLEANUP] ${result.termination}. Persistent processes are not supported while background_process is disabled.`;
+    if (!result.timedOut && !result.aborted && result.termination) body += `\n[DETACHED PROCESS CLEANUP] ${result.termination}. Persistent processes are not supported while alonix-background-process is disabled.`;
     if (result.truncated) body += `\n[OUTPUT TRUNCATED at ${MAX_OUTPUT_BYTES} bytes]`;
     const remaining = MAX_BATCH_OUTPUT_BYTES - used;
     if (remaining <= 0) { sections.push("\n[BATCH OUTPUT TRUNCATED]"); break; }
@@ -711,15 +711,15 @@ export const EnhancedTerminalPlugin = async () => ({
     procs.clear();
   },
   "tool.execute.before": async (input) => {
-    if (input.tool === "shell" || input.tool === "background_process") return;
+    if (input.tool === "shell" || input.tool === "alonix-background-process") return;
     const state = getSession({ sessionID: input.sessionID });
     state.lastTool = input.tool;
     state.toolStreak = 1;
     state.pollStreak = 0;
   },
   tool: {
-    shell: tool({
-      description: `Run 1-${MAX_COMMANDS} finite shell commands in one call and wait for completion. Known no-execution failures may be repaired and retried once inside the same call: a quoted Windows executable missing PowerShell's call operator, or a transient process-spawn resource error. Ordinary nonzero exits, timeouts, cancellations, and potentially side-effecting failures are never replayed. Use mode=parallel for independent tests/builds/checks and mode=sequential for ordered commands whose processes do not share state. For dependent steps that must share shell state (cd, variables, pipelines), put them in one command string. Default timeout ${DEFAULT_TIMEOUT_MS}ms per command; absolute hard maximum ${MAX_TIMEOUT_MS}ms (90 seconds), even if a larger value is requested. At the deadline the full process tree is force-terminated and the tool returns after a bounded termination grace period. Output is bounded. Run only finite commands; servers, watchers, daemons, and intentionally persistent processes are unsupported while background_process is disabled. Do not use Get-Content/cat/rg/Select-String/recursive directory commands as substitutes for fs_read_many range reads, fs_search, or fs_explore; runtime output will flag such substitutions. On Windows, unix-style '&&'/'||' chain separators in any command are auto-converted to ';' chaining (Windows PowerShell 5.1 rejects them) and reported as a SYNTAX PORTABILITY note.`,
+    "alonix-shell": tool({
+      description: `Run 1-${MAX_COMMANDS} finite shell commands in one call and wait for completion. Known no-execution failures may be repaired and retried once inside the same call: a quoted Windows executable missing PowerShell's call operator, or a transient process-spawn resource error. Ordinary nonzero exits, timeouts, cancellations, and potentially side-effecting failures are never replayed. Use mode=parallel for independent tests/builds/checks and mode=sequential for ordered commands whose processes do not share state. For dependent steps that must share shell state (cd, variables, pipelines), put them in one command string. Default timeout ${DEFAULT_TIMEOUT_MS}ms per command; absolute hard maximum ${MAX_TIMEOUT_MS}ms (90 seconds), even if a larger value is requested. At the deadline the full process tree is force-terminated and the tool returns after a bounded termination grace period. Output is bounded. Run only finite commands; servers, watchers, daemons, and intentionally persistent processes are unsupported while alonix-background-process is disabled. Do not use Get-Content/cat/rg/Select-String/recursive directory commands as substitutes for alonix-read-many range reads, alonix-search, or alonix-explore; runtime output will flag such substitutions. On Windows, unix-style '&&'/'||' chain separators in any command are auto-converted to ';' chaining (Windows PowerShell 5.1 rejects them) and reported as a SYNTAX PORTABILITY note.`,
       args: {
         commands: tool.schema.array(tool.schema.object({ command: tool.schema.string().min(1), cwd: tool.schema.string().optional(), timeout_ms: tool.schema.number().optional(), label: tool.schema.string().optional() })).min(1).max(MAX_COMMANDS),
         mode: tool.schema.string().optional(),
@@ -745,7 +745,7 @@ export const EnhancedTerminalPlugin = async () => ({
         return formatCommandResults(results, mode, notes);
       },
     }),
-    background_process: tool({
+    "alonix-background-process": tool({
       description: "Manage long-running processes in batches. Pass 1-20 ordered operations: start/list/status/logs/stop/restart/cleanup/stop_all. Start performs bounded startup settlement in the same operation, returns early output, detects safe no-execution failures, and retries once when safe. Optional ready_output, ready_port, or ready_url waits for readiness within startup_timeout_ms so agents do not need polling calls. Multiple independent starts, status checks, log reads, or stops belong in one call. Processes do not push notifications. After starting a process, do useful independent work and check it once when it is likely ready; do not spam repeated status/logs calls. Repeated polling emits escalating advisories but is not delayed or blocked. Always stop processes no longer needed. Unix-style '&&'/'||' chaining in start commands is auto-converted to ';' on Windows and reported as a SYNTAX PORTABILITY note.",
       args: {
         operations: tool.schema.array(tool.schema.object({ action: tool.schema.string(), command: tool.schema.string().optional(), id: tool.schema.string().optional(), cwd: tool.schema.string().optional(), label: tool.schema.string().optional(), tail_chars: tool.schema.number().optional(), ready_output: tool.schema.string().optional(), ready_port: tool.schema.number().optional(), ready_url: tool.schema.string().optional(), startup_timeout_ms: tool.schema.number().optional() })).min(1).max(20),

@@ -1,6 +1,6 @@
 {
   "name": "@sparkly/toolings-tui",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "OpenCode TUI companion with status-aware activity surfaces, hierarchical per-item inspector cards, and stable lifecycle-accurate transcript rendering.",

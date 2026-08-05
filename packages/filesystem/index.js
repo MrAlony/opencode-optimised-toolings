@@ -22,8 +22,8 @@ function usageSignals(context, toolName, { oneFile = false } = {}) {
   state.streak = state.lastTool === toolName ? state.streak + 1 : 1;
   state.lastTool = toolName;
   state.calls[toolName] = (state.calls[toolName] || 0) + 1;
-  if (toolName === "fs_read_many" && oneFile) state.inefficientReads += 1;
-  if (toolName === "fs_search" || toolName === "fs_explore") state.discoveryCalls += 1;
+  if (toolName === "alonix-read-many" && oneFile) state.inefficientReads += 1;
+  if (toolName === "alonix-search" || toolName === "alonix-explore") state.discoveryCalls += 1;
   const signals = [];
 
   if (oneFile) {
@@ -38,19 +38,19 @@ function usageSignals(context, toolName, { oneFile = false } = {}) {
 
   if (state.streak >= 2) {
     const guidance = {
-      fs_read_many: "If more paths are already known, combine them now instead of continuing serial reads.",
-      fs_search: "Combine filename and content discovery into this one call; use fs_explore once for broad repository context, then act on the returned results.",
-      fs_explore: "Do not repeatedly re-explore the same project. Use the structure, manifests, entry candidates, and search results already returned; switch to precise batched reads or implementation.",
-      fs_edit_many: "Combine independent files and repeated same-file actions into one ordered edit call when they are already known.",
+      "alonix-read-many": "If more paths are already known, combine them now instead of continuing serial reads.",
+      "alonix-search": "Combine filename and content discovery into this one call; use alonix-explore once for broad repository context, then act on the returned results.",
+      "alonix-explore": "Do not repeatedly re-explore the same project. Use the structure, manifests, entry candidates, and search results already returned; switch to precise batched reads or implementation.",
+      "alonix-edit-many": "Combine independent files and repeated same-file actions into one ordered edit call when they are already known.",
     };
     const label = state.streak === 2 ? "NOTICE REPEATED-TOOL ADVICE" : "STRONG REPEATED-TOOL ADVICE";
     signals.push(`[${label}] Consecutive ${toolName} call #${state.streak}. ${guidance[toolName] ?? "Consolidate already-known independent work when the tool supports it."}`);
   }
 
   if (state.discoveryCalls === 2) {
-    signals.push("[CBM ESCALATION WARNING] Filesystem discovery call #2 detected. Use cbm_project(action=\"list\") before another broad filesystem discovery call. If the repository is indexed, switch to cbm_context or one complete cbm_investigate call; otherwise continue with precise filesystem evidence.");
+    signals.push("[CBM ESCALATION WARNING] Filesystem discovery call #2 detected. Use alonix-index-project(action=\"list\") before another broad filesystem discovery call. If the repository is indexed, switch to alonix-index-context or one complete alonix-index-investigate call; otherwise continue with precise filesystem evidence.");
   } else if (state.discoveryCalls >= 3) {
-    signals.push(`[CRITICAL CBM ESCALATION] Filesystem discovery call #${state.discoveryCalls} detected. Stop broad explore/search loops. Use cbm_project(action=\"list\") now; for an indexed repository the NEXT discovery call should be cbm_context or cbm_investigate. If it is not indexed, index it once with cbm_project(action=\"index\") or explain why precise filesystem follow-up is genuinely required. Continue the full task—change the information source, not the scope.`);
+    signals.push(`[CRITICAL CBM ESCALATION] Filesystem discovery call #${state.discoveryCalls} detected. Stop broad explore/search loops. Use alonix-index-project(action=\"list\") now; for an indexed repository the NEXT discovery call should be alonix-index-context or alonix-index-investigate. If it is not indexed, index it once with alonix-index-project(action=\"index\") or explain why precise filesystem follow-up is genuinely required. Continue the full task—change the information source, not the scope.`);
   }
 
   return signals;
@@ -71,7 +71,7 @@ export const FsToolingPlugin = async ({
   searchFileEnumerator = enumerateFiles,
 }) => ({
   tool: {
-    fs_explore: tool({
+    "alonix-explore": tool({
       description: "Consolidated repository exploration with component-level status, bounded tree/manifests/entry candidates, optional self-healing search, and neutral context candidates. Partial evidence remains visible when one component fails.",
       args: {
         base_dir: tool.schema.string().optional().describe("Project or subdirectory to explore"),
@@ -80,11 +80,11 @@ export const FsToolingPlugin = async ({
       },
       async execute(args, context) {
         const output = executeExplore(args, context, { directory, searchFileEnumerator });
-        return [...usageSignals(context, "fs_explore"), output].join("\n\n");
+        return [...usageSignals(context, "alonix-explore"), output].join("\n\n");
       },
     }),
 
-    fs_read_many: tool({
+    "alonix-read-many": tool({
       description: "Read complete files and/or exact ranges with adaptive output allocation, encoding detection, stable-read recovery, head/tail truncation bounds, missing-path candidates, and canonical duplicate consolidation. Complete reads supersede only ranges actually covered by returned complete evidence.",
       args: {
         paths: tool.schema.array(tool.schema.string()).min(1).max(MAX_BATCH_PATHS).optional().describe("1-10 complete-file paths"),
@@ -100,11 +100,11 @@ export const FsToolingPlugin = async ({
       async execute(args, context) {
         const output = executeReadMany(args, context, { directory });
         const uniqueRequested = new Set([...(args.paths ?? []), ...(args.requests ?? []).map((request) => request.path)]).size;
-        return [...usageSignals(context, "fs_read_many", { oneFile: uniqueRequested === 1 }), output].join("\n\n");
+        return [...usageSignals(context, "alonix-read-many", { oneFile: uniqueRequested === 1 }), output].join("\n\n");
       },
     }),
 
-    fs_edit_many: tool({
+    "alonix-edit-many": tool({
       description: "Create new files, overwrite existing files, and apply strict exact patches through ordered per-file transactions. Safe recovery includes exact patch-only rebasing, identical create-race recognition, transient atomic-write retries, exact no-op assertions, optional already-applied recognition, and neutral near-match evidence for rejected patches.",
       args: {
         actions: tool.schema.array(tool.schema.discriminatedUnion("operation", [
@@ -131,11 +131,11 @@ export const FsToolingPlugin = async ({
       },
       async execute(args, context) {
         const output = executeEditMany(args, context, { directory, replaceWriter, createWriter, beforeEditApply });
-        return [...usageSignals(context, "fs_edit_many"), output].join("\n\n");
+        return [...usageSignals(context, "alonix-edit-many"), output].join("\n\n");
       },
     }),
 
-    fs_search: tool({
+    "alonix-search": tool({
       description: "Combined filename glob and content regex search with structured evidence status, whole-record truncation, stable text decoding, bounded execution, and automatic native fallback when ripgrep is missing, fails, or times out.",
       args: {
         query: tool.schema.string().min(1).describe("Required regex content query"),
@@ -145,7 +145,7 @@ export const FsToolingPlugin = async ({
       async execute(args, context) {
         const base = args.base_dir ?? context.directory ?? directory;
         const output = formatSearchResult(performSearch(base, args.query, args.file_pattern, searchFileEnumerator));
-        return [...usageSignals(context, "fs_search"), output].join("\n\n");
+        return [...usageSignals(context, "alonix-search"), output].join("\n\n");
       },
     }),
   },

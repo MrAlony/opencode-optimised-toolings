@@ -31,7 +31,7 @@ export function lockFile(root) {
 }
 
 export function patchMarkerFile(sourceRoot) {
-  return path.join(sourceRoot, ".toolings-patch-marker.json")
+  return path.join(sourceRoot, ".alonix-toolings-patch-marker.json")
 }
 
 export function patchedArtifactMarkerFile(root, version) {
@@ -244,7 +244,7 @@ export async function resolveBun(root) {
  * install runs again against the pristine tree.
  */
 export async function installSourceDeps(sourceRoot, root, onLog) {
-  const okMarker = path.join(sourceRoot, "node_modules", ".toolings-install-ok")
+  const okMarker = path.join(sourceRoot, "node_modules", ".alonix-toolings-install-ok")
   if (await exists(okMarker)) return
   const bun = await resolveBun(root)
   if (!bun) {

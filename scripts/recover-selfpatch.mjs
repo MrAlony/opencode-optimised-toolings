@@ -43,7 +43,7 @@ if (bin && !bin.devMode && bin.path) {
     if (result.alreadyPatched) {
       console.log(`Official binary v${bin.version} is already the patched build; nothing to do.`)
     } else {
-      console.log(`Installed the patched binary v${bin.version} over ${bin.path} (original kept at .toolings-backup).`)
+      console.log(`Installed the patched binary v${bin.version} over ${bin.path} (original kept at .alonix-toolings-backup).`)
     }
     writeFileSync(
       stateFile,

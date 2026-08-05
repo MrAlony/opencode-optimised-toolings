@@ -2,7 +2,7 @@
 
 Vendored checkout of [searxng/searxng](https://github.com/searxng/searxng) (shallow clone,
 sparse: `searx/` + `requirements.txt`) running natively on Windows with a Python 3.12 venv —
-no Docker/WSL required. Serves the `searxng` backend of `../oc-webtooling` (`web_search` tool).
+no Docker/WSL required. Serves the `searxng` backend of `../oc-webtooling` (`alonix-web-search` tool).
 
 ## Run
 

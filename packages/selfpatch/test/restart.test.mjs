@@ -7,7 +7,7 @@ import { installPatchedBinary } from "../lib/restart.js"
 import { installPending } from "../lib/pipeline.js"
 
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "toolings-install-"))
+  const dir = mkdtempSync(join(tmpdir(), "alonix-toolings-install-"))
   return {
     dir,
     official: join(dir, "opencode.exe"),
@@ -24,7 +24,7 @@ test("installPatchedBinary replaces the official binary in place and keeps the o
     assert.equal(result.installed, true)
     assert.equal(result.alreadyPatched, false)
     assert.equal(readFileSync(f.official, "utf8"), "PATCHED-BINARY")
-    assert.equal(readFileSync(`${f.official}.toolings-backup`, "utf8"), "ORIGINAL-OFFICIAL")
+    assert.equal(readFileSync(`${f.official}.alonix-toolings-backup`, "utf8"), "ORIGINAL-OFFICIAL")
   } finally {
     rmSync(f.dir, { recursive: true, force: true })
   }
@@ -52,7 +52,7 @@ test("installPatchedBinary is idempotent: an already-patched binary is reported 
     const result = await installPatchedBinary({ officialPath: f.official, patchedPath: f.patched })
     assert.equal(result.installed, false)
     assert.equal(result.alreadyPatched, true)
-    assert.equal(existsSync(`${f.official}.toolings-backup`), false)
+    assert.equal(existsSync(`${f.official}.alonix-toolings-backup`), false)
   } finally {
     rmSync(f.dir, { recursive: true, force: true })
   }
