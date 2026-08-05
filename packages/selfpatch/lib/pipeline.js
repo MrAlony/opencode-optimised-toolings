@@ -1,11 +1,13 @@
 import { promises as fs } from "node:fs"
 import { spawn, spawnSync } from "node:child_process"
 import path from "node:path"
+import os from "node:os"
 import { createHash } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { patchedBinaryPath, readState, sha256File, writeState } from "./state.js"
 import { detectBinary } from "./detect.js"
 import { installPatchedBinary } from "./restart.js"
+import { bunCacheEntries, looksLikeBrokenInstall, packagesFromBuildLog, verifyPackages } from "./integrity.js"
 
 export const OPENCODE_VERSION = "1.18.13"
 export const BUN_VERSION = "1.3.14"
@@ -243,9 +245,13 @@ export async function resolveBun(root) {
  * changes and the source is re-extracted, the sentinel disappears and the
  * install runs again against the pristine tree.
  */
-export async function installSourceDeps(sourceRoot, root, onLog) {
+export async function installSourceDeps(sourceRoot, root, onLog, options = {}) {
   const okMarker = path.join(sourceRoot, "node_modules", ".alonix-toolings-install-ok")
-  if (await exists(okMarker)) return
+  // `force` re-runs a previously "successful" install. A completed install can
+  // still leave a truncated package on disk, and the sentinel alone would make
+  // that state permanent.
+  if (!options.force && (await exists(okMarker))) return
+  if (options.force) await fs.rm(okMarker, { force: true }).catch(() => {})
   const bun = await resolveBun(root)
   if (!bun) {
     throw new Error(
@@ -259,6 +265,7 @@ export async function installSourceDeps(sourceRoot, root, onLog) {
   // a host C++ toolchain. The upstream Bun build resolves its target-specific
   // artifacts without those install hooks.
   const args = ["install", "--frozen-lockfile", "--ignore-scripts"]
+  if (options.force) args.push("--force")
   onLog(`installing OpenCode dependencies with ${bun.command} ${[...bun.prefixArgs, ...args].join(" ")} (${bun.source})`)
   const child = spawn(bun.command, [...bun.prefixArgs, ...args], {
     cwd: sourceRoot,
@@ -278,6 +285,51 @@ export async function installSourceDeps(sourceRoot, root, onLog) {
     throw new Error(`dependency install failed with exit code ${code}\n${tail.slice(-1500)}`)
   }
   await fs.writeFile(okMarker, JSON.stringify({ installedAt: new Date().toISOString() }), "utf8")
+}
+
+/**
+ * Repair packages that a failed build proved to be incomplete.
+ *
+ * A truncated install survives a plain reinstall because the installer sees the
+ * directory as present and the corrupt copy is usually cached, so every retry
+ * restores the same broken files. Repair therefore removes the installed
+ * package *and* its Bun cache entries before reinstalling, then verifies the
+ * entry points really exist rather than trusting the exit code.
+ *
+ * Returns the packages it repaired, or an empty array when the log does not
+ * show this failure mode.
+ */
+export async function repairBrokenDependencies(sourceRoot, root, buildLog, onLog) {
+  const suspects = packagesFromBuildLog(buildLog)
+  if (suspects.length === 0) return []
+
+  const cacheDir = process.env.BUN_INSTALL_CACHE_DIR || path.join(os.homedir(), ".bun", "install", "cache")
+  const repaired = []
+  for (const suspect of suspects) {
+    onLog?.(`repairing incomplete package ${suspect.name} (missing ${suspect.missing.slice(0, 3).join(", ")})`)
+    await fs.rm(suspect.dir, { recursive: true, force: true }).catch(() => {})
+    // The cached copy is the likely source of the truncation; leaving it would
+    // reinstall exactly the same broken files.
+    for (const entry of await bunCacheEntries(cacheDir, suspect.name)) {
+      await fs.rm(entry, { recursive: true, force: true }).catch(() => {})
+    }
+    repaired.push(suspect)
+  }
+
+  await installSourceDeps(sourceRoot, root, (tail) => onLog?.(tail), { force: true })
+
+  const verified = await verifyPackages(repaired.map((item) => item.dir))
+  if (!verified.ok) {
+    const detail = verified.broken
+      .map((item) => `${item.name ?? item.dir}: missing ${item.missing.slice(0, 3).join(", ")}`)
+      .join("; ")
+    throw new Error(
+      `dependency repair could not restore a complete install (${detail}). ` +
+        "This usually means the download was truncated by a proxy or antivirus, or the disk is full. " +
+        "Delete runtime/src and the Bun cache, then retry."
+    )
+  }
+  return repaired
 }
 
 export async function buildPatched(sourceRoot, root, version, onLog) {
@@ -308,10 +360,37 @@ export async function buildPatched(sourceRoot, root, version, onLog) {
   child.stdout.on("data", collect)
   child.stderr.on("data", collect)
   const code = await new Promise((resolve) => child.on("close", resolve))
-  if (code !== 0) throw new Error(`build failed with exit code ${code}\n${tail.slice(-1500)}`)
+  if (code !== 0) {
+    const error = new Error(`build failed with exit code ${code}\n${tail.slice(-1500)}`)
+    // Preserve the full log so the caller can classify the failure; the message
+    // is truncated for display.
+    error.buildLog = tail
+    error.brokenInstall = looksLikeBrokenInstall(tail)
+    throw error
+  }
   const binary = await findBuiltBinary(sourceRoot)
   if (!binary) throw new Error("build completed but no binary was found under packages/opencode/dist")
   return binary
+}
+
+/**
+ * Build, and if the failure is a provably incomplete dependency install,
+ * repair it and build once more.
+ *
+ * Only this specific, self-diagnosable failure is retried. A genuine compile
+ * error must surface immediately instead of paying for a second slow build.
+ */
+export async function buildPatchedWithRepair(sourceRoot, root, version, onLog, onRepair) {
+  try {
+    return await buildPatched(sourceRoot, root, version, onLog)
+  } catch (error) {
+    if (!error?.brokenInstall) throw error
+    onRepair?.("Repairing an incomplete dependency install")
+    const repaired = await repairBrokenDependencies(sourceRoot, root, error.buildLog, onLog)
+    if (repaired.length === 0) throw error
+    onRepair?.(`Rebuilding after repairing ${repaired.map((item) => item.name).join(", ")}`)
+    return await buildPatched(sourceRoot, root, version, onLog)
+  }
 }
 
 function pidAlive(pid) {
@@ -486,9 +565,17 @@ export async function runSelfPatch(root) {
       void writeState(root, { status: "installing", progressPercent: 38, stepLabel: "Installing OpenCode build dependencies", logTail: tail }).catch(() => {})
     })
     await writeState(root, { status: "building", progressPercent: 40, stepLabel: "Rebuilding OpenCode (first run takes a few minutes)" })
-    const binary = await buildPatched(sourceRoot, root, bin.version, (tail) => {
-      void writeState(root, { status: "building", progressPercent: 45, stepLabel: "Rebuilding OpenCode", logTail: tail }).catch(() => {})
-    })
+    const binary = await buildPatchedWithRepair(
+      sourceRoot,
+      root,
+      bin.version,
+      (tail) => {
+        void writeState(root, { status: "building", progressPercent: 45, stepLabel: "Rebuilding OpenCode", logTail: tail }).catch(() => {})
+      },
+      (stepLabel) => {
+        void writeState(root, { status: "installing", progressPercent: 42, stepLabel }).catch(() => {})
+      }
+    )
     const patchedSha = await sha256File(binary)
     await fs.mkdir(path.dirname(patchedPath), { recursive: true })
     await fs.copyFile(binary, patchedPath)
