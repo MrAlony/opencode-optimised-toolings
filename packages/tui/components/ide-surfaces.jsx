@@ -11,7 +11,6 @@ import { fit, homeLayout, inspectorLayout } from "../lib/layout.js"
 import { summarizeSessions } from "../lib/sessions.js"
 import {
   compactPath,
-  contextLine,
   fileKind,
   healthLabel,
   healthTone,
@@ -47,26 +46,36 @@ const KIND_GLYPH = {
 /**
  * Prompt-adjacent context.
  *
- * The host renders this inside a row that also holds the agent and model
- * labels, and that row has no fixed allocation, so a wide or multi-element
- * insert steals space and wraps the model name. This is therefore a single
- * non-shrinking `text` node whose width is bounded by the terminal, and it
- * yields entirely on narrow terminals where the model label matters more.
+ * The host shares this row with the agent and model labels, and that row has no
+ * width reservation: the label box shrinks by default, so an insert that
+ * refuses to shrink forces the model name to wrap. Three rules keep this
+ * subordinate to the host's own chrome:
+ *
+ *   1. It renders only what the status bar cannot already show in context --
+ *      live token pressure. Project, branch, and change counts are omitted
+ *      because the status bar carries them without competing for width.
+ *   2. It appears only once a session has real context to report, so the home
+ *      screen (where model names are longest) is never crowded.
+ *   3. It shrinks and clips before the host's labels do.
  */
 export function PromptContext(props) {
   const snapshot = createMemo(() => workspaceSnapshot(props.api, props.sessionID))
   const tokens = () => props.tokens()
   const dimensions = useTerminalDimensions()
-  // Leave the agent/model labels their share of the row before claiming any.
-  const budget = createMemo(() => Math.floor(dimensions().width * 0.28) - 2)
-  const label = createMemo(() => {
-    const percent = snapshot().context.percent
-    return [contextLine(snapshot()), percent !== null ? `ctx ${percent}%` : null].filter(Boolean).join("  ·  ")
+  const percent = createMemo(() => snapshot().context.percent)
+  // Roughly "model labels have already been given their share".
+  const roomy = createMemo(() => dimensions().width >= 90)
+  const tone = createMemo(() => {
+    const value = percent()
+    if (value === null) return "neutral"
+    if (value > 90) return "error"
+    if (value > 75) return "warning"
+    return "success"
   })
   return (
-    <Show when={budget() >= 12}>
-      <text fg={tokens().faint} wrapMode="none" flexShrink={0} selectable={false}>
-        <span style={{ fg: toneColor(tokens(), healthTone(snapshot())) }}>{GLYPH.dot}</span> {fit(label(), budget())}
+    <Show when={props.sessionID && percent() !== null && roomy()}>
+      <text fg={tokens().faint} wrapMode="none" flexShrink={1} minWidth={0} selectable={false}>
+        <span style={{ fg: toneColor(tokens(), tone()) }}>{GLYPH.dot}</span> {percent()}%
       </text>
     </Show>
   )

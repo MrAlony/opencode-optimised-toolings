@@ -147,6 +147,28 @@ test("IDE surfaces are presentation-only and delegate navigation to the host rou
   assert.match(runtime, /api\.route\.navigate\("session", \{ sessionID \}\)/)
 })
 
+test("the prompt insert yields to the host's own agent and model labels", async () => {
+  const surfaces = await source("components/ide-surfaces.jsx")
+  const start = surfaces.indexOf("export function PromptContext")
+  const body = surfaces.slice(start, surfaces.indexOf("function toneColor", start))
+
+  // The host shares this row with the agent/model labels and gives it no width
+  // reservation. flexShrink={0} makes the host's labels compress and wrap the
+  // model name instead, which is the defect this pins.
+  assert.doesNotMatch(body, /flexShrink=\{0\}/, "the insert must shrink before the host's labels do")
+  assert.match(body, /flexShrink=\{1\}/)
+  assert.match(body, /minWidth=\{0\}/)
+  assert.match(body, /wrapMode="none"/)
+
+  // It must stay a single node: extra elements reintroduce width competition.
+  assert.equal((body.match(/<text/g) ?? []).length, 1, "the insert must be exactly one text node")
+  assert.doesNotMatch(body, /<box/, "a box would claim layout space in the shared row")
+
+  // It renders only what the status bar cannot show, and only when there is room.
+  assert.match(body, /props\.sessionID && percent\(\) !== null && roomy\(\)/)
+  assert.doesNotMatch(body, /contextLine|snapshot\(\)\.project|snapshot\(\)\.branch/, "duplicated status-bar data must not compete for prompt width")
+})
+
 test("design tokens are theme-reactive rather than captured once at load", async () => {
   const index = await source("index.tsx")
   const runtime = await source("components/runtime.jsx")
