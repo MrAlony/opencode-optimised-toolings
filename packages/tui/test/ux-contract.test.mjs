@@ -16,18 +16,17 @@ test("activity rows preserve Solid reactivity and remount details on every expan
   assert.match(kit, /focusable=\{expandable\(\)\}/)
   assert.match(kit, /stopPropagation/)
   assert.match(kit, /marginTop=\{props\.compact \? 0 : 1\}/)
-  assert.match(kit, /paddingTop=\{1\}/)
-  assert.match(kit, /paddingBottom=\{1\}/)
-  assert.match(kit, /backgroundColor=\{statusSurface\(props\.status, props\.skin, active\(\)\)\}/)
+  assert.match(kit, /paddingTop=\{0\}/)
+  assert.match(kit, /paddingBottom=\{0\}/)
+  assert.match(kit, /backgroundColor=\{active\(\) \? props\.skin\.surfaceHover : undefined\}/)
 })
 
-test("execution lifecycle is authoritative before result parsing", async () => {
+test("structured result status wins over stale running lifecycle while execution errors remain authoritative", async () => {
   const kit = await source("components/kit.jsx")
-  assert.match(kit, /state\.status === "error".*"FAILED"/)
-  assert.match(kit, /state\.status === "running".*"RUNNING"/)
-  assert.match(kit, /state\.status === "pending"|return \{ phase: "pending"/)
-  assert.match(kit, /if \(lifecycle\.status\) return lifecycle\.status/)
-  assert.match(kit, /return resultStatus \?\? "PARTIAL SUCCESS"/)
+  assert.match(kit, /lifecycle\.phase === "error".*return "FAILED"/s)
+  assert.match(kit, /if \(resultStatus\) return resultStatus/)
+  assert.match(kit, /export function statusPending/)
+  assert.match(kit, /<b>\{props\.label\}<\/b><span.*> · <\/span>\{props\.summary\}/s)
 })
 
 test("all tool families have dedicated inspectors and compact item previews", async () => {
@@ -51,10 +50,10 @@ test("expanded inspectors lead with understandable outcomes before technical pro
     assert.match(body, /<OutcomeOverview/)
   }
   const read = await source("components/read-many.jsx")
-  assert.match(read, /What you received/)
-  assert.match(read, /What could not be read/)
+  assert.match(read, /Returned targets/)
+  assert.match(read, /Unavailable targets/)
   assert.match(read, /Not returned/)
-  assert.match(read, /Technical provenance/)
+  assert.match(read, /title="Provenance"/)
   assert.match(read, /Request an exact omitted range/)
 })
 
@@ -66,16 +65,17 @@ test("expanded inspectors use separated status-aware cards and bounded content p
   assert.match(kit, /pending=\{props\.pending === true\}/)
   assert.doesNotMatch(kit.slice(kit.indexOf("export function InspectorCard"), kit.indexOf("export function ContentPane")), /tone === "RUNNING"/)
   assert.match(kit, /export function PreviewList/)
-  assert.match(kit, /props\.limit \?\? 4/)
+  assert.match(kit, /props\.limit \?\? 6/)
+  assert.match(kit, /export function InspectorUnavailable/)
   assert.match(kit, /export function RawEvidence/)
-  assert.match(kit, /props\.limit \?\? 24/)
+  assert.match(kit, /props\.limit \?\? 12/)
   const edit = await source("components/edit-many.jsx")
   assert.match(edit, /Intended transaction/)
   assert.match(edit, /Rejected safely/)
   assert.match(edit, /Transaction safety/)
   const web = await source("components/web.jsx")
   assert.match(web, /backend attempts/)
-  assert.match(web, /Useful content returned/)
+  assert.match(web, /Extracted content/)
   assert.match(web, /<InspectorCard/)
   assert.match(web, /nested>/)
   const editNested = await source("components/edit-many.jsx")
@@ -84,6 +84,20 @@ test("expanded inspectors use separated status-aware cards and bounded content p
     const body = await source(`components/${file}`)
     assert.match(body, /<InspectorCard/)
   }
+})
+
+test("known tool families use plans or explicit inspector defects instead of routine raw dumps", async () => {
+  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "cbm.jsx"]) {
+    const body = await source(`components/${file}`)
+    assert.match(body, /InspectorUnavailable/)
+    assert.doesNotMatch(body, /RawEvidence/)
+    assert.match(body, /statusPending\(status\(\)\)/)
+  }
+  const read = await source("components/read-many.jsx")
+  assert.match(read, /label="Read"/)
+  assert.doesNotMatch(read, /Read \$\{items\(\)\.length\} targets/)
+  const editParser = await source("lib/edit-many.js")
+  assert.match(editParser, /declared.*consistency/s)
 })
 
 test("status surfaces remain subtle theme-aware secondary cues", async () => {
@@ -101,17 +115,93 @@ test("plugin renderer host participates in native transcript layout", async () =
   assert.match(manifest, /flexShrink=\{0\}/)
 })
 
-test("native-first IDE enriches only safe presentation slots and never owns behavior", async () => {
+test("IDE enriches only additive presentation slots and never replaces host chrome", async () => {
   const index = await source("index.tsx")
-  const ide = await source("components/native-ide.jsx")
-  const nativeSlots = index.slice(index.indexOf("api.slots.register({\n      order: 20"), index.indexOf("  } catch {", index.indexOf("api.slots.register({\n      order: 20")))
-  for (const slot of ["home_prompt_right", "session_prompt_right", "home_bottom", "sidebar_content"]) assert.match(nativeSlots, new RegExp(slot))
-  assert.match(ide, /NativePromptContext/)
-  assert.match(ide, /NativeHomeWorkspace/)
-  assert.match(ide, /NativeWorkspaceInspector/)
-  assert.match(ide, /OpenCode - MrAlony Customised Tool Edition/)
-  assert.match(ide, /Alonix .*renderers/)
-  assert.equal((nativeSlots.match(/sidebar_content/g) ?? []).length, 1)
-  assert.doesNotMatch(ide + nativeSlots, /keymap\.registerLayer|mode\.push|route\.register|route\.navigate|project\.open|session\.list|session\.create|session\.update|setDirectory|onKeyDown|focusable=/)
-  assert.doesNotMatch(nativeSlots, /home_logo|home_prompt\(.*mode="replace"|session_prompt\(.*mode="replace"/s)
+  const start = index.indexOf("api.slots.register({")
+  const slots = index.slice(start, index.indexOf("api.keymap.registerLayer", start))
+  for (const slot of ["home_prompt_right", "session_prompt_right", "home_bottom", "sidebar_content", "app_bottom"]) {
+    assert.equal((slots.match(new RegExp(slot, "g")) ?? []).length, 1, `${slot} must be registered exactly once`)
+  }
+  // Replacing these would take over native behaviour rather than enriching it.
+  assert.doesNotMatch(slots, /home_logo|"home_prompt"|"session_prompt"|mode="replace"|mode="single_winner"/)
+})
+
+test("slot renderers read session context from the slot props argument", async () => {
+  const index = await source("index.tsx")
+  // The host calls slots as (ctx, props); session_id lives on props.
+  assert.match(index, /session_prompt_right\(_ctx, props\)/)
+  assert.match(index, /sidebar_content\(_ctx, props\)/)
+  assert.match(index, /sessionID=\{props\.session_id\}/)
+  assert.doesNotMatch(index, /ctx\.session_id/)
+})
+
+test("IDE surfaces are presentation-only and delegate navigation to the host router", async () => {
+  for (const file of ["components/ide-surfaces.jsx", "components/ide-kit.jsx", "components/session-switcher.jsx"]) {
+    const body = await source(file)
+    assert.doesNotMatch(body, /keymap\.registerLayer|mode\.push|route\.register|slots\.register/, `${file} must not own host wiring`)
+    assert.doesNotMatch(body, /session\.(create|update|delete|fork)\(/, `${file} must not mutate sessions`)
+  }
+  // Navigation goes through one audited helper that uses the public router.
+  const runtime = await source("components/runtime.jsx")
+  assert.match(runtime, /export function openSession/)
+  assert.match(runtime, /api\.route\.navigate\("session", \{ sessionID \}\)/)
+})
+
+test("design tokens are theme-reactive rather than captured once at load", async () => {
+  const index = await source("index.tsx")
+  const runtime = await source("components/runtime.jsx")
+  assert.match(runtime, /export function createSkin/)
+  assert.match(runtime, /createMemo\(\(\) => \{/)
+  assert.match(runtime, /api\?\.theme\?\.current/)
+  // Tokens must be passed as an accessor so surfaces re-render on theme change.
+  assert.match(index, /tokens=\{tokens\}/)
+  assert.doesNotMatch(index, /const skin = \{ \.\.\.skinOf/)
+})
+
+test("animation runs on one shared clock that idles when unobserved", async () => {
+  const runtime = await source("components/runtime.jsx")
+  assert.match(runtime, /export function createClock/)
+  assert.match(runtime, /subscribers\(\) > 0/)
+  assert.match(runtime, /clearInterval\(timer\)/)
+  // Surfaces subscribe through the hook instead of creating their own timers.
+  for (const file of ["components/ide-kit.jsx", "components/ide-surfaces.jsx", "components/session-switcher.jsx"]) {
+    const body = await source(file)
+    assert.doesNotMatch(body, /setInterval|setTimeout/, `${file} must use the shared clock`)
+  }
+})
+
+test("the session store is event-driven, single-flighted, and failure-tolerant", async () => {
+  const runtime = await source("components/runtime.jsx")
+  assert.match(runtime, /session\.updated/)
+  assert.match(runtime, /session\.deleted/)
+  assert.match(runtime, /if \(inFlight\)/)
+  assert.match(runtime, /queued = true/)
+  assert.match(runtime, /clearTimeout\(debounce\)/)
+  // A failed refresh must keep the previous list instead of blanking the UI.
+  assert.match(runtime, /setStore\("error"/)
+  assert.doesNotMatch(runtime, /catch[\s\S]{0,120}setStore\("sessions", \[\]\)/)
+})
+
+test("the switcher supports search, keyboard navigation, quick slots, and pinning", async () => {
+  const switcher = await source("components/session-switcher.jsx")
+  assert.match(switcher, /applyKeyToQuery/)
+  assert.match(switcher, /moveIndex/)
+  assert.match(switcher, /scrollWindow/)
+  assert.match(switcher, /groupSessions/)
+  assert.match(switcher, /store\.togglePin/)
+  assert.match(switcher, /\^\[1-9\]\$/)
+  assert.match(switcher, /onKeyDown=\{handleKey\}/)
+  assert.match(switcher, /focusable/)
+  const index = await source("index.tsx")
+  assert.match(index, /alonix-ide\.sessions/)
+  assert.match(index, /slashName: "alonix-sessions"/)
+})
+
+test("plugin reactive state owns an explicit root and is disposed with the plugin", async () => {
+  const index = await source("index.tsx")
+  assert.match(index, /createRoot\(\(disposeRoot\) =>/)
+  assert.match(index, /scope\.disposeRoot\(\)/)
+  assert.match(index, /clearInterval\(poll\)/)
+  // Exactly one poller drives both the status surfaces and the toasts.
+  assert.equal((index.match(/setInterval/g) ?? []).length, 1)
 })

@@ -17,8 +17,13 @@ export function lifecycleOf(part) {
 
 export function resolvedStatus(part, resultStatus) {
   const lifecycle = lifecycleOf(part)
-  if (lifecycle.status) return lifecycle.status
-  return resultStatus ?? "PARTIAL SUCCESS"
+  if (lifecycle.phase === "error") return "FAILED"
+  if (resultStatus) return resultStatus
+  return lifecycle.status ?? "PARTIAL SUCCESS"
+}
+
+export function statusPending(status) {
+  return status === "RUNNING" || status === "PENDING"
 }
 
 export function statusTone(status, skin) {
@@ -28,9 +33,10 @@ export function statusTone(status, skin) {
   return skin.warning ?? skin.accent
 }
 
-export function statusLabel(status, lifecycle) {
-  if (lifecycle?.phase !== "completed") return lifecycle?.label ?? "working"
-  if (status === "SUCCESS") return "success"
+export function statusLabel(status) {
+  if (status === "RUNNING") return "running"
+  if (status === "PENDING") return "queued"
+  if (status === "SUCCESS") return "done"
   if (status === "FAILED") return "failed"
   return "partial"
 }
@@ -90,9 +96,9 @@ export function Activity(props) {
       marginTop={props.compact ? 0 : 1}
       paddingLeft={1}
       paddingRight={1}
-      paddingTop={1}
-      paddingBottom={1}
-      backgroundColor={statusSurface(props.status, props.skin, active())}
+      paddingTop={0}
+      paddingBottom={0}
+      backgroundColor={active() ? props.skin.surfaceHover : undefined}
       onMouseOver={() => setActive(true)}
       onMouseOut={() => setActive(false)}
       onMouseUp={toggle}
@@ -105,8 +111,7 @@ export function Activity(props) {
     >
       <box flexDirection="row" gap={1}>
         <StatusGlyph status={props.status} skin={props.skin} pending={props.pending} />
-        <text fg={props.skin.text}><b>{props.label}</b></text>
-        <text flexGrow={1} fg={props.status === "FAILED" ? props.skin.error : props.skin.text}>{props.summary}</text>
+        <text flexGrow={1} fg={props.status === "FAILED" ? props.skin.error : props.skin.text}><b>{props.label}</b><span style={{ fg: props.skin.muted }}> · </span>{props.summary}</text>
         {props.meta ? <text fg={statusTone(props.status, props.skin)}>{props.meta}</text> : null}
         {expandable() ? <text fg={active() ? statusTone(props.status, props.skin) : props.skin.muted}>{open() ? "▾" : "›"}</text> : null}
       </box>
@@ -127,11 +132,11 @@ export function ItemRow(props) {
 }
 
 export function PreviewList(props) {
-  const items = createMemo(() => Array.from(props.items ?? []).slice(0, props.limit ?? 4))
+  const items = createMemo(() => Array.from(props.items ?? []).slice(0, props.limit ?? 6))
   return (
     <box flexDirection="column" gap={0}>
       {items().map((item) => <ItemRow skin={props.skin} {...item} />)}
-      {(props.items?.length ?? 0) > (props.limit ?? 4) ? <text fg={props.skin.muted}>  +{props.items.length - (props.limit ?? 4)} more</text> : null}
+      {(props.items?.length ?? 0) > (props.limit ?? 6) ? <text fg={props.skin.muted}>  +{props.items.length - (props.limit ?? 6)} more</text> : null}
     </box>
   )
 }
@@ -205,6 +210,14 @@ export function DetailLines(props) {
   return <box flexDirection="column" gap={0}>{list().map((line, index) => <text key={index} fg={props.color ?? props.skin.muted}>{String(line).slice(0, props.width ?? 240)}</text>)}</box>
 }
 
+export function InspectorUnavailable(props) {
+  return (
+    <InspectorCard title="Inspector unavailable" skin={props.skin} status="FAILED" subtitle="The tool response could not be mapped to its dedicated inspector.">
+      <ContentPane skin={props.skin} title="What to do" lines={[props.message ?? "The execution result is preserved, but this renderer needs a parser update. Use the saved tool-output path if present and report this as a renderer defect."]} limit={5} tail={false} color={props.skin.error} />
+    </InspectorCard>
+  )
+}
+
 export function RawEvidence(props) {
-  return <Section title="Raw evidence" skin={props.skin} meta={`${props.tail === false ? "first" : "last"} ${props.limit ?? 24} lines`}><DetailLines skin={props.skin} lines={String(props.text ?? "").split(/\r?\n/)} limit={props.limit ?? 24} color={props.skin.muted} tail={props.tail} /></Section>
+  return <Section title={props.title ?? "Diagnostic evidence"} skin={props.skin} meta={`${props.tail === false ? "first" : "last"} ${props.limit ?? 12} lines`}><DetailLines skin={props.skin} lines={String(props.text ?? "").split(/\r?\n/)} limit={props.limit ?? 12} color={props.skin.muted} tail={props.tail} /></Section>
 }

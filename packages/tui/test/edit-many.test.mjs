@@ -67,6 +67,13 @@ test("parseEditResult captures unchanged no-op transactions", () => {
   }
 });
 
+test("parseEditResult keeps every file block in a multi-file section", () => {
+  const parsed = parseEditResult(`EDIT RESULT: SUCCESS\n\nWHAT HAPPENED: 3 file transaction(s) completed safely.\n\nAPPLIED (3):\nFILE UPDATED: C:/repo/a.js\n  Actions evaluated: 1\n  Final text size: 1 KB\n  Final SHA-256: aaaa\n\nFILE CREATED: C:/repo/b.js\n  Actions evaluated: 1\n  Final text size: 2 KB\n  Final SHA-256: bbbb\n\nFILE UPDATED: C:/repo/c.js\n  Actions evaluated: 2\n  Final text size: 3 KB\n  Final SHA-256: cccc\n\nUNCHANGED (0):\n- none\n\nREJECTED (0):\n- none\n\nREAD/WRITE RECOVERY (0):\n- none required`)
+  assert.equal(parsed.applied.length, 3)
+  assert.deepEqual(parsed.applied.map((item) => item.path), ["C:/repo/a.js", "C:/repo/b.js", "C:/repo/c.js"])
+  assert.deepEqual(parsed.consistency, [])
+})
+
 test("parseEditResult tolerates empty sections and non-reports", () => {
   const fixture = [
     "EDIT RESULT: SUCCESS",

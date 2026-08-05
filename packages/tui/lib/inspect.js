@@ -98,7 +98,15 @@ export function inputItems(tool, input) {
   if (tool === "alonix-web-search" || tool === "alonix-stealth-search-many") return (input?.queries ?? []).map((item) => ({ status: "PENDING", label: item.query, meta: item.backend ?? "" }))
   if (tool === "alonix-shell") return (input?.commands ?? []).map((item) => ({ status: "PENDING", label: item.label || item.command, meta: "queued" }))
   if (tool === "alonix-background-process") return (input?.operations ?? []).map((item, index) => ({ status: "PENDING", label: item.label || item.action || `operation ${index + 1}`, meta: item.action ?? "" }))
-  if (tool === "alonix-read-many") return [...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
-  if (tool === "alonix-edit-many") return (input?.actions ?? []).map((item) => ({ status: "PENDING", label: item.path, meta: item.operation }))
+  if (tool === "alonix-read-many") return [...new Set([...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)])].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
+  if (tool === "alonix-edit-many") {
+    const transactions = new Map()
+    for (const item of input?.actions ?? []) {
+      const current = transactions.get(item.path) ?? []
+      current.push(item.operation)
+      transactions.set(item.path, current)
+    }
+    return [...transactions].map(([path, operations]) => ({ status: "PENDING", label: path, meta: operations.join(" + ") }))
+  }
   return []
 }

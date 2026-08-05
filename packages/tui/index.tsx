@@ -1,6 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import type { JSX } from "@opentui/solid"
+import { useTerminalDimensions } from "@opentui/solid"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import { createMemo, createRoot, createSignal } from "solid-js"
 import {
   customTools,
   formatStateLog,
@@ -10,6 +12,7 @@ import {
   statePathForRoot,
   toastForTransition,
 } from "./lib/status.js"
+import { createTokens } from "./lib/design.js"
 import { BackgroundView } from "./components/background.jsx"
 import { EditManyView } from "./components/edit-many.jsx"
 import { ReadManyView } from "./components/read-many.jsx"
@@ -19,62 +22,12 @@ import { DiscoveryView } from "./components/discovery.jsx"
 import { WebView } from "./components/web.jsx"
 import { StealthView } from "./components/stealth.jsx"
 import { CbmView } from "./components/cbm.jsx"
-import { NativeHomeWorkspace, NativePromptContext, NativeWorkspaceInspector } from "./components/native-ide.jsx"
+import { ClockProvider, createClock, createSessionStore, createSkin } from "./components/runtime.jsx"
+import { HomeDeck, PromptContext, StatusBar, WorkspaceInspector } from "./components/ide-surfaces.jsx"
+import { SessionSwitcher } from "./components/session-switcher.jsx"
+import { ToolingStatusView } from "./components/tooling-status.jsx"
 
-const palette = {
-  panel: "#242424",
-  border: "#4a4a4a",
-  text: "#f0f0f0",
-  muted: "#a5a5a5",
-  accent: "#5f87ff",
-  success: "#5faf5f",
-  error: "#d75f5f",
-  warning: "#d7af5f",
-  surface: "#202124",
-  surfaceHover: "#292b30",
-  successSurface: "#1f2822",
-  successSurfaceHover: "#26342a",
-  errorSurface: "#2b2022",
-  errorSurfaceHover: "#38272a",
-  warningSurface: "#2b271e",
-  warningSurfaceHover: "#393225",
-  accentSurface: "#202631",
-  accentSurfaceHover: "#283247",
-  inset: "#191a1d",
-  section: "#8296b8",
-}
-
-function ink(map, name, fallback) {
-  return map?.[name] ?? fallback
-}
-
-function skinOf(theme) {
-  const map = theme?.current ?? {}
-  return {
-    panel: ink(map, "backgroundMenu", ink(map, "backgroundPanel", palette.panel)),
-    border: ink(map, "border", palette.border),
-    text: ink(map, "text", palette.text),
-    muted: ink(map, "textMuted", palette.muted),
-    accent: ink(map, "primary", palette.accent),
-    success: ink(map, "success", palette.success),
-    error: ink(map, "error", palette.error),
-    warning: ink(map, "warning", palette.warning),
-    surface: ink(map, "backgroundElement", ink(map, "backgroundPanel", palette.surface)),
-    surfaceHover: ink(map, "backgroundMenu", palette.surfaceHover),
-    successSurface: ink(map, "backgroundSuccess", palette.successSurface),
-    successSurfaceHover: ink(map, "backgroundSuccessHover", palette.successSurfaceHover),
-    errorSurface: ink(map, "backgroundError", palette.errorSurface),
-    errorSurfaceHover: ink(map, "backgroundErrorHover", palette.errorSurfaceHover),
-    warningSurface: ink(map, "backgroundWarning", palette.warningSurface),
-    warningSurfaceHover: ink(map, "backgroundWarningHover", palette.warningSurfaceHover),
-    accentSurface: ink(map, "backgroundPrimary", palette.accentSurface),
-    accentSurfaceHover: ink(map, "backgroundPrimaryHover", palette.accentSurfaceHover),
-    inset: ink(map, "background", palette.inset),
-    section: palette.section,
-  }
-}
-
-type Skin = ReturnType<typeof skinOf>
+type Tokens = ReturnType<typeof createTokens>
 
 type RenderProps = {
   input: Record<string, unknown>
@@ -84,7 +37,7 @@ type RenderProps = {
   part: unknown
 }
 
-type RendererView = (props: RenderProps & { skin: Skin }) => JSX.Element
+type RendererView = (props: RenderProps & { skin: Tokens }) => JSX.Element
 
 function rendererFor(tool: string): RendererView {
   if (tool === "alonix-read-many") return ReadManyView
@@ -104,11 +57,32 @@ type RendererRegistration = {
   failed: string[]
 }
 
+/**
+ * Transcript renderers keep the established `skin` prop contract. The IDE
+ * design tokens are a superset of the previous skin keys, so activity surfaces
+ * inherit the new palette without changing their own code.
+ */
+function toolSkin(tokens: Tokens) {
+  return {
+    ...tokens,
+    panel: tokens.raised,
+    surface: tokens.surface,
+    surfaceHover: tokens.hover,
+    inset: tokens.inset,
+    section: tokens.faint,
+    successSurfaceHover: tokens.successSurfaceHover,
+    errorSurfaceHover: tokens.errorSurfaceHover,
+    warningSurfaceHover: tokens.warningSurfaceHover,
+    accentSurfaceHover: tokens.accentSurfaceHover,
+  }
+}
+
 const tui: TuiPlugin = async (api, options) => {
   if (options?.enabled === false) return
 
   const root = rootFromModule(import.meta.url)
   const statePath = statePathForRoot(root)
+  const motion = options?.animations !== false
 
   // Make generic custom-tool output visible even before the patched binary exists.
   try {
@@ -117,28 +91,71 @@ const tui: TuiPlugin = async (api, options) => {
     // KV is not namespaced; failure is harmless.
   }
 
+  const registration: RendererRegistration = {
+    available: false,
+    registered: 0,
+    failed: [],
+  }
+
+  // All plugin-level reactive state lives in one explicit root: this function is
+  // async, so no ambient Solid owner is guaranteed when it runs, and memos
+  // created without an owner would never be disposed. The root is torn down with
+  // the plugin lifecycle.
+  const scope = createRoot((disposeRoot) => {
+    const tokens = createSkin(api, { motion })
+    const clock = createClock(motion)
+    const store = createSessionStore(api)
+    const [toolingState, setToolingState] = createSignal(readStateSync(statePath))
+    const [registered, setRegistered] = createSignal(0)
+    const tooling = createMemo(() => {
+      const state = toolingState()
+      return {
+        state,
+        indicator: indicatorFor(state),
+        registration: { ...registration, registered: registered() },
+      }
+    })
+    return { tokens, clock, store, toolingState, setToolingState, setRegistered, tooling, disposeRoot }
+  })
+  const { tokens, clock, store, toolingState, setToolingState, setRegistered, tooling } = scope
+
   // Register rich renderers through the patched core's api.toolRenderers.
-  const skin = { ...skinOf(api.theme), motion: options?.animations !== false }
   const extended = api as TuiPluginApi & {
     toolRenderers?: { register(name: string, renderer: (props: RenderProps) => JSX.Element): void | (() => void) }
   }
   const registry = extended.toolRenderers
-  const registration: RendererRegistration = {
-    available: Boolean(registry && typeof registry.register === "function"),
-    registered: 0,
-    failed: [],
-  }
+  registration.available = Boolean(registry && typeof registry.register === "function")
   if (registry && typeof registry.register === "function") {
     for (const name of customTools) {
       try {
         const View = rendererFor(name)
-        const dispose = registry.register(name, (props) => <View skin={skin} {...props} />)
+        const dispose = registry.register(name, (props) => <View skin={toolSkin(tokens())} {...props} />)
         if (typeof dispose === "function") api.lifecycle.onDispose(dispose)
         registration.registered += 1
       } catch {
         registration.failed.push(name)
       }
     }
+    setRegistered(registration.registered)
+  }
+
+  const openSwitcher = () => {
+    api.ui.dialog.setSize("large")
+    api.ui.dialog.replace(() => {
+      const dimensions = useTerminalDimensions()
+      return (
+        <ClockProvider clock={clock}>
+          <SessionSwitcher
+            api={api}
+            tokens={tokens}
+            store={store}
+            dimensions={dimensions}
+            onClose={() => api.ui.dialog.clear()}
+          />
+        </ClockProvider>
+      )
+    })
+    store.refresh()
   }
 
   try {
@@ -146,23 +163,45 @@ const tui: TuiPlugin = async (api, options) => {
       order: 20,
       slots: {
         home_prompt_right() {
-          return <NativePromptContext api={api} skin={skin} />
+          return (
+            <ClockProvider clock={clock}>
+              <PromptContext api={api} tokens={tokens} />
+            </ClockProvider>
+          )
         },
-        session_prompt_right(ctx) {
-          return <NativePromptContext api={api} skin={skin} sessionID={ctx.session_id} />
+        session_prompt_right(_ctx, props) {
+          return (
+            <ClockProvider clock={clock}>
+              <PromptContext api={api} tokens={tokens} sessionID={props.session_id} />
+            </ClockProvider>
+          )
         },
         home_bottom() {
-          return <NativeHomeWorkspace api={api} skin={skin} />
-        },
-        sidebar_content(ctx) {
-          const toolingState = readStateSync(statePath)
+          const dimensions = useTerminalDimensions()
           return (
-            <NativeWorkspaceInspector
-              api={api}
-              skin={skin}
-              sessionID={ctx.session_id}
-              tooling={{ state: toolingState, indicator: indicatorFor(toolingState), registration }}
-            />
+            <ClockProvider clock={clock}>
+              <HomeDeck api={api} tokens={tokens} store={store} dimensions={dimensions} />
+            </ClockProvider>
+          )
+        },
+        sidebar_content(_ctx, props) {
+          return (
+            <ClockProvider clock={clock}>
+              <WorkspaceInspector
+                api={api}
+                tokens={tokens}
+                store={store}
+                sessionID={props.session_id}
+                tooling={tooling()}
+              />
+            </ClockProvider>
+          )
+        },
+        app_bottom() {
+          return (
+            <ClockProvider clock={clock}>
+              <StatusBar api={api} tokens={tokens} store={store} tooling={tooling()} />
+            </ClockProvider>
           )
         },
       },
@@ -171,9 +210,16 @@ const tui: TuiPlugin = async (api, options) => {
     // slots.register is plugin-context only; ignore otherwise.
   }
 
-  // Command: alonix-toolings status details dialog.
   api.keymap.registerLayer({
     commands: [
+      {
+        name: "alonix-ide.sessions",
+        title: "Alonix session switcher",
+        category: "Session",
+        namespace: "palette",
+        slashName: "alonix-sessions",
+        run: openSwitcher,
+      },
       {
         name: "alonix-toolings.status",
         title: "Tooling status",
@@ -181,16 +227,11 @@ const tui: TuiPlugin = async (api, options) => {
         namespace: "palette",
         slashName: "alonix-toolings",
         run() {
-          const state = readStateSync(statePath)
-          const skin = skinOf(api.theme)
           api.ui.dialog.setSize("large")
           api.ui.dialog.replace(() => (
-            <box paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1} flexDirection="column">
-              <text fg={skin.text}>
-                <b>Sparkly tooling status</b>
-              </text>
-              <text fg={skin.muted}>{formatStateLog(state)}</text>
-            </box>
+            <ClockProvider clock={clock}>
+              <ToolingStatusView tokens={tokens} tooling={tooling()} log={formatStateLog(toolingState())} />
+            </ClockProvider>
           ))
         },
       },
@@ -198,10 +239,11 @@ const tui: TuiPlugin = async (api, options) => {
     bindings: [],
   })
 
-  // Live patch-progress toasts, one per transition.
+  // Live patch-progress toasts, one per transition, from the same poller.
   let previous: unknown = null
   const poll = setInterval(() => {
     const state = readStateSync(statePath)
+    setToolingState(state)
     const toast = toastForTransition(previous, state)
     previous = state
     if (toast) {
@@ -212,7 +254,10 @@ const tui: TuiPlugin = async (api, options) => {
       }
     }
   }, 750)
-  api.lifecycle.onDispose(() => clearInterval(poll))
+  api.lifecycle.onDispose(() => {
+    clearInterval(poll)
+    scope.disposeRoot()
+  })
 }
 
 const plugin: TuiPluginModule & { id: string } = {
