@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
-import { declaredCounts, reconcileBatch, visibleOutcome } from "../lib/batch.js"
+import { declaredCounts, inputPlanAvailable, pendingPlanSummary, reconcileBatch, visibleOutcome } from "../lib/batch.js"
 import { inputItems, parseStealth } from "../lib/inspect.js"
 import { Activity, ContentPane, InspectorCard, InspectorDegraded, InspectorUnavailable, lifecycleOf, MetaGrid, OutcomeOverview, PreviewList, resolvedStatus, Section, statusLabel, statusPending } from "./kit.jsx"
 function statusResult(text, tool) {
@@ -17,16 +17,17 @@ export function StealthView(props) {
   const resultStatus = createMemo(() => parsed()?.status ?? simple()?.status ?? null)
   const status = createMemo(() => resolvedStatus(props.part, resultStatus()))
   const plan = createMemo(() => inputItems(props.tool, props.input))
+  const planReady = createMemo(() => inputPlanAvailable(props.tool, props.input))
   const batch = createMemo(() => reconcileBatch(plan(), parsed()?.items ?? [], { meta: (_requested, result) => result.http || result.outcome || result.meta }))
   const items = createMemo(() => batch().records)
   const counts = createMemo(() => declaredCounts(parsed()?.summary))
   const visible = createMemo(() => visibleOutcome(items()))
-  const summary = createMemo(() => parsed() ? `${counts().succeeded ?? visible().succeeded}/${batch().plannedCount} items succeeded${batch().omitted.length ? ` · ${batch().omitted.length} details omitted` : ""}` : simple()?.summary ?? `${batch().plannedCount} item${batch().plannedCount === 1 ? "" : "s"}`)
+  const summary = createMemo(() => parsed() ? `${counts().succeeded ?? visible().succeeded}/${batch().plannedCount} items succeeded${batch().omitted.length ? ` · ${batch().omitted.length} details omitted` : ""}` : simple()?.summary ?? (props.tool === "alonix-stealth-status" ? "checking Tor readiness" : props.tool === "alonix-stealth-rotate-tor" ? "requesting a new Tor circuit" : pendingPlanSummary(planReady(), batch().plannedCount, "item")))
   const details = () => {
     const result = parsed()
     if (result) return <><OutcomeOverview skin={props.skin} status={result.status} summary={result.summary} facts={[["items requested", batch().plannedCount], ["successful (declared)", counts().succeeded], ["visible result blocks", batch().observedCount], ["omitted result blocks", batch().omitted.length], ["mode", result.kind]]} meaning={batch().omitted.length ? ["The original request plan remains authoritative even when bounded output omits item blocks."] : ["Tor/privacy readiness is separate from each page or query outcome."]} /><InspectorCard title="Privacy boundary" skin={props.skin} status={result.status} meta="Tor"><text fg={props.skin.text}>{result.tor}</text></InspectorCard><Section title="Item results" skin={props.skin}>{items().map((item) => item.detailAvailable ? <InspectorCard title={`${item.number}. ${item.titleText || item.title || item.label}`} skin={props.skin} status={item.status} meta={item.http || item.outcome} subtitle={item.status === "FAILED" ? item.error : item.finalUrl}>{item.content ? <ContentPane title="Returned evidence" skin={props.skin} lines={item.content.split(/\r?\n/)} limit={18} tail={false} /> : null}<MetaGrid skin={props.skin} entries={[["outcome", item.outcome], ["completeness", item.completeness], ["error", item.error]]} /></InspectorCard> : <InspectorDegraded skin={props.skin} title={`${item.number}. ${item.label}`} subtitle="This requested item was omitted from the bounded transcript output." />)}</Section></>
     if (simple()) return <><OutcomeOverview skin={props.skin} status={simple().status} summary={simple().summary} meaning={[props.tool === "alonix-stealth-status" ? "This checks readiness only; it does not fetch a page." : "The managed Tor boundary returned this rotation outcome."]} /><ContentPane title="Boundary details" skin={props.skin} lines={simple().lines} limit={12} tail={false} /></>
-    if (statusPending(status())) return <InspectorCard title={`${labelFor(props.tool)} plan`} skin={props.skin} status={status()} pending>{items().length ? <PreviewList skin={props.skin} items={items()} limit={12} /> : <text fg={props.skin.muted}>Waiting for managed Tor boundary response.</text>}</InspectorCard>
+    if (statusPending(status())) return <InspectorCard title={planReady() ? `${labelFor(props.tool)} plan` : `Preparing ${labelFor(props.tool).toLowerCase()}`} skin={props.skin} status={status()} pending meta={planReady() && items().length ? `${items().length} item(s)` : "input pending"}>{items().length ? <PreviewList skin={props.skin} items={items()} limit={12} /> : <text fg={props.skin.muted}>{props.tool === "alonix-stealth-status" || props.tool === "alonix-stealth-rotate-tor" ? "Waiting for the managed Tor boundary response." : "Waiting for OpenCode to attach the validated request input."}</text>}</InspectorCard>
     if (lifecycle().phase === "error") return <InspectorUnavailable skin={props.skin} message={lifecycle().error} />
     return <InspectorDegraded skin={props.skin} items={items()} message="The completed response was bounded before its structured stealth report. The request plan remains intact." />
   }

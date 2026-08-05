@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
 import { parseReadResult } from "../lib/read-many.js"
-import { reconcileBatch } from "../lib/batch.js"
+import { inputPlanAvailable, pendingPlanSummary, reconcileBatch } from "../lib/batch.js"
 import { inputItems } from "../lib/inspect.js"
 import { Activity, ContentPane, displayPath, InspectorCard, InspectorDegraded, InspectorUnavailable, lifecycleOf, MetaGrid, OutcomeOverview, PreviewList, resolvedStatus, Section, statusLabel, statusPending } from "./kit.jsx"
 
@@ -30,14 +30,15 @@ export function ReadManyView(props) {
   const lifecycle = createMemo(() => lifecycleOf(props.part))
   const status = createMemo(() => resolvedStatus(props.part, parsed()?.status))
   const plan = createMemo(() => inputItems("alonix-read-many", props.input))
+  const planReady = createMemo(() => inputPlanAvailable("alonix-read-many", props.input))
   const observed = createMemo(() => parsed() ? [...parsed().files.map((file) => ({ status: fileStatus(file, parsed()), label: file.path, meta: file.bounded ? "partial" : file.kind })), ...parsed().unavailable.map((item) => ({ status: "FAILED", label: item.path, meta: "unavailable" }))] : [])
   const batch = createMemo(() => reconcileBatch(plan(), observed()))
   const items = createMemo(() => batch().records.map((item) => ({ ...item, label: displayPath(item.label, 84) })))
-  const summary = createMemo(() => parsed() ? `${batch().plannedCount} target${batch().plannedCount === 1 ? "" : "s"} · ${parsed().files.length} returned${parsed().unavailable.length ? ` · ${parsed().unavailable.length} unavailable` : ""}${batch().omitted.length ? ` · ${batch().omitted.length} details omitted` : ""}` : `${requestedCount(props.input)} target${requestedCount(props.input) === 1 ? "" : "s"}`)
+  const summary = createMemo(() => parsed() ? `${batch().plannedCount} target${batch().plannedCount === 1 ? "" : "s"} · ${parsed().files.length} returned${parsed().unavailable.length ? ` · ${parsed().unavailable.length} unavailable` : ""}${batch().omitted.length ? ` · ${batch().omitted.length} details omitted` : ""}` : pendingPlanSummary(planReady(), requestedCount(props.input), "target"))
   const details = () => {
     const result = parsed()
     if (!result) {
-      if (statusPending(status())) return <InspectorCard title="Read plan" skin={props.skin} status={status()} pending meta={`${requestedCount(props.input)} target(s)`}><PreviewList skin={props.skin} items={items()} limit={12} /></InspectorCard>
+      if (statusPending(status())) return <InspectorCard title={planReady() ? "Read plan" : "Preparing read"} skin={props.skin} status={status()} pending meta={planReady() ? `${requestedCount(props.input)} target(s)` : "input pending"}>{planReady() ? <PreviewList skin={props.skin} items={items()} limit={12} /> : <text fg={props.skin.muted}>Waiting for OpenCode to attach the validated read targets.</text>}</InspectorCard>
       if (lifecycle().phase === "error") return <InspectorUnavailable skin={props.skin} message={lifecycle().error} />
       return <InspectorDegraded skin={props.skin} items={items()} message={`The completed read output was bounded before the READ RESULT header. All ${requestedCount(props.input)} requested targets remain visible; source evidence is preserved in OpenCode's saved tool output.`} />
     }
@@ -51,5 +52,5 @@ export function ReadManyView(props) {
       <InspectorCard title="Provenance" skin={props.skin} status={result.recovery.length ? "PARTIAL SUCCESS" : "SUCCESS"}><MetaGrid skin={props.skin} entries={[["shared budget", result.budget["Shared total"]], ["evidence used", result.budget["Complete-file evidence used"]], ["remaining range budget", result.budget["Remaining range budget"]], ["unstable sources", result.editContext["Unstable sources"]]]} />{result.recovery.length ? <ContentPane title="Recovery" skin={props.skin} lines={result.recovery} limit={10} tail={false} /> : null}</InspectorCard>
     </>
   }
-  return <Activity label="Read" summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={<PreviewList skin={props.skin} items={items()} />} details={details} />
+  return <Activity label="Read" summary={summary()} meta={statusLabel(status())} status={status()} pending={statusPending(status())} skin={props.skin} preview={items().length ? <PreviewList skin={props.skin} items={items()} /> : null} details={details} />
 }

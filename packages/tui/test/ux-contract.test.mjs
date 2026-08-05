@@ -86,8 +86,27 @@ test("expanded inspectors use separated status-aware cards and bounded content p
   }
 })
 
+test("pending batch inspectors never present an unhydrated input frame as a real zero-item plan", async () => {
+  const batch = await source("lib/batch.js")
+  assert.match(batch, /export function inputPlanAvailable/)
+  assert.match(batch, /export function pendingPlanSummary/)
+  assert.match(batch, /return `\$\{singular\} input pending`/)
+  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx", "discovery.jsx", "cbm.jsx"]) {
+    const body = await source(`components/${file}`)
+    assert.match(body, /planReady/)
+    assert.match(body, /input pending/)
+  }
+  const shell = await source("components/shell.jsx")
+  assert.doesNotMatch(shell, /: `\$\{batch\(\)\.plannedCount\} command/)
+  assert.match(shell, /Waiting for OpenCode to attach the validated command input/)
+  const discovery = await source("components/discovery.jsx")
+  assert.doesNotMatch(discovery, /\? String\(props\.input\?\.file_pattern \?\? "files"\)/)
+  const cbm = await source("components/cbm.jsx")
+  assert.doesNotMatch(cbm, /\?\? "indexed evidence"/)
+})
+
 test("known tool families preserve plans and degrade bounded completed output without false renderer defects", async () => {
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx"]) {
+  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx", "discovery.jsx", "cbm.jsx"]) {
     const body = await source(`components/${file}`)
     assert.match(body, /InspectorDegraded/)
     assert.match(body, /lifecycle\(\)\.phase === "error"/)

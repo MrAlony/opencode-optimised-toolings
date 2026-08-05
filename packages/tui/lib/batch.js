@@ -22,6 +22,25 @@ export function declaredCounts(text) {
   return { succeeded: null, total: null }
 }
 
+export function inputPlanAvailable(tool, input) {
+  if (tool === "alonix-shell") return Array.isArray(input?.commands) && input.commands.length > 0
+  if (tool === "alonix-background-process") return Array.isArray(input?.operations) && input.operations.length > 0
+  if (tool === "alonix-web-fetch-many" || tool === "alonix-stealth-fetch-many") return Array.isArray(input?.requests) && input.requests.length > 0
+  if (tool === "alonix-web-search" || tool === "alonix-stealth-search-many") return Array.isArray(input?.queries) && input.queries.length > 0
+  if (tool === "alonix-read-many") return (input?.paths?.length ?? 0) + (input?.requests?.length ?? 0) > 0
+  if (tool === "alonix-edit-many") return Array.isArray(input?.actions) && input.actions.length > 0
+  if (tool === "alonix-search") return Boolean(String(input?.query ?? "").trim() && String(input?.base_dir ?? "").trim() && String(input?.file_pattern ?? "").trim())
+  if (tool === "alonix-explore") return Boolean(String(input?.base_dir ?? "").trim())
+  if (tool === "alonix-index-project") return Boolean(String(input?.project ?? "").trim() && String(input?.action ?? "").trim())
+  if (tool === "alonix-index-context" || tool === "alonix-index-investigate" || tool === "alonix-index-memory") return Boolean(String(input?.project ?? "").trim())
+  return true
+}
+
+export function pendingPlanSummary(available, count, singular, plural = `${singular}s`) {
+  if (!available) return `${singular} input pending`
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
 export function reconcileBatch(plan, observed, options = {}) {
   const requested = Array.from(plan ?? [])
   const actual = Array.from(observed ?? [])

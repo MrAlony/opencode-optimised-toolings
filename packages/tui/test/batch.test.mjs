@@ -1,6 +1,22 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { declaredCounts, reconcileBatch, visibleOutcome } from "../lib/batch.js"
+import { declaredCounts, inputPlanAvailable, pendingPlanSummary, reconcileBatch, visibleOutcome } from "../lib/batch.js"
+
+test("pending input hydration is distinct from a real zero-item plan", () => {
+  assert.equal(inputPlanAvailable("alonix-shell", {}), false)
+  assert.equal(inputPlanAvailable("alonix-shell", { commands: [] }), false)
+  assert.equal(inputPlanAvailable("alonix-shell", { commands: [{ command: "npm test" }] }), true)
+  assert.equal(inputPlanAvailable("alonix-read-many", { paths: [], requests: [] }), false)
+  assert.equal(inputPlanAvailable("alonix-read-many", { requests: [{ path: "a.js", ranges: [] }] }), true)
+  assert.equal(inputPlanAvailable("alonix-search", {}), false)
+  assert.equal(inputPlanAvailable("alonix-search", { query: "x", base_dir: ".", file_pattern: "**/*" }), true)
+  assert.equal(inputPlanAvailable("alonix-explore", { base_dir: "." }), true)
+  assert.equal(inputPlanAvailable("alonix-index-project", { project: "repo" }), false)
+  assert.equal(inputPlanAvailable("alonix-index-project", { project: "repo", action: "list" }), true)
+  assert.equal(inputPlanAvailable("alonix-index-context", { project: "repo" }), true)
+  assert.equal(pendingPlanSummary(false, 0, "command"), "command input pending")
+  assert.equal(pendingPlanSummary(true, 2, "query", "queries"), "2 queries")
+})
 
 test("request plan cardinality survives truncated per-item output", () => {
   const plan = [
