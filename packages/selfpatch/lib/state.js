@@ -59,14 +59,60 @@ export async function readState(root) {
   }
 }
 
+/**
+ * Persist progress state atomically.
+ *
+ * The write is a temp file plus a rename so a reader never observes a partial
+ * document. Both steps can still fail for reasons that have nothing to do with
+ * patching: the runtime directory can be removed by a concurrent clean, a
+ * previous crash can leave a stale temp file, and antivirus can briefly lock a
+ * freshly written file on Windows.
+ *
+ * State is progress reporting, not the patch itself, so a failure here must not
+ * surface as "Self-patch failed". Each attempt recreates the directory, uses a
+ * unique temp name, and falls back to a direct write; if it still fails the
+ * error is swallowed and reported through the return value.
+ */
 export async function writeState(root, state) {
   const file = stateFile(root)
   const dir = path.dirname(file)
-  await fs.mkdir(dir, { recursive: true })
-  const tmp = path.join(dir, `.selfpatch-state-${process.pid}.tmp`)
   const body = JSON.stringify({ ...defaultState(), ...state, updatedAt: new Date().toISOString() }, null, 2)
-  await fs.writeFile(tmp, body, { encoding: "utf8", mode: 0o600 })
-  await fs.rename(tmp, file)
+
+  let lastError = null
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    // Recreate on every attempt: the directory may have been removed since the
+    // last one, which is exactly the ENOENT-on-rename failure.
+    try {
+      await fs.mkdir(dir, { recursive: true })
+    } catch (error) {
+      lastError = error
+      continue
+    }
+
+    // A unique suffix keeps concurrent writers, and stale temp files from a
+    // previous crash, from colliding.
+    const tmp = path.join(dir, `.selfpatch-state-${process.pid}-${Date.now()}-${attempt}.tmp`)
+    try {
+      await fs.writeFile(tmp, body, { encoding: "utf8", mode: 0o600 })
+      await fs.rename(tmp, file)
+      return true
+    } catch (error) {
+      lastError = error
+      await fs.rm(tmp, { force: true }).catch(() => {})
+    }
+  }
+
+  // Last resort: a non-atomic write still beats losing the status entirely.
+  try {
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(file, body, { encoding: "utf8", mode: 0o600 })
+    return true
+  } catch (error) {
+    lastError = error
+  }
+
+  void lastError
+  return false
 }
 
 export async function sha256File(file) {

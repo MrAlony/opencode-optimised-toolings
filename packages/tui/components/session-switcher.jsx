@@ -7,12 +7,13 @@
 
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
-import { applyKeyToQuery, classifyKey, moveIndex, scrollWindow } from "../lib/keys.js"
+import { classifyKey, moveIndex, scrollWindow } from "../lib/keys.js"
 import { fit, switcherLayout } from "../lib/layout.js"
 import { flattenGroups, groupSessions, summarizeSessions } from "../lib/sessions.js"
 import { compactPath } from "../lib/workspace.js"
 import { Badge, DiffStat, EmptyState, KeyHints, Row, Rule, SectionLabel, Spinner, StatLine } from "./ide-kit.jsx"
-import { activeSessionID, openSession, useClock } from "./runtime.jsx"
+import { activeSessionID, openSession } from "./runtime.jsx"
+import { TextInput } from "./controls.jsx"
 
 const HINTS = [
   { key: "↑↓", label: "move" },
@@ -129,7 +130,6 @@ export function SessionSwitcher(props) {
   const [query, setQuery] = createSignal("")
   const [index, setIndex] = createSignal(0)
   const [offset, setOffset] = createSignal(0)
-  const clock = useClock(() => tokens().motion !== false)
 
   // Sized against the host dialog panel, not the terminal: the dialog is a
   // fixed-width container, so terminal-derived widths overflow it.
@@ -190,12 +190,6 @@ export function SessionSwitcher(props) {
       }
     }
 
-    const next = applyKeyToQuery(query(), event)
-    if (next !== query()) {
-      setQuery(next)
-      setIndex(0)
-      setOffset(0)
-    }
   }
 
   // Flatten groups into renderable entries so headers and rows share one index.
@@ -241,16 +235,13 @@ export function SessionSwitcher(props) {
       paddingRight={2}
       paddingBottom={1}
       gap={1}
-      focusable
-      focused
-      onKeyDown={handleKey}
     >
       <box flexDirection="row" gap={1} flexShrink={0} alignItems="center">
         <text fg={tokens().accent} wrapMode="none" selectable={false}>
           {GLYPH.diamond}
         </text>
         <text fg={tokens().text} wrapMode="none" selectable={false}>
-          <b>Sessions</b>
+          <b>Open a chat</b>
         </text>
         <Badge tokens={tokens()} tone="neutral">
           {summary().total}
@@ -271,19 +262,23 @@ export function SessionSwitcher(props) {
         </Show>
       </box>
 
-      <box flexDirection="row" gap={1} flexShrink={0} backgroundColor={tokens().surface} paddingLeft={1} paddingRight={1}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
-          {GLYPH.pointer}
-        </text>
-        <text fg={query() ? tokens().text : tokens().faint} wrapMode="none" selectable={false}>
-          {query() || "Filter sessions…"}
-        </text>
-        <Show when={tokens().motion !== false}>
-          <text fg={tokens().accent} wrapMode="none" selectable={false}>
-            {Math.floor(clock() / 520) % 2 === 0 ? GLYPH.caret : " "}
-          </text>
-        </Show>
-      </box>
+      <TextInput
+        tokens={tokens()}
+        glyph={GLYPH.pointer}
+        value={query()}
+        placeholder="Search previous chats"
+        autoFocus
+        onInput={(value) => {
+          setQuery(value)
+          setIndex(0)
+          setOffset(0)
+        }}
+        onSubmit={() => {
+          const row = selected()
+          if (row) open(row.id)
+        }}
+        onKeyDown={handleKey}
+      />
 
       <box flexDirection="row" flexShrink={0}>
         <box flexDirection="column" flexGrow={1} minWidth={0}>

@@ -58,10 +58,16 @@ export async function patchFileContent(file, replacements) {
   let current = before
   for (const item of replacements) {
     const count = item.count ?? 1
+    const replacementOccurrences = current.split(item.replace).length - 1
+    // Replacement bodies can intentionally contain their original anchor, so
+    // exact replacement presence must be checked before counting the anchor.
+    if (replacementOccurrences === count) continue
+
     const occurrences = current.split(item.search).length - 1
     if (occurrences !== count) {
       throw new Error(
-        `patch step ${JSON.stringify(item.name ?? item.search.slice(0, 60))} expected ${count} occurrence(s), found ${occurrences}`
+        `patch step ${JSON.stringify(item.name ?? item.search.slice(0, 60))} expected ${count} original or already-applied replacement occurrence(s), ` +
+          `found original=${occurrences}, replacement=${replacementOccurrences}`
       )
     }
     current = current.split(item.search).join(item.replace)
@@ -80,27 +86,52 @@ export async function applyManifest(sourceRoot, manifest) {
   for (const entry of manifest.create ?? []) {
     const file = path.join(sourceRoot, entry.path)
     if (await exists(file)) {
-      if (entry.beforeSha256) {
-        const sha = await sha256File(file)
-        if (sha !== entry.beforeSha256) {
-          throw new Error(`create target ${entry.path} unexpected: sha ${sha}`)
-        }
-      } else {
-        throw new Error(`create target ${entry.path} already exists; refusing to overwrite`)
-      }
+      const current = await fs.readFile(file, "utf8")
+      if (current === entry.content) continue
+      const sha = await sha256File(file)
+      throw new Error(`create target ${entry.path} already exists with different content: sha ${sha}`)
     }
     staged.push({ file, content: entry.content })
   }
   for (const entry of manifest.files ?? []) {
     const file = path.join(sourceRoot, entry.path)
-    const sha = await sha256File(file)
-    if (sha !== entry.beforeSha256) {
+    const before = await fs.readFile(file, "utf8")
+    const sha = createHash("sha256").update(before).digest("hex")
+    if (sha === entry.beforeSha256) {
+      staged.push({ file, content: await patchFileContent(file, entry.replacements) })
+      continue
+    }
+
+    // Files are written as complete staged bodies, so marker-loss recovery has
+    // exactly one valid non-pristine state: every replacement is fully applied.
+    // Reverse those replacements and require the official release fingerprint;
+    // this rejects mixed, truncated, or externally modified content.
+    let restored = before
+    try {
+      for (const item of [...entry.replacements].reverse()) {
+        const count = item.count ?? 1
+        const replacementOccurrences = restored.split(item.replace).length - 1
+        if (replacementOccurrences !== count) {
+          throw new Error(
+            `step ${JSON.stringify(item.name ?? item.search.slice(0, 60))} is not fully applied ` +
+              `(replacement=${replacementOccurrences})`
+          )
+        }
+        restored = restored.split(item.replace).join(item.search)
+      }
+    } catch (error) {
       throw new Error(
-        `patch target ${entry.path} fingerprint mismatch: expected ${entry.beforeSha256}, got ${sha}. ` +
-          `The extracted source differs from the expected release; refusing to patch blindly.`
+        `patch target ${entry.path} fingerprint mismatch: expected ${entry.beforeSha256}, got ${sha}; ` +
+          `the file is neither pristine nor the exact patched result. ${error.message}`
       )
     }
-    staged.push({ file, content: await patchFileContent(file, entry.replacements) })
+    const restoredSha = createHash("sha256").update(restored).digest("hex")
+    if (restoredSha !== entry.beforeSha256) {
+      throw new Error(
+        `patch target ${entry.path} fingerprint mismatch: expected ${entry.beforeSha256}, got ${sha}; ` +
+          `reversing the manifest produced ${restoredSha}, so foreign changes are present.`
+      )
+    }
   }
   for (const item of staged) {
     await fs.mkdir(path.dirname(item.file), { recursive: true })
@@ -128,9 +159,29 @@ export async function manifestSha256(manifest) {
   return createHash("sha256").update(JSON.stringify(manifest)).digest("hex")
 }
 
+const SOURCE_SENTINELS = [
+  "bun.lock",
+  "packages/opencode/script/build.ts",
+  "packages/plugin/src/tui.ts",
+  "packages/tui/src/app.tsx",
+  "packages/tui/src/plugin/adapters.tsx",
+  "packages/tui/src/routes/session/index.tsx",
+]
+
+export async function sourceReady(dir) {
+  if (!(await exists(dir))) return false
+  for (const relative of SOURCE_SENTINELS) {
+    if (!(await exists(path.join(dir, relative)))) return false
+  }
+  return true
+}
+
 export async function ensureSource(root, version) {
   const dir = sourceDir(root, version)
-  if (await exists(dir)) return dir
+  if (await sourceReady(dir)) return dir
+  // A killed extraction can leave the directory present but unusable. Treat it
+  // as a cache miss so the already-downloaded archive self-heals on retry.
+  if (await exists(dir)) await fs.rm(dir, { recursive: true, force: true })
   const tar = cacheTarball(root, version)
   await fs.mkdir(path.dirname(tar), { recursive: true })
   if (!(await exists(tar))) {
@@ -177,6 +228,10 @@ export async function ensureSource(root, version) {
   if (path.resolve(extracted) !== path.resolve(dir)) {
     await fs.mkdir(path.dirname(dir), { recursive: true })
     await fs.rename(extracted, dir)
+  }
+  if (!(await sourceReady(dir))) {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    throw new Error("extracted source is incomplete; required OpenCode files are missing")
   }
   return dir
 }

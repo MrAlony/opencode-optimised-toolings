@@ -182,12 +182,55 @@ export type TuiDispose = () => void | Promise<void>`,
   toolRenderers: TuiToolRenderers
   slots: TuiSlots`,
         },
+        {
+          name: "public deferred session draft api",
+          search: `  route: {
+    register: (routes: TuiRouteDefinition[]) => () => void
+    navigate: (name: string, params?: Record<string, unknown>) => void
+    readonly current: TuiRouteCurrent
+  }
+  ui: {`,
+          replace: `  route: {
+    register: (routes: TuiRouteDefinition[]) => () => void
+    navigate: (name: string, params?: Record<string, unknown>) => void
+    readonly current: TuiRouteCurrent
+  }
+  /** Prepare the native home prompt for a directory; no session exists until submit. */
+  sessionDraft: {
+    open: (directory: string) => void
+  }
+  ui: {`,
+        },
+        {
+          // Declares the left layout column added to app.tsx below, so a
+          // plugin can render a dock that pushes the app aside instead of
+          // floating above it.
+          name: "app_left slot type",
+          search: `export type TuiHostSlotMap = {
+  app: {}
+  app_bottom: {}`,
+          replace: `export type TuiHostSlotMap = {
+  app: {}
+  /** Left-hand layout column; content here pushes the app aside. */
+  app_left: {}
+  app_bottom: {}`,
+        },
       ],
     },
     {
       path: "packages/opencode/src/plugin/tui/runtime.ts",
       beforeSha256: "f454bc0c2ec61d5cf605f4c65b2223692cd6731f501fd64a4a762a8868c69e70",
       replacements: [
+        {
+          name: "scoped deferred session draft forwarding",
+          search: `    mode: createScopedMode(api.mode, scope),
+    route,
+    ui: api.ui,`,
+          replace: `    mode: createScopedMode(api.mode, scope),
+    route,
+    sessionDraft: api.sessionDraft,
+    ui: api.ui,`,
+        },
         {
           name: "scoped tool renderer forwarding",
           search: `    event,
@@ -287,14 +330,88 @@ function recoverOrphanedToolParts(messages: SessionV1.WithParts[], now: number) 
       ],
     },
     {
+      // A left dock must occupy layout space rather than float above the
+      // transcript: an absolutely positioned panel covers the content it is
+      // meant to sit beside. Wrapping the root in a row and giving plugins an
+      // `app_left` slot lets the dock push the app aside, and collapse back to
+      // nothing when it renders empty.
+      path: "packages/tui/src/app.tsx",
+      beforeSha256: "c0715487889226993d4d6f3938880aad999704ca89211dcd70cbf77ec5b1e3d7",
+      replacements: [
+        {
+          name: "root row wrapper",
+          search: `      <Show when={ready()}>
+        <box flexGrow={1} minHeight={0} flexDirection="column">
+          <Switch>`,
+          replace: `      <Show when={ready()}>
+        <box flexGrow={1} minHeight={0} flexDirection="row">
+          <box flexShrink={0}>
+            <pluginRuntime.Slot name="app_left" />
+          </box>
+          <box flexGrow={1} minWidth={0} minHeight={0} flexDirection="column">
+          <Switch>`,
+        },
+        {
+          name: "root row wrapper close",
+          search: `          {plugin()}
+        </box>
+        <box flexShrink={0}>
+          <pluginRuntime.Slot name="app_bottom" />
+        </box>`,
+          replace: `          {plugin()}
+          </box>
+        </box>
+        <box flexShrink={0}>
+          <pluginRuntime.Slot name="app_bottom" />
+        </box>`,
+        },
+      ],
+    },
+    {
       path: "packages/tui/src/plugin/adapters.tsx",
       beforeSha256: "ecff9bb3a2d1acf0f4ee6d1dacf213ee059d88fa22cedced8cafa51dfb4eb353",
       replacements: [
         {
-          name: "tool-renderers import",
+          name: "tool-renderers and session-draft imports",
           search: `export { createPluginRoutes, createTuiApi } from "./api"`,
           replace: `export { createPluginRoutes, createTuiApi } from "./api"
-import { registerPluginToolRenderer } from "./tool-renderers"`,
+import { registerPluginToolRenderer } from "./tool-renderers"
+import { setHomeSessionDestination } from "../routes/home/session-destination"`,
+        },
+        {
+          name: "api.sessionDraft surface",
+          search: `    route: {
+      register(list) {
+        return input.routes.register(list)
+      },
+      navigate(name, params) {
+        routeNavigate(input.route, name, params)
+      },
+      get current() {
+        return routeCurrent(input.route)
+      },
+    },
+    ui: {`,
+          replace: `    route: {
+      register(list) {
+        return input.routes.register(list)
+      },
+      navigate(name, params) {
+        routeNavigate(input.route, name, params)
+      },
+      get current() {
+        return routeCurrent(input.route)
+      },
+    },
+    sessionDraft: {
+      open(directory) {
+        const target = directory.trim()
+        if (!target) throw new Error("A directory is required to prepare a session draft")
+        setHomeSessionDestination(target)
+        routeNavigate(input.route, "home")
+      },
+    },
+    ui: {`,
         },
         {
           name: "api.toolRenderers surface",
@@ -307,6 +424,46 @@ import { registerPluginToolRenderer } from "./tool-renderers"`,
       },
     },
     slots: {`,
+        },
+      ],
+    },
+    {
+      path: "packages/tui/src/routes/home/session-destination.tsx",
+      beforeSha256: "6bd539d6ce6ece6bb0b5b94e186fe8b06ad06559fa97dae17ea52bf3f14ecc90",
+      replacements: [
+        {
+          name: "session draft cleanup import",
+          search: `  createMemo,
+  createSignal,
+  useContext,`,
+          replace: `  createMemo,
+  createSignal,
+  onCleanup,
+  useContext,`,
+        },
+        {
+          name: "host-owned persistent home destination",
+          search: `const HomeSessionDestinationContext = createContext<Context>()
+
+export function HomeSessionDestinationProvider(props: ParentProps) {
+  const sync = useSync()
+  const paths = useTuiPaths()
+  const [selected, setDestination] = createSignal<HomeSessionDestination>()`,
+          replace: `const HomeSessionDestinationContext = createContext<Context>()
+const [selected, setDestination] = createSignal<HomeSessionDestination>()
+
+/** Prepare the native home prompt without creating a session. */
+export function setHomeSessionDestination(directory: string) {
+  const target = directory.trim()
+  if (!target) throw new Error("A directory is required to prepare a session draft")
+  setDestination({ type: "directory", directory: target, subdirectory: false })
+}
+
+export function HomeSessionDestinationProvider(props: ParentProps) {
+  const sync = useSync()
+  const paths = useTuiPaths()
+  // A cancelled draft must not leak its folder into a later native New session.
+  onCleanup(() => setDestination(undefined))`,
         },
       ],
     },

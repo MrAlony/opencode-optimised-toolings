@@ -10,10 +10,10 @@
 import { fuzzyMatch } from "./sessions.js"
 
 export const MODES = {
-  all: { prefix: "", label: "Everything", hint: "sessions, projects and actions" },
-  command: { prefix: ">", label: "Commands", hint: "run an action" },
-  session: { prefix: "@", label: "Sessions", hint: "jump to a session" },
-  project: { prefix: "#", label: "Projects", hint: "switch project" },
+  all: { prefix: "", label: "All", hint: "chats, folders and actions" },
+  command: { prefix: ">", label: "Actions", hint: "choose something to do" },
+  session: { prefix: "@", label: "Chats", hint: "open a conversation" },
+  project: { prefix: "#", label: "Folders", hint: "open a work folder" },
 }
 
 /** Split a raw query into its mode and search term. */
@@ -63,6 +63,7 @@ export function buildActions(input = {}) {
 
   if (mode === "all" || mode === "project") {
     for (const project of Array.from(input.projects ?? [])) {
+      if (project?.openable === false || !String(project?.worktree ?? "").trim()) continue
       items.push({
         kind: "project",
         id: `project:${project.id}`,
@@ -137,7 +138,7 @@ export function buildActions(input = {}) {
 /** Group ranked actions by kind for display, preserving relevance order. */
 export function groupActions(actions) {
   const order = ["session", "project", "command"]
-  const labels = { session: "Sessions", project: "Projects", command: "Actions" }
+  const labels = { session: "Chats", project: "Folders", command: "Things you can do" }
   const groups = []
   for (const kind of order) {
     const rows = Array.from(actions ?? []).filter((action) => action.kind === kind)
@@ -158,16 +159,16 @@ export function workbenchCommands(context = {}) {
   return [
     {
       name: "alonix.session.new",
-      title: "New session in current project",
-      category: "Session",
+      title: "Start a new chat here",
+      category: "Chats",
       priority: 5,
       hint: "ctrl+n",
       run: (api) => api.newSession?.(),
     },
     {
       name: "alonix.session.new.project",
-      title: "New session in another project…",
-      category: "Session",
+      title: "Start a chat in another folder…",
+      category: "Chats",
       priority: 3,
       run: (api) => api.chooseProjectForNewSession?.(),
     },
@@ -202,14 +203,14 @@ export function workbenchCommands(context = {}) {
     },
     {
       name: "alonix.session.open",
-      title: "Return to the session view",
+      title: "Return to the open chat",
       category: "Workbench",
       enabled: hasSession,
       run: (api) => api.openActiveSession?.(),
     },
     {
       name: "alonix.project.refresh",
-      title: "Refresh projects and sessions",
+      title: "Refresh folders and chats",
       category: "Workbench",
       run: (api) => api.refresh?.(),
     },

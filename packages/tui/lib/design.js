@@ -347,6 +347,85 @@ export function toneOf(status) {
   return "warning"
 }
 
+/**
+ * Black or white, whichever is legible on `background`.
+ *
+ * A filled button paints a strong colour and then needs ink that survives it.
+ * Reusing the theme's text colour fails on saturated fills, so the ink is
+ * chosen by measurement instead.
+ */
+export function contrastInk(background) {
+  return contrast("#ffffff", background) >= contrast("#000000", background) ? "#ffffff" : "#000000"
+}
+
+/**
+ * Resolve a button's colours for one interaction state.
+ *
+ * Kept pure and separate from rendering so the contrast guarantees below are
+ * unit-testable rather than a matter of opinion.
+ *
+ * The variants exist to make importance visible at a glance:
+ *   - `primary`   a solid, saturated fill for the main action on a surface
+ *   - `secondary` a tinted fill that still reads as a control at rest
+ *   - `ghost`     transparent until hovered, for tertiary actions only
+ *   - `danger`    a destructive action, always in the error tone
+ *
+ * Critically, `primary` and `secondary` always return a background. A control
+ * that is invisible until hovered cannot be discovered by someone who does not
+ * already know it is there.
+ */
+export function buttonSurface(tokens, options = {}) {
+  const variant = options.variant ?? "secondary"
+  const disabled = options.disabled === true
+  const tone = options.tone ?? (variant === "danger" ? "error" : "accent")
+  const palette = tonePalette(tokens, tone)
+  const hover = options.hover === true && !disabled
+  const pressed = options.pressed === true && !disabled
+  const lift = tokens.ink ?? "#ffffff"
+  const sink = lift === "#ffffff" ? "#000000" : "#ffffff"
+
+  if (disabled) {
+    return {
+      background: variant === "ghost" ? undefined : tokens.inset,
+      foreground: tokens.faint,
+      border: tokens.borderFaint,
+      hint: tokens.faint,
+      disabled: true,
+    }
+  }
+
+  if (variant === "primary" || variant === "danger") {
+    // A neutral tone has no saturated colour of its own, so the accent leads.
+    const base = tone === "neutral" ? tokens.accent : palette.fg
+    // Pressed sinks, hover lifts: the same physical metaphor in both polarities.
+    const background = pressed ? mix(base, sink, 0.22) : hover ? mix(base, lift, 0.16) : base
+    const foreground = contrastInk(background)
+    return {
+      background,
+      foreground,
+      border: background,
+      hint: mix(foreground, background, 0.4),
+    }
+  }
+
+  if (variant === "ghost") {
+    return {
+      background: pressed ? palette.surface : hover ? tokens.hover : undefined,
+      foreground: hover || pressed ? tokens.text : tokens.muted,
+      border: tokens.borderFaint,
+      hint: tokens.faint,
+    }
+  }
+
+  const background = pressed ? mix(palette.surfaceHover, sink, 0.12) : hover ? palette.surfaceHover : palette.surface
+  return {
+    background,
+    foreground: ensureContrast(palette.on, background, 4, tokens.ink),
+    border: palette.border,
+    hint: mix(palette.on, background, 0.45),
+  }
+}
+
 /** Resolve a tone family to concrete `{ fg, surface, surfaceHover, border }`. */
 export function tonePalette(tokens, tone) {
   if (tone === "accent") {

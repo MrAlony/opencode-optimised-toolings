@@ -52,7 +52,7 @@ function RailRow(props) {
       paddingLeft={1}
       paddingRight={1}
       backgroundColor={session().active ? tokens().selectionStrong : undefined}
-      onMouseDown={() => props.onOpen(session())}
+      onMouseUp={() => props.onOpen(session())}
     >
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
         <text fg={glyphColor()} wrapMode="none" selectable={false}>

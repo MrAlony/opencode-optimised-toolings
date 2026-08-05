@@ -130,6 +130,55 @@ export function browseModel(input = {}) {
   }
 }
 
+/**
+ * Common starting points for a folder picker.
+ *
+ * Typing a full path from memory is the worst way to choose a directory, so the
+ * picker opens on somewhere useful. Only entries the caller confirms exist are
+ * offered, and the current project leads because it is the likeliest choice.
+ */
+/**
+ * The user's home directory, inferred from any path inside it.
+ *
+ * The TUI has no environment access of its own, so the launch directory is the
+ * available evidence. Returns null when the path is not under a home folder.
+ */
+export function homeOf(somePath) {
+  const normalized = normalizePath(somePath)
+  if (!normalized) return null
+  const match = /^((?:[a-zA-Z]:)?\/(?:Users|home)\/[^/]+)(?:\/|$)/i.exec(normalized)
+  return match ? match[1] : null
+}
+
+export function commonRoots(input = {}) {
+  const home = normalizePath(input.home)
+  const current = normalizePath(input.current)
+  const out = []
+  const seen = new Set()
+
+  const add = (name, target) => {
+    const path = normalizePath(target)
+    if (!path) return
+    const key = path.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push({ name, path })
+  }
+
+  if (current) add("Current", parentOf(current) ?? current)
+  if (home) {
+    add("Home", home)
+    for (const folder of ["Desktop", "Documents", "Downloads", "projects", "code", "src"]) {
+      const candidate = joinPath(home, folder)
+      if (Array.from(input.existing ?? []).some((item) => normalizePath(item) === candidate)) {
+        add(folder, candidate)
+      }
+    }
+  }
+  for (const drive of Array.from(input.drives ?? [])) add(drive, drive)
+  return out
+}
+
 /** Breadcrumb segments, each with the path it navigates to. */
 export function breadcrumbs(directory, limit = 5) {
   const normalized = normalizePath(directory)

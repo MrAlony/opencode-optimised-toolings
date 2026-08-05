@@ -18,12 +18,37 @@ function directoryKey(value) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized
 }
 
+/**
+ * Human name for a project.
+ *
+ * Falls back to the deepest meaningful path segment. A generic segment like
+ * "projects" or "src" is not identifying on its own, so the parent is included
+ * to keep names distinguishable in a list.
+ */
+const GENERIC_SEGMENTS = new Set(["projects", "project", "src", "repos", "repo", "code", "work", "dev", "workspace"])
+
+/** A user home directory reads as "home", not as the account name. */
+function isHomeDirectory(worktree) {
+  return /^(?:[a-zA-Z]:)?\/(?:Users|home)\/[^/]+$/i.test(worktree)
+}
+
 export function projectLabel(project) {
   const explicit = String(project?.name ?? "").trim()
   if (explicit) return explicit
   const worktree = normalizeDirectory(project?.worktree)
-  if (!worktree) return "project"
-  return worktree.slice(worktree.lastIndexOf("/") + 1) || worktree
+  if (!worktree) return "untitled"
+  if (worktree === "/" || /^[a-zA-Z]:$/.test(worktree)) return worktree
+  // `~` and the expanded home path are the same place and deserve a real name.
+  if (worktree === "~" || isHomeDirectory(worktree)) return "home"
+  const parts = worktree.split("/").filter(Boolean)
+  const leaf = parts[parts.length - 1]
+  if (!leaf) return worktree
+  // A drive root ("C:") is not a name.
+  if (/^[a-zA-Z]:$/.test(leaf)) return worktree
+  if (GENERIC_SEGMENTS.has(leaf.toLowerCase()) && parts.length > 1) {
+    return `${parts[parts.length - 2]}/${leaf}`
+  }
+  return leaf
 }
 
 /** True when `directory` is inside (or equal to) `root`. */
@@ -73,6 +98,9 @@ export function buildProjectModel(input = {}) {
   const activeSessionID = input.activeSessionID ?? null
   const activeDirectory = normalizeDirectory(input.activeDirectory)
   const pinned = new Set(Array.from(input.pinnedProjects ?? []))
+  // Hiding removes a project from the list only. Its sessions are untouched and
+  // the project reappears if it is added again, so this is never destructive.
+  const hidden = new Set(Array.from(input.hiddenProjects ?? []).map((item) => directoryKey(item)))
   const projects = Array.from(input.projects ?? []).filter((project) => project && typeof project === "object")
   const sessions = Array.from(input.sessions ?? []).filter((session) => session && typeof session.id === "string")
 
@@ -101,7 +129,9 @@ export function buildProjectModel(input = {}) {
     // Child sessions belong to their parent's transcript, not the project list.
     if (session.parentID !== undefined && session.parentID !== null) continue
     const project = projectForSession(session, projects)
-    const worktree = normalizeDirectory(project?.worktree ?? session.directory)
+    // An incomplete project record must not erase the real directory carried by
+    // its sessions. This is how synthetic home/account rows become actionable.
+    const worktree = normalizeDirectory(project?.worktree) || normalizeDirectory(session.directory)
     const key = project?.id ?? directoryKey(worktree)
     const bucket = ensure(key, {
       id: key,
@@ -110,6 +140,7 @@ export function buildProjectModel(input = {}) {
       vcs: project?.vcs ?? null,
       known: Boolean(project),
     })
+    if (!bucket.worktree && worktree) bucket.worktree = worktree
     const state = String(statuses[session.id]?.type ?? "idle")
     bucket.sessions.push({
       id: session.id,
@@ -137,6 +168,7 @@ export function buildProjectModel(input = {}) {
     const updated = bucket.sessions.reduce((max, session) => Math.max(max, session.updated), 0)
     return {
       ...bucket,
+      openable: Boolean(bucket.worktree),
       pinned: pinned.has(bucket.id),
       current: Boolean(activeDirectory) && containsDirectory(bucket.worktree, activeDirectory),
       active: bucket.sessions.some((session) => session.active),
@@ -148,7 +180,9 @@ export function buildProjectModel(input = {}) {
     }
   })
 
-  rows.sort((a, b) => {
+  const visible = rows.filter((row) => !hidden.has(directoryKey(row.worktree)))
+
+  visible.sort((a, b) => {
     if (a.current !== b.current) return a.current ? -1 : 1
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
     if (a.running !== b.running) return a.running > b.running ? -1 : 1
@@ -156,7 +190,7 @@ export function buildProjectModel(input = {}) {
     return a.name.localeCompare(b.name)
   })
 
-  return rows
+  return visible
 }
 
 /** Portfolio-level totals for the workbench header. */

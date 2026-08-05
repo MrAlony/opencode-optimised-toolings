@@ -12,20 +12,26 @@
 
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
-import { applyKeyToQuery, classifyKey, moveIndex, scrollWindow } from "../lib/keys.js"
+import { classifyKey, moveIndex, scrollWindow } from "../lib/keys.js"
 import { fit, fitLeft, pad, paletteLayout } from "../lib/layout.js"
 import { spinnerFrame, stagger } from "../lib/motion.js"
 import { MODES, buildActions, groupActions, parseQuery } from "../lib/command-registry.js"
-import { EmptyState, KeyHints, Rule, SectionLabel, Spinner, StatLine } from "./ide-kit.jsx"
+import { EmptyState, KeyHints, SectionLabel, Spinner, StatLine } from "./ide-kit.jsx"
+import { Button, SegmentedControl, TextInput } from "./controls.jsx"
 import { useClock } from "./runtime.jsx"
 
 const HINTS = [
-  { key: "↑↓", label: "move" },
+  { key: "type", label: "search" },
+  { key: "click", label: "choose" },
   { key: "↵", label: "open" },
-  { key: "1-9", label: "jump" },
-  { key: ">·@·#", label: "scope" },
-  { key: "click", label: "select" },
   { key: "esc", label: "close" },
+]
+
+const FILTERS = [
+  { value: "all", label: "All" },
+  { value: "session", label: "Chats" },
+  { value: "project", label: "Folders" },
+  { value: "command", label: "Actions" },
 ]
 
 const KIND_GLYPH = { session: GLYPH.diamond, project: GLYPH.square, command: GLYPH.pointer }
@@ -70,13 +76,14 @@ function ActionRow(props) {
       flexDirection="row"
       flexShrink={0}
       height={1}
-      backgroundColor={props.selected ? tokens().selectionStrong : undefined}
-      onMouseDown={() => props.onRun(action())}
-      onMouseOver={() => props.onHover(props.flatIndex)}
+      backgroundColor={props.selected ? tokens().selectionStrong : tokens().panel}
+      onMouseUp={() => props.onRun(action())}
+      onMouseMove={() => props.onHover(props.flatIndex)}
+      onMouseDown={() => props.onHover(props.flatIndex)}
     >
       <text wrapMode="none" selectable={false}>
         <span style={{ fg: props.selected ? tokens().accent : tokens().borderFaint }}>
-          {props.selected ? GLYPH.blockHalf : " "}
+          {props.selected ? GLYPH.pointer : " "}
         </span>
         <span style={{ fg: glyphColor() }}>{glyph()}</span>
         <span style={{ fg: props.selected ? tokens().accent : tokens().faint }}>
@@ -122,7 +129,16 @@ function Preview(props) {
   const width = () => props.width
 
   return (
-    <box flexDirection="column" flexShrink={0} width={width()} paddingLeft={2} gap={1}>
+    <box
+      flexDirection="column"
+      flexShrink={0}
+      width={width()}
+      paddingLeft={2}
+      paddingRight={1}
+      paddingTop={1}
+      gap={1}
+      backgroundColor={tokens().surface}
+    >
       <Show when={action()} fallback={<EmptyState tokens={tokens()} title="Nothing selected" />}>
         <box flexDirection="column">
           <SectionLabel tokens={tokens()}>{action().kind}</SectionLabel>
@@ -171,9 +187,9 @@ function Preview(props) {
           </box>
         </Show>
 
-        <Show when={action().kind === "project" && !action().project?.sessionCount}>
+        <Show when={action().kind === "project"}>
           <text fg={tokens().accent} wrapMode="wrap" selectable={false}>
-            {GLYPH.pointer} Opens a new session here
+            {GLYPH.pointer} Prepares a new chat here; it is created after your first message
           </text>
         </Show>
       </Show>
@@ -211,7 +227,11 @@ export function Palette(props) {
     const size = actions().length
     if (index() > Math.max(0, size - 1)) setIndex(Math.max(0, size - 1))
   })
-  createEffect(() => setOffset((current) => scrollWindow(current, index(), layout().rows, actions().length)))
+  // Filters and the large action button consume rows that used to belong to
+  // the result list. Budget them explicitly so the fixed-size host dialog can
+  // never overflow vertically.
+  const resultRows = createMemo(() => Math.max(3, layout().rows - 4))
+  createEffect(() => setOffset((current) => scrollWindow(current, index(), resultRows(), actions().length)))
 
   const run = (action) => {
     if (!action) return
@@ -244,19 +264,28 @@ export function Palette(props) {
       }
     }
 
-    const next = applyKeyToQuery(query(), event)
-    if (next !== query()) {
-      setQuery(next)
-      setIndex(0)
-      setOffset(0)
-    }
   }
+
+  const setMode = (mode) => {
+    const prefix = MODES[mode]?.prefix ?? ""
+    setQuery(`${prefix}${parsed().term}`)
+    setIndex(0)
+    setOffset(0)
+  }
+
+  const selectionDescription = createMemo(() => {
+    const action = selected()
+    if (!action) return "Choose an item from the list"
+    if (action.kind === "session") return "Open this chat"
+    if (action.kind === "project") return "Prepare a new chat in this folder"
+    return "Run this action"
+  })
 
   // Flatten groups to rows, then window the rows while keeping the header that
   // introduces each visible run.
   const visible = createMemo(() => {
     const start = offset()
-    const end = start + layout().rows
+    const end = start + resultRows()
     const out = []
     let flat = 0
     for (const group of groups()) {
@@ -282,47 +311,44 @@ export function Palette(props) {
       paddingRight={2}
       paddingBottom={1}
       gap={1}
-      focusable
-      focused
-      onKeyDown={handleKey}
+      backgroundColor={tokens().panelOpaque ?? tokens().panel}
     >
       <box flexDirection="row" gap={1} flexShrink={0} alignItems="center">
         <text fg={tokens().accent} wrapMode="none" selectable={false}>
           {GLYPH.diamond}
         </text>
         <text fg={tokens().text} wrapMode="none" selectable={false}>
-          <b>{MODES[parsed().mode].label}</b>
+          <b>Find anything</b>
         </text>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>
-          {MODES[parsed().mode].hint}
+        <text fg={tokens().muted} wrapMode="none" selectable={false}>
+          chats, folders and things you can do
         </text>
         <box flexGrow={1} />
         <Show when={props.loading?.()}>
           <Spinner tokens={tokens()} tone="accent" />
         </Show>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>
-          {actions().length}
+        <text fg={tokens().muted} wrapMode="none" selectable={false}>
+          {actions().length} found
         </text>
       </box>
 
-      <box
-        flexDirection="row"
-        flexShrink={0}
-        height={1}
-        backgroundColor={tokens().surface}
-        paddingLeft={1}
-        paddingRight={1}
-      >
-        <text wrapMode="none" selectable={false}>
-          <span style={{ fg: tokens().accent }}>{parsed().prefix || GLYPH.pointer} </span>
-          <span style={{ fg: query() ? tokens().text : tokens().faint }}>
-            {parsed().term || (query() ? "" : "Search sessions, projects and actions")}
-          </span>
-          <Show when={tokens().motion !== false}>
-            <span style={{ fg: tokens().accent }}>{Math.floor(clock() / 520) % 2 === 0 ? GLYPH.caret : " "}</span>
-          </Show>
-        </text>
-      </box>
+      <SegmentedControl tokens={tokens()} items={FILTERS} value={parsed().mode} onChange={setMode} />
+
+      <TextInput
+        tokens={tokens()}
+        glyph={GLYPH.pointer}
+        value={parsed().term}
+        placeholder="Search chats, folders and actions"
+        autoFocus
+        onInput={(value) => {
+          const prefix = MODES[parsed().mode]?.prefix ?? ""
+          setQuery(`${prefix}${value}`)
+          setIndex(0)
+          setOffset(0)
+        }}
+        onSubmit={() => run(selected())}
+        onKeyDown={handleKey}
+      />
 
       <box flexDirection="row" flexShrink={0}>
         <box flexDirection="column" width={layout().list} flexShrink={0}>
@@ -369,8 +395,24 @@ export function Palette(props) {
         </Show>
       </box>
 
-      <Rule tokens={tokens()} />
-      <KeyHints tokens={tokens()} hints={HINTS} />
+      <box flexDirection="row" flexShrink={0} height={3} gap={2} alignItems="center">
+        <Button
+          tokens={tokens()}
+          variant="primary"
+          size="lg"
+          glyph={GLYPH.pointer}
+          description={selectionDescription()}
+          disabled={!selected()}
+          onPress={() => run(selected())}
+        >
+          Open selected
+        </Button>
+        <Button tokens={tokens()} variant="ghost" onPress={() => props.onClose?.()}>
+          Cancel
+        </Button>
+        <box flexGrow={1} />
+        <KeyHints tokens={tokens()} hints={HINTS} />
+      </box>
     </box>
   )
 }

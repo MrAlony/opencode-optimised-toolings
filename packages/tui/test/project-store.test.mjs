@@ -21,7 +21,7 @@ const SESSIONS = [
 function createApi(overrides = {}) {
   const kv = new Map(Object.entries(overrides.kv ?? {}))
   const listeners = new Map()
-  const calls = { projectList: 0, sessionList: 0, sessionCreate: [] }
+  const calls = { projectList: 0, sessionList: 0 }
   const api = {
     calls,
     listeners,
@@ -50,10 +50,6 @@ function createApi(overrides = {}) {
           calls.sessionList += 1
           if (overrides.failSessions) throw new Error("network down")
           return { data: overrides.sessions ?? SESSIONS }
-        },
-        create: async (args) => {
-          calls.sessionCreate.push(args)
-          return { data: { id: "new1", title: "New", directory: args?.query?.directory ?? "C:/work/alpha" } }
         },
       },
     },
@@ -88,7 +84,8 @@ test("the store loads projects and sessions across every directory", async () =>
   const api = createApi()
   await withStore(api, (store) => {
     assert.equal(api.calls.projectList, 1)
-    assert.equal(api.calls.sessionList, 1)
+    // One request per project worktree, plus the launch directory.
+    assert.equal(api.calls.sessionList, 3)
     assert.equal(store.projects.length, 2)
     assert.equal(store.sessions.length, 2)
     assert.ok(store.loadedAt > 0)
@@ -100,16 +97,51 @@ test("the store loads projects and sessions across every directory", async () =>
   })
 })
 
-test("session listing is not scoped to a single project", async () => {
+test("sessions are fetched per project directory, not just the launch one", async () => {
+  // Regression: session.list answers for one directory. Listing once returned
+  // the launch project's sessions no matter which project was selected, so
+  // switching projects appeared to show the wrong sessions.
   const api = createApi()
-  let seen
+  const asked = []
   api.client.session.list = async (args) => {
-    seen = args
-    return { data: SESSIONS }
+    asked.push(args?.directory ?? "")
+    if (args?.directory === "C:/work/alpha") return { data: [SESSIONS[0]] }
+    if (args?.directory === "C:/work/beta") return { data: [SESSIONS[1]] }
+    return { data: [] }
   }
-  await withStore(api, () => {
-    assert.ok(seen, "session.list must be called")
-    assert.equal(seen.scope, undefined, "scope must stay unset so results span projects")
+
+  await withStore(api, (store) => {
+    assert.ok(asked.includes("C:/work/alpha"), "each project worktree must be queried")
+    assert.ok(asked.includes("C:/work/beta"))
+    assert.ok(asked.includes(""), "the launch directory must still be queried")
+    assert.ok(asked.every((entry) => entry !== undefined))
+
+    // Both projects' sessions are present, each under its own project.
+    assert.equal(store.sessions.length, 2)
+    const rows = store.projectRows()
+    assert.equal(rows.find((row) => row.id === "p1").sessionCount, 1)
+    assert.equal(rows.find((row) => row.id === "p2").sessionCount, 1)
+  })
+})
+
+test("a session reachable from two directories is listed once", async () => {
+  const api = createApi()
+  // Every directory returns the same session, as a nested checkout would.
+  api.client.session.list = async () => ({ data: [SESSIONS[0]] })
+  await withStore(api, (store) => {
+    assert.equal(store.sessions.length, 1, "duplicates across directories must collapse")
+  })
+})
+
+test("one unreachable project does not blank the whole portfolio", async () => {
+  const api = createApi()
+  api.client.session.list = async (args) => {
+    if (args?.directory === "C:/work/beta") throw new Error("workspace offline")
+    return { data: [SESSIONS[0]] }
+  }
+  await withStore(api, (store) => {
+    assert.equal(store.sessions.length, 1, "the reachable project still loads")
+    assert.match(store.error, /beta|offline/i, "the failure is reported, not hidden")
   })
 })
 
@@ -130,36 +162,45 @@ test("a failed load keeps the previous portfolio instead of blanking it", async 
 test("concurrent refreshes collapse into a single in-flight request", async () => {
   const api = createApi()
   await withStore(api, async (store) => {
-    const before = api.calls.sessionList
-    let release
-    api.client.session.list = async () => {
-      api.calls.sessionList += 1
-      await new Promise((resolve) => {
-        release = resolve
-      })
-      return { data: SESSIONS }
+    // A refresh now queries every project directory, so count refresh cycles
+    // rather than raw requests.
+    let cycles = 0
+    const pending = []
+    api.client.project.list = async () => {
+      cycles += 1
+      return { data: PROJECTS }
     }
+    api.client.session.list = async () =>
+      new Promise((resolve) => pending.push(() => resolve({ data: SESSIONS })))
+
     const first = store.reload()
     const second = store.reload()
     const third = store.reload()
-    release()
+    // Let the in-flight cycle reach its session requests, then release them.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    for (const release of pending.splice(0)) release()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    for (const release of pending.splice(0)) release()
     await Promise.all([first, second, third])
-    // One in-flight call plus at most one queued follow-up, never three.
-    assert.ok(api.calls.sessionList - before <= 2, "overlapping refreshes must not stampede the server")
+
+    // One in-flight cycle plus at most one queued follow-up, never three.
+    assert.ok(cycles <= 2, `overlapping refreshes must not stampede the server, saw ${cycles} cycles`)
   })
 })
 
 test("session events trigger a debounced refresh", async () => {
   const api = createApi()
   await withStore(api, async (store) => {
-    const before = api.calls.sessionList
+    // project.list runs exactly once per refresh cycle, so it is the reliable
+    // way to count reloads now that sessions are fetched per directory.
+    const before = api.calls.projectList
     const handler = api.listeners.get("session.updated")
     assert.ok(handler, "the store must subscribe to session.updated")
     handler()
     handler()
     handler()
     await new Promise((resolve) => setTimeout(resolve, 220))
-    assert.equal(api.calls.sessionList, before + 1, "a burst of events collapses into one reload")
+    assert.equal(api.calls.projectList, before + 1, "a burst of events collapses into one reload")
   })
 })
 
@@ -172,11 +213,11 @@ test("cleanup unsubscribes so a disposed store stops refreshing", async () => {
   })
   await new Promise((resolve) => setTimeout(resolve, 10))
   const handler = api.listeners.get("session.updated")
-  const before = api.calls.sessionList
+  const before = api.calls.projectList
   dispose()
   handler?.()
   await new Promise((resolve) => setTimeout(resolve, 220))
-  assert.equal(api.calls.sessionList, before, "a disposed store must not keep polling")
+  assert.equal(api.calls.projectList, before, "a disposed store must not keep polling")
   assert.equal(api.listeners.size, 0, "every listener must be removed")
   void store
 })
@@ -212,13 +253,11 @@ test("tabs for deleted sessions are reconciled away once a listing arrives", asy
   })
 })
 
-test("creating a session targets an explicit project directory", async () => {
+test("the portfolio store never creates sessions", async () => {
   const api = createApi()
-  await withStore(api, async (store) => {
-    const created = await store.createSession({ directory: "C:/work/beta" })
-    assert.equal(created.id, "new1")
-    const args = api.calls.sessionCreate.at(-1)
-    assert.equal(args.query.directory, "C:/work/beta", "cross-project creation requires the directory query")
+  await withStore(api, (store) => {
+    assert.equal(store.createSession, undefined, "session creation belongs to the native prompt submit path")
+    assert.equal(api.client.session.create, undefined, "loading and navigation must not need a creation endpoint")
   })
 })
 

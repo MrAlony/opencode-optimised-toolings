@@ -128,12 +128,27 @@ export function ScrollingLabel(props) {
   )
 }
 
-/** Key/value line used across panels; the value is right-aligned. */
+/**
+ * Key/value line; the value is right-aligned.
+ *
+ * `labelWidth` is the row budget, not the label budget. Callers naturally pass
+ * something like `panelWidth - 10`, and treating that as the label width let
+ * the label consume the whole row and push the value out of view. The label is
+ * therefore clipped to whatever remains after reserving room for the value.
+ */
 export function StatLine(props) {
+  const label = createMemo(() => {
+    const row = Math.max(8, Math.floor(Number(props.labelWidth) || 18))
+    const value = String(props.children ?? "")
+    // Reserve the value plus one separating cell, but always leave the label
+    // enough room to stay recognisable.
+    const budget = Math.max(6, row - value.length - 1)
+    return fit(props.label, budget)
+  })
   return (
-    <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0}>
+    <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0} height={1}>
       <text fg={props.tokens.muted} wrapMode="none" selectable={false}>
-        {fit(props.label, props.labelWidth ?? 18)}
+        {label()}
       </text>
       <text fg={props.color ?? props.tokens.text} wrapMode="none" selectable={false}>
         {props.children}
@@ -143,19 +158,30 @@ export function StatLine(props) {
 }
 
 /**
- * Panel: the primary container. A tinted left rail replaces a full border box,
- * which keeps vertical rhythm tight in a terminal and still groups content.
+ * Panel: the primary container.
+ *
+ * The header sits on a tinted bar rather than floating as dim text, so a panel
+ * reads as a distinct region instead of blending into the surrounding wall of
+ * output. The title keeps full text contrast; only its metadata is muted.
  */
 export function Panel(props) {
   const palette = createMemo(() => tones(props))
   return (
     <box flexDirection="column" flexShrink={0} gap={0} marginBottom={props.flush ? 0 : 1}>
       <Show when={props.title}>
-        <box flexDirection="row" gap={1} flexShrink={0}>
+        <box
+          flexDirection="row"
+          gap={1}
+          flexShrink={0}
+          height={1}
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={props.tokens.surface}
+        >
           <text fg={palette().fg} wrapMode="none" selectable={false}>
             {props.glyph ?? GLYPH.square}
           </text>
-          <SectionLabel tokens={props.tokens} meta={props.meta} color={props.tokens.faint}>
+          <SectionLabel tokens={props.tokens} meta={props.meta} color={props.tokens.text}>
             {props.title}
           </SectionLabel>
           <Show when={props.accessory}>
@@ -203,7 +229,7 @@ export function Row(props) {
       paddingLeft={slideIn(entrance(), 2)}
       paddingRight={1}
       backgroundColor={background()}
-      onMouseDown={props.onSelect}
+      onMouseUp={props.onSelect}
       onMouseOver={props.onHover}
     >
       <text fg={props.selected ? props.tokens.accent : props.tokens.borderFaint} wrapMode="none" selectable={false}>
@@ -223,15 +249,26 @@ export function Row(props) {
   )
 }
 
-/** Consistent empty state so blank panels never look broken. */
+/**
+ * Consistent empty state so blank panels never look broken.
+ *
+ * The title carries full text contrast: an empty panel is information, not an
+ * error, and rendering it in the faintest colour available made the interface
+ * look unfinished rather than calm.
+ */
 export function EmptyState(props) {
   return (
     <box flexDirection="column" flexShrink={0} paddingTop={1} paddingBottom={1} gap={0}>
-      <text fg={props.tokens.muted} wrapMode="none" selectable={false}>
-        {props.glyph ?? GLYPH.ring} {props.title}
-      </text>
+      <box flexDirection="row" gap={1} flexShrink={0}>
+        <text fg={props.tokens.borderStrong} wrapMode="none" selectable={false}>
+          {props.glyph ?? GLYPH.ring}
+        </text>
+        <text fg={props.tokens.text} wrapMode="none" selectable={false}>
+          {props.title}
+        </text>
+      </box>
       <Show when={props.hint}>
-        <text fg={props.tokens.faint} wrapMode="none" selectable={false}>
+        <text fg={props.tokens.muted} wrapMode="wrap" selectable={false}>
           {"  "}
           {props.hint}
         </text>

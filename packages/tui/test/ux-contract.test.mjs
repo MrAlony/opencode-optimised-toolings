@@ -224,6 +224,21 @@ test("design tokens are theme-reactive rather than captured once at load", async
   assert.doesNotMatch(index, /const skin = \{ \.\.\.skinOf/)
 })
 
+test("the workbench center is a portfolio operations dashboard, not an empty session inspector", async () => {
+  const workbench = await source("components/workbench.jsx")
+  const operations = await source("components/operations.jsx")
+  assert.match(workbench, /OperationsWorkspace/)
+  assert.doesNotMatch(workbench, /tabsWithSlots|ActivityPanel|SessionView|DetailPane/)
+  assert.match(operations, /SNAPSHOT_LIMIT = 60/, "live-state reads must stay bounded for large portfolios")
+  assert.match(operations, /if \(active\(\)/, "the selected chat must always be included in the live scope")
+  assert.match(operations, /sessions\(\)\.filter\(\(item\) => item\.running\)/)
+  assert.match(operations, /workspaceSnapshot\(props\.api, session\.id\)/)
+  assert.match(operations, /liveActivity\(props\.api, session\(\)\.id/)
+  assert.match(operations, /Needs you/)
+  assert.match(operations, /Working now/)
+  assert.match(operations, /Recent chats/)
+})
+
 test("animation runs on one shared clock that idles when unobserved", async () => {
   const runtime = await source("components/runtime.jsx")
   assert.match(runtime, /export function createClock/)
@@ -236,7 +251,7 @@ test("animation runs on one shared clock that idles when unobserved", async () =
   }
 })
 
-test("the session store is event-driven, single-flighted, and failure-tolerant", async () => {
+test("the legacy session store remains event-driven, single-flighted, and failure-tolerant", async () => {
   const runtime = await source("components/runtime.jsx")
   assert.match(runtime, /session\.updated/)
   assert.match(runtime, /session\.deleted/)
@@ -246,21 +261,25 @@ test("the session store is event-driven, single-flighted, and failure-tolerant",
   // A failed refresh must keep the previous list instead of blanking the UI.
   assert.match(runtime, /setStore\("error"/)
   assert.doesNotMatch(runtime, /catch[\s\S]{0,120}setStore\("sessions", \[\]\)/)
+  const index = await source("index.tsx")
+  assert.doesNotMatch(index, /createSessionStore/, "visible IDE surfaces use the cross-project portfolio store")
 })
 
-test("the switcher supports search, keyboard navigation, quick slots, and pinning", async () => {
+test("the switcher uses native search with keyboard navigation, quick slots, and pinning", async () => {
   const switcher = await source("components/session-switcher.jsx")
-  assert.match(switcher, /applyKeyToQuery/)
+  assert.match(switcher, /<TextInput/)
+  assert.match(switcher, /onInput=\{\(value\)/)
+  assert.doesNotMatch(switcher, /applyKeyToQuery/, "native input owns text editing")
   assert.match(switcher, /moveIndex/)
   assert.match(switcher, /scrollWindow/)
   assert.match(switcher, /groupSessions/)
   assert.match(switcher, /store\.togglePin/)
   assert.match(switcher, /\^\[1-9\]\$/)
   assert.match(switcher, /onKeyDown=\{handleKey\}/)
-  assert.match(switcher, /focusable/)
   const index = await source("index.tsx")
   assert.match(index, /alonix-ide\.sessions/)
   assert.match(index, /slashName: "alonix-sessions"/)
+  assert.match(index, /const openSwitcher = \(\) => openPalette\(""\)/, "all chat switching uses the portfolio-aware palette")
 })
 
 test("plugin reactive state owns an explicit root and is disposed with the plugin", async () => {

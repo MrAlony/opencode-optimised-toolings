@@ -1,10 +1,43 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { baseName, breadcrumbs, browseModel, joinPath, looksLikeProject, normalizePath, parentOf } from "../lib/browse.js"
+import { commonRoots, homeOf, baseName, breadcrumbs, browseModel, joinPath, looksLikeProject, normalizePath, parentOf } from "../lib/browse.js"
 
 function dir(name, project = false) {
   return { name, directory: true, project }
 }
+
+test("the home directory is recognised from any path inside it", () => {
+  assert.equal(homeOf("C:/Users/dell/Desktop/work"), "C:/Users/dell")
+  assert.equal(homeOf("/home/ada/projects/thing"), "/home/ada")
+  assert.equal(homeOf("C:/Users/dell"), "C:/Users/dell")
+  // Not every path lives under a home directory.
+  assert.equal(homeOf("D:/scratch"), null)
+  assert.equal(homeOf(""), null)
+})
+
+test("folder shortcuts lead with the current location", () => {
+  const roots = commonRoots({
+    home: "C:/Users/dell",
+    current: "C:/Users/dell/Desktop/mralony/projects/thing",
+    existing: ["C:/Users/dell/Desktop", "C:/Users/dell/Documents"],
+  })
+  assert.ok(roots.length > 0)
+  assert.equal(roots[0].name, "Current", "the likeliest destination comes first")
+  const names = roots.map((root) => root.name)
+  assert.ok(names.includes("Home"))
+  assert.ok(names.includes("Desktop"), "a confirmed folder is offered")
+  assert.ok(!names.includes("Downloads"), "an unconfirmed folder is never offered")
+})
+
+test("folder shortcuts never repeat a location", () => {
+  const roots = commonRoots({ home: "C:/Users/dell", current: "C:/Users/dell/x", existing: [] })
+  const paths = roots.map((root) => root.path.toLowerCase())
+  assert.equal(new Set(paths).size, paths.length)
+})
+
+test("folder shortcuts degrade to nothing without evidence", () => {
+  assert.deepEqual(commonRoots({}), [])
+})
 
 test("paths normalise separators and trailing slashes", () => {
   assert.equal(normalizePath("C:\\work\\app\\"), "C:/work/app")

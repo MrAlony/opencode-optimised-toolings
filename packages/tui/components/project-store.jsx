@@ -8,6 +8,7 @@
 import { createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { buildProjectModel, flattenProjectSessions, summarizeProjects } from "../lib/projects.js"
+import { listProjects, listSessions } from "../lib/sdk.js"
 import {
   activateSlot,
   activateTab,
@@ -36,6 +37,7 @@ import {
   soloPane,
 } from "../lib/panes.js"
 
+const HIDDEN_PROJECTS_KEY = "alonix_hidden_projects"
 const PANES_KEY = "alonix_monitor_panes"
 const WORKBENCH_KEY = "alonix_workbench_state"
 const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
@@ -60,24 +62,21 @@ function writeKv(api, key, value) {
 }
 
 /**
- * Load every project and session the server knows about.
+ * Load every project, and the sessions belonging to each of them.
  *
- * Sessions are fetched unscoped (`scope: "project"` is deliberately omitted)
- * so the result spans directories rather than only the launch project.
+ * `session.list` is scoped to a single directory: with no `directory` query it
+ * answers for the server's launch directory only. Listing once therefore
+ * returns the launch project's sessions no matter which project you select,
+ * which is why switching projects appeared to show the wrong sessions. The
+ * only way to span projects is to ask per project worktree and merge.
  *
- * Each list resolves independently and a failure is reported rather than
- * flattened into an empty array. Blanking the workbench because one request
- * failed would be far worse than showing slightly stale data, so the caller
- * keeps the previous value for whichever list did not load.
+ * Each request resolves independently and failures are reported rather than
+ * flattened into an empty array, so one unreachable project cannot blank the
+ * whole portfolio.
  */
 async function loadPortfolio(api) {
   const client = api?.client
   if (!client) return { projects: [], sessions: [], errors: [] }
-
-  const [projectResult, sessionResult] = await Promise.allSettled([
-    Promise.resolve(client.project?.list?.({})),
-    Promise.resolve(client.session?.list?.({ roots: true, limit: SESSION_LIMIT })),
-  ])
 
   const errors = []
   const unwrap = (settled, label) => {
@@ -85,13 +84,43 @@ async function loadPortfolio(api) {
       errors.push(`${label}: ${errorText(settled.reason)}`)
       return undefined
     }
-    const data = settled.value?.data
-    return Array.isArray(data) ? data : undefined
+    return Array.isArray(settled.value) ? settled.value : undefined
   }
 
+  const projectSettled = await Promise.allSettled([listProjects(client)])
+  const projects = unwrap(projectSettled[0], "projects")
+
+  // Always include the launch directory: it answers before any project record
+  // exists and covers sessions whose project is not yet registered.
+  const directories = new Set([""])
+  for (const project of projects ?? []) {
+    const worktree = String(project?.worktree ?? "").trim()
+    if (worktree) directories.add(worktree)
+  }
+
+  const listFor = (directory) => listSessions(client, { directory, roots: true, limit: SESSION_LIMIT })
+
+  const targets = [...directories]
+  const settled = await Promise.allSettled(targets.map((directory) => listFor(directory)))
+
+  // Merge and de-duplicate: a session reachable from two directories is one
+  // session, and the first (most specific) answer wins.
+  const byID = new Map()
+  let anySucceeded = false
+  settled.forEach((result, index) => {
+    const label = targets[index] || "current directory"
+    const rows = unwrap(result, `sessions (${label})`)
+    if (!rows) return
+    anySucceeded = true
+    for (const session of rows) {
+      if (session?.id && !byID.has(session.id)) byID.set(session.id, session)
+    }
+  })
+
   return {
-    projects: unwrap(projectResult, "projects"),
-    sessions: unwrap(sessionResult, "sessions"),
+    projects,
+    // `undefined` means "nothing loaded", which preserves the previous list.
+    sessions: anySucceeded ? [...byID.values()] : undefined,
     errors,
   }
 }
@@ -106,6 +135,7 @@ export function createProjectStore(api) {
     projects: [],
     sessions: [],
     pinnedProjects: normalizeIds(readKv(api, PINNED_PROJECTS_KEY, [])),
+    hiddenProjects: normalizeIds(readKv(api, HIDDEN_PROJECTS_KEY, []), 200),
     workbench: createWorkbench(readKv(api, WORKBENCH_KEY, {})),
     panes: createPanes(readKv(api, PANES_KEY, {})),
     loading: false,
@@ -157,8 +187,26 @@ export function createProjectStore(api) {
     }, REFRESH_DEBOUNCE_MS)
   }
 
+  // Subscribing to only `session.updated` left the sidebar stale: a new session
+  // never appeared, and a session that started working kept showing as idle.
+  // These are the events that actually change what the sidebar displays.
+  const WATCHED_EVENTS = [
+    "session.created",
+    "session.updated",
+    "session.deleted",
+    "session.idle",
+    "session.status",
+    "session.error",
+    "session.diff",
+    "session.compacted",
+    "message.updated",
+    "message.part.updated",
+    "project.updated",
+    "project.directories.updated",
+  ]
+
   const offs = []
-  for (const event of ["session.updated", "session.deleted", "session.idle", "project.updated"]) {
+  for (const event of WATCHED_EVENTS) {
     try {
       const off = api?.event?.on?.(event, refresh)
       if (typeof off === "function") offs.push(off)
@@ -212,6 +260,7 @@ export function createProjectStore(api) {
       sessions: store.sessions,
       statuses: statuses(),
       pinnedProjects: store.pinnedProjects,
+      hiddenProjects: store.hiddenProjects,
       activeSessionID: activeSessionID(),
       activeDirectory: (() => {
         try {
@@ -274,6 +323,9 @@ export function createProjectStore(api) {
     get pinnedProjects() {
       return store.pinnedProjects
     },
+    get hiddenProjects() {
+      return store.hiddenProjects
+    },
     projectRows,
     sessionRows,
     summary,
@@ -324,6 +376,31 @@ export function createProjectStore(api) {
       }
       commitWorkbench(next)
     },
+    /**
+     * Hide a project from the list.
+     *
+     * Deliberately not a delete: sessions and files are untouched, and adding
+     * the directory again brings it straight back. Keyed by worktree because
+     * that is what survives a project being re-registered.
+     */
+    hideProject(worktree) {
+      const target = String(worktree ?? "").trim()
+      if (!target) return
+      const next = normalizeIds([target, ...store.hiddenProjects], 200)
+      setStore("hiddenProjects", next)
+      writeKv(api, HIDDEN_PROJECTS_KEY, next)
+    },
+    unhideProject(worktree) {
+      const target = String(worktree ?? "").trim()
+      if (!target) return
+      const next = store.hiddenProjects.filter((item) => item !== target)
+      setStore("hiddenProjects", next)
+      writeKv(api, HIDDEN_PROJECTS_KEY, next)
+    },
+    showAllProjects() {
+      setStore("hiddenProjects", [])
+      writeKv(api, HIDDEN_PROJECTS_KEY, [])
+    },
     togglePinProject(projectID) {
       if (typeof projectID !== "string" || !projectID) return
       const current = store.pinnedProjects
@@ -357,27 +434,6 @@ export function createProjectStore(api) {
       commitPanes(autoFill(store.panes, sessionRows(), limit))
     },
 
-    /**
-     * Create a session in an explicit directory. This is what makes the
-     * workbench genuinely multi-project: the host would otherwise only ever
-     * create sessions in its own launch directory.
-     *
-     * The host itself only creates a session when a prompt is submitted, so
-     * this is reserved for an explicit user action. Calling it speculatively
-     * litters the list with empty sessions.
-     */
-    async createSession({ directory, title } = {}) {
-      const body = title ? { title } : {}
-      const query = directory ? { directory } : {}
-      const result = await api?.client?.session?.create?.({ body, query })
-      if (result?.error) {
-        const detail = result.error?.message ?? JSON.stringify(result.error)
-        throw new Error(`Could not create a session: ${detail}`)
-      }
-      const created = result?.data
-      if (created?.id) refresh()
-      return created ?? null
-    },
   }
 }
 

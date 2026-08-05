@@ -34,7 +34,18 @@ test("project labels prefer an explicit name and fall back to the directory", ()
   assert.equal(projectLabel(PROJECTS[0]), "Alpha")
   assert.equal(projectLabel(PROJECTS[1]), "beta")
   assert.equal(projectLabel({ worktree: "C:/work/gamma/" }), "gamma")
-  assert.equal(projectLabel({}), "project")
+  assert.equal(projectLabel({}), "untitled")
+})
+
+test("generic directory names keep their parent so projects stay distinguishable", () => {
+  // Every project living under a "projects" folder would otherwise render as
+  // the same useless label.
+  assert.equal(projectLabel({ worktree: "C:/users/dev/mralony/projects" }), "mralony/projects")
+  assert.equal(projectLabel({ worktree: "/home/dev/app/src" }), "app/src")
+  // A specific leaf is already identifying and is left alone.
+  assert.equal(projectLabel({ worktree: "/home/dev/checkout-service" }), "checkout-service")
+  // A drive root has no meaningful leaf.
+  assert.equal(projectLabel({ worktree: "C:/" }), "C:")
 })
 
 test("directory containment handles nesting, separators, and non-matches", () => {
@@ -85,7 +96,24 @@ test("sessions from unknown projects are retained, never dropped", () => {
   const ghost = rows.find((row) => row.worktree === "D:/elsewhere/ghost")
   assert.ok(ghost, "an unattributable session must still be reachable")
   assert.equal(ghost.known, false)
+  assert.equal(ghost.openable, true)
   assert.equal(ghost.sessionCount, 1)
+})
+
+test("an empty project worktree inherits a real session directory", () => {
+  const rows = buildProjectModel({
+    now: NOW,
+    projects: [{ id: "home", name: "dell", worktree: "" }],
+    sessions: [session("home-chat", { projectID: "home", directory: "C:/Users/dell" })],
+  })
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].worktree, "C:/Users/dell")
+  assert.equal(rows[0].openable, true)
+})
+
+test("a row without any proven directory is explicitly non-actionable", () => {
+  const rows = buildProjectModel({ projects: [{ id: "missing", name: "missing", worktree: "" }], sessions: [] })
+  assert.equal(rows[0].openable, false)
 })
 
 test("child sessions never appear in the project model", () => {

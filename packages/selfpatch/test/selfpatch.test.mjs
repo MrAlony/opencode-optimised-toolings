@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultState, readState, sha256File, stateSummary, writeState } from "../lib/state.js"
-import { applyManifest, manifestSha256, patchFileContent } from "../lib/pipeline.js"
+import { applyManifest, manifestSha256, patchFileContent, sourceReady } from "../lib/pipeline.js"
 import { detectBinary, isDevRuntime, resolveOnPath, versionOf } from "../lib/detect.js"
 import { SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
@@ -98,14 +98,27 @@ test("sha256File streams a stable fingerprint", async () => {
   }
 })
 
-test("patchFileContent enforces exact occurrence counts", async () => {
+test("patchFileContent enforces exact occurrence counts and recognizes completed steps", async () => {
   const root = mkdtempSync(join(tmpdir(), "alonix-toolings-patch-"))
   try {
     const file = join(root, "a.txt")
     writeFileSync(file, "one one two\n")
-    const out = await patchFileContent(file, [{ name: "double replace", search: "one", replace: "1", count: 2 }])
+    const replacement = [{ name: "double replace", search: "one", replace: "1", count: 2 }]
+    const out = await patchFileContent(file, replacement)
     assert.equal(out, "1 1 two\n")
-    await assert.rejects(() => patchFileContent(file, [{ name: "bad count", search: "one", replace: "1", count: 3 }]), /expected 3 occurrence\(s\), found 2/)
+    writeFileSync(file, out)
+    assert.equal(await patchFileContent(file, replacement), out, "an already-applied step must be an exact no-op")
+
+    // Real manifests insert declarations immediately before an anchor, so the
+    // replacement body can still contain the original search text.
+    writeFileSync(file, "types\nTuiDispose\n")
+    const overlapping = [{ search: "TuiDispose", replace: "types\nTuiDispose" }]
+    assert.equal(await patchFileContent(file, overlapping), "types\nTuiDispose\n")
+
+    await assert.rejects(
+      () => patchFileContent(file, [{ name: "bad count", search: "missing", replace: "also-missing", count: 3 }]),
+      /found original=0, replacement=0/,
+    )
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -130,7 +143,7 @@ test("applyManifest validates everything before writing anything", async () => {
     const failing = {
       version: "test",
       create: [{ path: "other-new.txt", content: "changed\n" }],
-      files: [{ path: "existing.txt", beforeSha256: sha256Of("totally different"), replacements: [{ name: "swap", search: "beta", replace: "gamma" }] }],
+      files: [{ path: "existing.txt", beforeSha256: sha256Of("totally different"), replacements: [{ name: "swap", search: "missing", replace: "also-missing" }] }],
     }
     await assert.rejects(() => applyManifest(src, failing), /fingerprint mismatch/)
     assert.equal(existsSync(join(src, "other-new.txt")), false)
@@ -140,10 +153,92 @@ test("applyManifest validates everything before writing anything", async () => {
   }
 })
 
+test("applyManifest is idempotent after marker loss or an interrupted run", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-idempotent-"))
+  try {
+    const original = "before alpha beta after\n"
+    const src = join(root, "src")
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, "existing.txt"), original)
+    const manifest = {
+      version: "test",
+      create: [{ path: "created.txt", content: "registry\n" }],
+      files: [{
+        path: "existing.txt",
+        beforeSha256: sha256Of(original),
+        replacements: [
+          { name: "first", search: "alpha", replace: "ALPHA" },
+          { name: "second", search: "beta", replace: "BETA" },
+        ],
+      }],
+    }
+
+    await applyManifest(src, manifest)
+    const once = readFileSync(join(src, "existing.txt"), "utf8")
+    await applyManifest(src, manifest)
+    assert.equal(readFileSync(join(src, "existing.txt"), "utf8"), once)
+    assert.equal(readFileSync(join(src, "created.txt"), "utf8"), "registry\n")
+
+    // A mixed file body is not a valid recovery state: file writes are staged
+    // and complete, so it indicates truncation or foreign modification.
+    writeFileSync(join(src, "existing.txt"), "before ALPHA beta after\n")
+    await assert.rejects(() => applyManifest(src, manifest), /neither pristine nor the exact patched result/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("applyManifest rejects conflicting created or patched content", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-conflict-"))
+  try {
+    const src = join(root, "src")
+    mkdirSync(src, { recursive: true })
+    writeFileSync(join(src, "created.txt"), "foreign\n")
+    writeFileSync(join(src, "existing.txt"), "unrelated\n")
+    const manifest = {
+      create: [{ path: "created.txt", content: "expected\n" }],
+      files: [{ path: "existing.txt", beforeSha256: sha256Of("alpha\n"), replacements: [{ search: "alpha", replace: "beta" }] }],
+    }
+    await assert.rejects(() => applyManifest(src, manifest), /different content/)
+    assert.equal(readFileSync(join(src, "created.txt"), "utf8"), "foreign\n")
+    assert.equal(readFileSync(join(src, "existing.txt"), "utf8"), "unrelated\n")
+
+    writeFileSync(join(src, "created.txt"), "expected\n")
+    await assert.rejects(() => applyManifest(src, manifest), /foreign changes are present|neither pristine nor the exact patched result/)
+    assert.equal(readFileSync(join(src, "existing.txt"), "utf8"), "unrelated\n")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("manifestSha256 is deterministic", async () => {
   const manifest = { version: "x", create: [] }
   assert.equal(await manifestSha256(manifest), await manifestSha256(manifest))
   assert.notEqual(await manifestSha256(manifest), await manifestSha256({ ...manifest, version: "y" }))
+})
+
+test("an existing but partial source cache is not considered ready", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-source-"))
+  try {
+    assert.equal(await sourceReady(root), false)
+    for (const file of [
+      "bun.lock",
+      "packages/opencode/script/build.ts",
+      "packages/plugin/src/tui.ts",
+      "packages/tui/src/app.tsx",
+      "packages/tui/src/plugin/adapters.tsx",
+      "packages/tui/src/routes/session/index.tsx",
+    ]) {
+      const target = join(root, file)
+      mkdirSync(join(target, ".."), { recursive: true })
+      writeFileSync(target, "sentinel\n")
+    }
+    assert.equal(await sourceReady(root), true)
+    rmSync(join(root, "packages/tui/src/routes/session/index.tsx"))
+    assert.equal(await sourceReady(root), false, "a missing patch anchor must force re-extraction")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test("v1.18.13 patch carries tool renderers through every TUI API boundary", () => {
@@ -159,17 +254,84 @@ test("v1.18.13 patch carries tool renderers through every TUI API boundary", () 
   assert.match(adapters.replacements.map((item) => item.replace).join("\n"), /return registerPluginToolRenderer/)
 })
 
-test("v1.18.13 patch is limited to renderer plumbing and authoritative tool-lifecycle recovery", () => {
+test("v1.18.13 patch exposes a native deferred session draft without creating sessions", () => {
+  const files = new Map(patchManifest.files.map((file) => [file.path, file]))
+  const pluginTypes = files.get("packages/plugin/src/tui.ts")
+  const hostRuntime = files.get("packages/opencode/src/plugin/tui/runtime.ts")
+  const adapters = files.get("packages/tui/src/plugin/adapters.tsx")
+  const destination = files.get("packages/tui/src/routes/home/session-destination.tsx")
+  for (const file of [pluginTypes, hostRuntime, adapters, destination]) assert.ok(file)
+
+  assert.match(pluginTypes.replacements.map((item) => item.replace).join("\n"), /sessionDraft/)
+  assert.match(hostRuntime.replacements.map((item) => item.replace).join("\n"), /sessionDraft: api\.sessionDraft/)
+  const adapterSource = adapters.replacements.map((item) => item.replace).join("\n")
+  assert.match(adapterSource, /setHomeSessionDestination\(target\)/)
+  assert.match(adapterSource, /routeNavigate\(input\.route, "home"\)/)
+  const destinationSource = destination.replacements.map((item) => item.replace).join("\n")
+  assert.match(destinationSource, /setDestination\(\{ type: "directory", directory: target, subdirectory: false \}\)/)
+  assert.match(destinationSource, /onCleanup\(\(\) => setDestination\(undefined\)\)/, "leaving an untouched draft must clear its folder")
+  for (const source of [adapterSource, destinationSource]) {
+    assert.doesNotMatch(source, /session\.create|sdk\.client/, "draft preparation must never create a session")
+  }
+})
+
+test("v1.18.13 patch is limited to renderer plumbing, deferred drafts, tool recovery, and one layout slot", () => {
+  // Every host file patched here is a maintenance cost on each OpenCode
+  // upgrade, so the set stays explicit and small.
   const paths = patchManifest.files.map((file) => file.path)
   assert.deepEqual(paths.sort(), [
     "packages/opencode/src/plugin/tui/runtime.ts",
     "packages/opencode/src/session/prompt.ts",
     "packages/plugin/src/tui.ts",
+    // Adds the `app_left` layout column. A dock cannot push the app aside from
+    // a plugin slot alone: the root is a column, so an absolutely positioned
+    // panel is the only alternative and it covers the transcript instead of
+    // sitting beside it.
+    "packages/tui/src/app.tsx",
     "packages/tui/src/plugin/adapters.tsx",
+    "packages/tui/src/routes/home/session-destination.tsx",
     "packages/tui/src/routes/session/index.tsx",
   ].sort())
+
+  // These remain forbidden: they would move host state ownership or routing
+  // into the patch, which the plugin API already covers.
   const source = JSON.stringify(patchManifest)
-  for (const forbidden of ["app_left", "TuiProject", "TuiWorkspace", "setDirectory", "projectTransition", "session.get({ sessionID", "packages/tui/src/context/sdk.tsx", "packages/tui/src/context/sync.tsx", "packages/tui/src/app.tsx"]) assert.equal(source.includes(forbidden), false, `forbidden host behavior: ${forbidden}`)
+  for (const forbidden of [
+    "TuiProject",
+    "TuiWorkspace",
+    "projectTransition",
+    "session.get({ sessionID",
+    "packages/tui/src/context/sdk.tsx",
+    "packages/tui/src/context/sync.tsx",
+  ]) {
+    assert.equal(source.includes(forbidden), false, `forbidden host behavior: ${forbidden}`)
+  }
+})
+
+test("the app.tsx patch only adds a layout column and leaves routing untouched", () => {
+  const app = patchManifest.files.find((file) => file.path === "packages/tui/src/app.tsx")
+  assert.ok(app, "the layout patch must be present")
+  const replaced = app.replacements.map((item) => item.replace).join("\n")
+
+  // It introduces exactly one new slot and the row wrapper that hosts it.
+  assert.match(replaced, /name="app_left"/, "the left column slot must be declared")
+  assert.match(replaced, /flexDirection="row"/, "the root must become a row so the column sits beside the app")
+
+  // The existing route switch and bottom slot must survive unchanged.
+  assert.match(replaced, /<Switch>/, "routing must be preserved")
+  assert.match(replaced, /name="app_bottom"/, "the existing bottom slot must be preserved")
+
+  // Nothing about sessions, projects, or navigation belongs in a layout patch.
+  for (const forbidden of ["session.create", "route.navigate", "sdk.client"]) {
+    assert.equal(replaced.includes(forbidden), false, `layout patch must not touch ${forbidden}`)
+  }
+})
+
+test("the app_left slot is declared in the public plugin types", () => {
+  const types = patchManifest.files.find((file) => file.path === "packages/plugin/src/tui.ts")
+  assert.ok(types, "public plugin API types must be patched")
+  const replaced = types.replacements.map((item) => item.replace).join("\n")
+  assert.match(replaced, /app_left: \{\}/, "plugins must be able to target the new slot in a typed way")
 })
 
 test("v1.18.13 patch terminalizes only unfinished tools at a newly owned loop boundary", () => {

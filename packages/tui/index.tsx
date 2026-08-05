@@ -22,19 +22,28 @@ import { DiscoveryView } from "./components/discovery.jsx"
 import { WebView } from "./components/web.jsx"
 import { StealthView } from "./components/stealth.jsx"
 import { CbmView } from "./components/cbm.jsx"
-import { ClockProvider, createClock, createSessionStore, createSkin, openSession } from "./components/runtime.jsx"
+import { ClockProvider, createClock, createSkin, openSession } from "./components/runtime.jsx"
 import { HomeDeck, PromptContext, StatusBar, WorkspaceInspector } from "./components/ide-surfaces.jsx"
-import { SessionSwitcher } from "./components/session-switcher.jsx"
 import { ToolingStatusView } from "./components/tooling-status.jsx"
 import { createProjectStore } from "./components/project-store.jsx"
 import { Palette } from "./components/palette.jsx"
 import { Workbench } from "./components/workbench.jsx"
 import { ProjectAdd } from "./components/project-add.jsx"
+import { Dock } from "./components/dock.jsx"
 import { workbenchCommands } from "./lib/command-registry.js"
 
 type Tokens = ReturnType<typeof createTokens>
 
 const WORKBENCH_ROUTE = "alonix-workbench"
+const DOCK_KEY = "alonix_dock_open"
+
+function readDockPreference(api: TuiPluginApi): boolean {
+  try {
+    return api.kv.get(DOCK_KEY, true) !== false
+  } catch {
+    return true
+  }
+}
 
 type RenderProps = {
   input: Record<string, unknown>
@@ -111,7 +120,6 @@ const tui: TuiPlugin = async (api, options) => {
   const scope = createRoot((disposeRoot) => {
     const tokens = createSkin(api, { motion })
     const clock = createClock(motion)
-    const store = createSessionStore(api)
     const projects = createProjectStore(api)
     const [toolingState, setToolingState] = createSignal(readStateSync(statePath))
     const [registered, setRegistered] = createSignal(0)
@@ -128,10 +136,12 @@ const tui: TuiPlugin = async (api, options) => {
     })
     const [workbenchView, setWorkbenchView] = createSignal<"activity" | "changes" | "plan">("activity")
     const [workbenchMode, setWorkbenchMode] = createSignal<"work" | "monitor">("work")
+    // The dock is docked open by default: it is the primary navigation surface,
+    // and the preference survives restarts.
+    const [dockOpen, setDockOpen] = createSignal<boolean>(readDockPreference(api))
     return {
       tokens,
       clock,
-      store,
       projects,
       toolingState,
       setToolingState,
@@ -141,11 +151,23 @@ const tui: TuiPlugin = async (api, options) => {
       setWorkbenchView,
       workbenchMode,
       setWorkbenchMode,
+      dockOpen,
+      setDockOpen,
       disposeRoot,
     }
   })
-  const { tokens, clock, store, projects, toolingState, setToolingState, setRegistered, tooling } = scope
-  const { workbenchView, setWorkbenchView, workbenchMode, setWorkbenchMode } = scope
+  const { tokens, clock, projects, toolingState, setToolingState, setRegistered, tooling } = scope
+  const { workbenchView, setWorkbenchView, workbenchMode, setWorkbenchMode, dockOpen, setDockOpen } = scope
+
+  const toggleDock = () => {
+    const next = !dockOpen()
+    setDockOpen(next)
+    try {
+      api.kv.set(DOCK_KEY, next)
+    } catch {
+      // Persistence is best effort; the toggle still works this session.
+    }
+  }
 
   // Register rich renderers through the patched core's api.toolRenderers.
   const extended = api as TuiPluginApi & {
@@ -167,27 +189,7 @@ const tui: TuiPlugin = async (api, options) => {
     setRegistered(registration.registered)
   }
 
-  const openSwitcher = () => {
-    // Must match the `size` passed to SessionSwitcher below: the component sizes
-    // its columns against the dialog panel, so a mismatch overflows it.
-    api.ui.dialog.setSize("xlarge")
-    api.ui.dialog.replace(() => {
-      const dimensions = useTerminalDimensions()
-      return (
-        <ClockProvider clock={clock}>
-          <SessionSwitcher
-            api={api}
-            tokens={tokens}
-            store={store}
-            dimensions={dimensions}
-            size="xlarge"
-            onClose={() => api.ui.dialog.clear()}
-          />
-        </ClockProvider>
-      )
-    })
-    store.refresh()
-  }
+  const openSwitcher = () => openPalette("")
 
   const openWorkbench = () => {
     try {
@@ -216,10 +218,7 @@ const tui: TuiPlugin = async (api, options) => {
   const controller = {
     openWorkbench,
     openPalette: () => openPalette(),
-    refresh: () => {
-      projects.refresh()
-      store.refresh()
-    },
+    refresh: () => projects.refresh(),
     closeActiveTab: () => {
       const active = projects.workbench.activeID
       if (active) projects.closeTab(active)
@@ -233,18 +232,7 @@ const tui: TuiPlugin = async (api, options) => {
       const active = projects.workbench.activeID
       if (active) openSession(api, active)
     },
-    newSession: async () => {
-      try {
-        const created = await projects.createSession({})
-        if (created?.id) openSessionTab(created.id)
-      } catch (error) {
-        api.ui.toast({
-          variant: "error",
-          title: "Could not start a session",
-          message: error instanceof Error ? error.message : String(error),
-        })
-      }
-    },
+    newSession: async () => openPalette("#"),
     chooseProjectForNewSession: () => openPalette("#"),
   }
 
@@ -258,13 +246,48 @@ const tui: TuiPlugin = async (api, options) => {
   }
 
   /**
-   * Add a project by choosing a directory.
+   * Prepare OpenCode's native home prompt for a folder.
    *
-   * OpenCode registers a project the first time a session runs in its
-   * directory, so "adding" means starting work there. The session is created
-   * only on this explicit confirmation, matching the host, which creates a
-   * session on prompt submission rather than speculatively.
+   * This deliberately does not call session.create. Native OpenCode creates the
+   * session only after the first non-empty prompt is submitted, which prevents
+   * folder clicks and cancelled drafts from littering the history.
    */
+  const openSessionDraft = (directory?: string) => {
+    const target = String(directory ?? "").trim()
+    if (!target) {
+      api.ui.toast({
+        variant: "warning",
+        title: "Folder unavailable",
+        message: "This item has no usable directory. Open one of its existing chats instead.",
+      })
+      return false
+    }
+    const draftApi = (api as TuiPluginApi & { sessionDraft?: { open(directory: string): void } }).sessionDraft
+    if (!draftApi || typeof draftApi.open !== "function") {
+      api.ui.toast({
+        variant: "warning",
+        title: "Restart OpenCode to use folder drafts",
+        message: "The updated host integration is installed automatically and becomes active after restart.",
+      })
+      return false
+    }
+    try {
+      draftApi.open(target)
+      return true
+    } catch (error) {
+      api.ui.toast({
+        variant: "error",
+        title: "Could not prepare the chat",
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return false
+    }
+  }
+
+  const openProject = (project: { worktree?: string }) => {
+    openSessionDraft(project?.worktree)
+  }
+
   const openAddProject = () => {
     api.ui.dialog.setSize("large")
     api.ui.dialog.replace(() => (
@@ -282,16 +305,13 @@ const tui: TuiPlugin = async (api, options) => {
           projects={() => projects.projectRows()}
           onClose={() => api.ui.dialog.clear()}
           onAdd={async (directory: string) => {
-            const created = await projects.createSession({ directory })
+            if (!openSessionDraft(directory)) return
             api.ui.dialog.clear()
-            if (created?.id) {
-              openSessionTab(created.id)
-              api.ui.toast({
-                variant: "success",
-                title: "Project added",
-                message: `Started a session in ${directory}`,
-              })
-            }
+            api.ui.toast({
+              variant: "success",
+              title: "Folder ready",
+              message: "Type your first message to create the chat.",
+            })
           }}
         />
       </ClockProvider>
@@ -327,25 +347,9 @@ const tui: TuiPlugin = async (api, options) => {
                 return
               }
               if (action.kind === "project") {
-                // Opening a project means resuming its most recent session, or
-                // starting a fresh one in that directory when it has none.
-                const first = action.project?.sessions?.[0]
-                if (first) {
-                  openSessionTab(first.id)
-                  return
-                }
-                void projects
-                  .createSession({ directory: action.project?.worktree })
-                  .then((created) => {
-                    if (created?.id) openSessionTab(created.id)
-                  })
-                  .catch(() => {
-                    api.ui.toast({
-                      variant: "error",
-                      title: "Could not start a session",
-                      message: `No session could be created in ${action.project?.worktree ?? "that project"}.`,
-                    })
-                  })
+                // A folder selection is a fresh-chat action. Previous chats are
+                // separate session results and only open when chosen directly.
+                openProject(action.project)
                 return
               }
               action.run?.(controller)
@@ -369,16 +373,17 @@ const tui: TuiPlugin = async (api, options) => {
               api={api}
               tokens={tokens}
               store={projects}
-              // The clock drives the live activity feed; reading it inside the
-              // session view re-derives host message state on every frame.
-              tick={clock}
+              // The dock occupies a sibling column; the workbench must size
+              // itself against the remaining width.
+              dockOpen={dockOpen}
               view={workbenchView}
               onView={setWorkbenchView}
               mode={workbenchMode}
               onMode={setWorkbenchMode}
               onAddProject={openAddProject}
               onPalette={() => openPalette()}
-              onNewSession={() => void controller.newSession()}
+              onNewSession={() => openPalette("#")}
+              onChooseProject={() => openPalette("#")}
               onOpenChat={openChat}
               onExit={() => openChat(projects.workbench.activeID)}
             />
@@ -413,17 +418,19 @@ const tui: TuiPlugin = async (api, options) => {
           const dimensions = useTerminalDimensions()
           return (
             <ClockProvider clock={clock}>
-              <HomeDeck api={api} tokens={tokens} store={store} dimensions={dimensions} />
+              <HomeDeck api={api} tokens={tokens} store={projects} dimensions={dimensions} />
             </ClockProvider>
           )
         },
         sidebar_content(_ctx, props) {
+          // Projects and sessions live in the left dock; this panel stays
+          // focused on the current session so the two never duplicate.
           return (
             <ClockProvider clock={clock}>
               <WorkspaceInspector
                 api={api}
                 tokens={tokens}
-                store={store}
+                store={projects}
                 sessionID={props.session_id}
                 tooling={tooling()}
               />
@@ -433,7 +440,44 @@ const tui: TuiPlugin = async (api, options) => {
         app_bottom() {
           return (
             <ClockProvider clock={clock}>
-              <StatusBar api={api} tokens={tokens} store={store} tooling={tooling()} />
+              <StatusBar api={api} tokens={tokens} store={projects} tooling={tooling()} />
+            </ClockProvider>
+          )
+        },
+        /*
+          Left layout column, so the dock pushes the app aside instead of
+          covering it, and the app reclaims the space when the dock is hidden.
+          Present on the home screen and inside a session alike: this is the
+          always-visible navigation surface.
+
+          `app_left` is added by the Alonix self-patch. On an unpatched host the
+          slot simply never renders, and the workbench route still works.
+        */
+        app_left() {
+          return (
+            <ClockProvider clock={clock}>
+              <Dock
+                api={api}
+                tokens={tokens}
+                store={projects}
+                expanded={dockOpen}
+                onToggle={toggleDock}
+                onOpen={(session: { id: string }) => openSessionTab(session.id)}
+                onOpenProject={openProject}
+                onHideProject={(project: { worktree?: string; name?: string }) => {
+                  if (!project?.worktree) return
+                  projects.hideProject(project.worktree)
+                  api.ui.toast({
+                    variant: "info",
+                    title: `Removed ${project.name ?? "project"} from the list`,
+                    message: "Sessions were not deleted. Add the folder again to bring it back.",
+                  })
+                }}
+                onAddProject={openAddProject}
+                onWorkbench={openWorkbench}
+                onChooseProject={() => openPalette("#")}
+                onNewSessionIn={(project: { worktree?: string }) => openSessionDraft(project?.worktree)}
+              />
             </ClockProvider>
           )
         },
@@ -478,14 +522,21 @@ const tui: TuiPlugin = async (api, options) => {
         run: openAddProject,
       },
       {
+        name: "alonix-ide.dock",
+        title: "Show or hide the project sidebar",
+        category: "Workbench",
+        namespace: "palette",
+        slashName: "alonix-sidebar",
+        run: toggleDock,
+      },
+      {
         name: "alonix-ide.monitor",
-        title: "Watch sessions side by side",
+        title: "Open the automatic live-work dashboard",
         category: "Workbench",
         namespace: "palette",
         slashName: "alonix-monitor",
         run: () => {
           setWorkbenchMode("monitor")
-          if (projects.panes.ids.length === 0) projects.autoFillPanes()
           openWorkbench()
         },
       },

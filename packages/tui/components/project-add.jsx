@@ -3,15 +3,26 @@
 //
 // Two ways in, because neither alone is enough: type or paste a path when you
 // know it, or click through directories when you do not. Adding a project just
-// means starting a session in that directory - OpenCode registers the project
-// on first use - so this validates the directory and hands it to the caller.
+// means preparing the native home prompt for that directory. OpenCode registers
+// the project only after the first message creates the session, so this validates
+// the directory and hands it to the caller without creating an empty chat.
 
 import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
-import { applyKeyToQuery, classifyKey, moveIndex } from "../lib/keys.js"
+import { classifyKey, moveIndex } from "../lib/keys.js"
 import { fit, fitLeft } from "../lib/layout.js"
-import { baseName, breadcrumbs, browseModel, joinPath, normalizePath, parentOf } from "../lib/browse.js"
-import { Button } from "./controls.jsx"
+import {
+  baseName,
+  breadcrumbs,
+  browseModel,
+  commonRoots,
+  homeOf,
+  joinPath,
+  normalizePath,
+  parentOf,
+} from "../lib/browse.js"
+import { Button, TextInput } from "./controls.jsx"
+import { listDirectory as listSdkDirectory } from "../lib/sdk.js"
 import { EmptyState, KeyHints, Rule, SectionLabel, Spinner } from "./ide-kit.jsx"
 
 const HINTS = [
@@ -58,8 +69,7 @@ async function listDirectory(api, directory) {
   const normalized = normalizePath(directory)
   if (!normalized) return { entries: [], error: "" }
   try {
-    const result = await api?.client?.file?.list?.({ query: { path: normalized, directory: normalized } })
-    const nodes = Array.isArray(result?.data) ? result.data : []
+    const nodes = await listSdkDirectory(api?.client, normalized)
     const entries = toEntries(nodes)
     const names = new Set(entries.map((entry) => entry.name))
     return {
@@ -77,6 +87,7 @@ export function ProjectAdd(props) {
   const tokens = props.tokens
   const [directory, setDirectory] = createSignal(normalizePath(props.initialDirectory) || "")
   const [typed, setTyped] = createSignal("")
+  const [pathDraft, setPathDraft] = createSignal(normalizePath(props.initialDirectory) || "")
   const [index, setIndex] = createSignal(0)
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal("")
@@ -102,10 +113,26 @@ export function ProjectAdd(props) {
 
   const width = () => Math.max(30, Number(props.width) || 90)
 
+  // Offer a shortcut only when the listing proves the folder exists, so the
+  // picker never advertises a dead end.
+  const [homeListing] = createResource(
+    () => homeOf(props.initialDirectory) ?? homeOf(directory()),
+    (home) => listDirectory(props.api, home),
+  )
+
+  const shortcuts = createMemo(() => {
+    const home = homeOf(props.initialDirectory) ?? homeOf(directory())
+    const existing = (homeListing()?.entries ?? [])
+      .filter((entry) => entry.directory)
+      .map((entry) => joinPath(home, entry.name))
+    return commonRoots({ home, current: props.initialDirectory ?? directory(), existing })
+  })
+
   const enter = (path) => {
     const next = normalizePath(path)
     if (!next) return
     setDirectory(next)
+    setPathDraft(next)
     setTyped("")
     setIndex(0)
     setFailure("")
@@ -116,7 +143,7 @@ export function ProjectAdd(props) {
     if (parent) enter(parent)
   }
 
-  /** Adding is really "start working here"; the caller owns that. */
+  /** Adding prepares a directory-scoped draft; the caller owns navigation. */
   const add = async (path) => {
     const target = normalizePath(path ?? directory())
     if (!target || busy()) return
@@ -151,11 +178,6 @@ export function ProjectAdd(props) {
       setIndex((current) => moveIndex(current, model().entries.length, action, 10))
       return
     }
-    const next = applyKeyToQuery(typed(), event)
-    if (next !== typed()) {
-      setTyped(next)
-      setIndex(0)
-    }
   }
 
   return (
@@ -165,9 +187,6 @@ export function ProjectAdd(props) {
       paddingRight={2}
       paddingBottom={1}
       gap={1}
-      focusable
-      focused
-      onKeyDown={handleKey}
     >
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
         <text fg={tokens().accent} wrapMode="none" selectable={false}>
@@ -185,15 +204,48 @@ export function ProjectAdd(props) {
         </Show>
       </box>
 
+      {/*
+        Typing a path from memory is the worst way to choose a folder, so the
+        usual destinations are one click away before any browsing starts.
+      */}
+      <Show when={shortcuts().length}>
+        <box flexDirection="column" flexShrink={0} gap={1}>
+          <text fg={tokens().faint} wrapMode="none" selectable={false}>
+            JUMP TO
+          </text>
+          <box flexDirection="row" flexShrink={0} height={1} gap={1}>
+            <For each={shortcuts()}>
+              {(root) => (
+                <Button
+                  tokens={tokens()}
+                  variant={directory() === root.path ? "secondary" : "ghost"}
+                  size="sm"
+                  onPress={() => enter(root.path)}
+                >
+                  {root.name}
+                </Button>
+              )}
+            </For>
+          </box>
+        </box>
+      </Show>
+
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
-        <Button tokens={tokens()} glyph={GLYPH.caretRight} onPress={goUp} disabled={!model().parent}>
-          Up
+        <Button
+          tokens={tokens()}
+          variant="secondary"
+          size="sm"
+          glyph={GLYPH.caretRight}
+          onPress={goUp}
+          disabled={!model().parent}
+        >
+          Up one level
         </Button>
         <For each={breadcrumbs(directory(), 4)}>
           {(crumb) => (
             <box
               flexShrink={0}
-              onMouseDown={() => {
+              onMouseUp={() => {
                 if (crumb.path) enter(crumb.path)
               }}
             >
@@ -205,14 +257,30 @@ export function ProjectAdd(props) {
         </For>
       </box>
 
-      <box flexDirection="row" flexShrink={0} height={1} backgroundColor={tokens().surface} paddingLeft={1}>
-        <text wrapMode="none" selectable={false}>
-          <span style={{ fg: tokens().faint }}>{typed() ? "filter " : "path "}</span>
-          <span style={{ fg: tokens().text }}>
-            {typed() || fitLeft(directory() || "(no directory)", width() - 10)}
-          </span>
-        </text>
-      </box>
+      <TextInput
+        tokens={tokens()}
+        label="Folder path"
+        glyph={GLYPH.square}
+        value={pathDraft()}
+        placeholder="Paste or type a folder path"
+        autoFocus
+        onInput={setPathDraft}
+        onSubmit={(value) => enter(value)}
+        hint="Press Enter to open this path"
+      />
+
+      <TextInput
+        tokens={tokens()}
+        label="Filter folders"
+        glyph={GLYPH.pointer}
+        value={typed()}
+        placeholder="Type part of a folder name"
+        onInput={(value) => {
+          setTyped(value)
+          setIndex(0)
+        }}
+        onKeyDown={handleKey}
+      />
 
       <Show when={listing()?.error}>
         <text fg={tokens().error} wrapMode="wrap" selectable={false}>
@@ -248,8 +316,9 @@ export function ProjectAdd(props) {
                 gap={1}
                 paddingLeft={1}
                 backgroundColor={position() === index() ? tokens().selectionStrong : undefined}
-                onMouseDown={() => enter(entry.path)}
-                onMouseOver={() => setIndex(position())}
+                onMouseUp={() => enter(entry.path)}
+                onMouseMove={() => setIndex(position())}
+                onMouseDown={() => setIndex(position())}
               >
                 <text fg={entry.added ? tokens().success : tokens().faint} wrapMode="none" selectable={false}>
                   {entry.added ? GLYPH.ok : GLYPH.caretRight}
@@ -271,18 +340,19 @@ export function ProjectAdd(props) {
 
       <Rule tokens={tokens()} />
 
-      <box flexDirection="row" flexShrink={0} height={1} gap={2}>
+      <box flexDirection="row" flexShrink={0} height={3} gap={2} alignItems="center">
         <Button
           tokens={tokens()}
-          tone="accent"
-          primary
+          variant="primary"
+          size="lg"
           glyph={GLYPH.plus}
+          description={model().alreadyAdded ? "This folder is already in your list" : "Adds it to your folders"}
           disabled={!model().canAdd || busy()}
           onPress={() => void add()}
         >
-          {model().alreadyAdded ? "Already added" : `Work in ${fit(baseName(directory()) || "this folder", 24)}`}
+          {model().alreadyAdded ? "Already added" : `Use ${fit(baseName(directory()) || "this folder", 20)}`}
         </Button>
-        <Button tokens={tokens()} onPress={() => props.onClose?.()}>
+        <Button tokens={tokens()} variant="ghost" onPress={() => props.onClose?.()}>
           Cancel
         </Button>
       </box>

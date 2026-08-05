@@ -97,8 +97,8 @@ export function HomeDeck(props) {
   const tokens = () => props.tokens()
   const snapshot = createMemo(() => workspaceSnapshot(props.api, null))
   const layout = createMemo(() => homeLayout(props.dimensions?.() ?? { width: 100, height: 40 }))
-  const rows = createMemo(() => props.store.model(null, "").slice(0, 5))
-  const summary = createMemo(() => summarizeSessions(props.store.model(null, "")))
+  const rows = createMemo(() => props.store.sessionRows().slice(0, 5))
+  const summary = createMemo(() => props.store.summary())
   const metrics = createMemo(() => workspaceMetrics(snapshot()).slice(0, layout().columns * 2))
 
   return (
@@ -135,7 +135,7 @@ export function HomeDeck(props) {
 
       <Show when={rows().length}>
         <box flexDirection="column" flexShrink={0}>
-          <SectionLabel tokens={tokens()} meta={`${summary().total} total`}>
+          <SectionLabel tokens={tokens()} meta={`${summary().sessions} total`}>
             Recent sessions
           </SectionLabel>
           <For each={rows()}>
@@ -238,7 +238,7 @@ export function WorkspaceInspector(props) {
   const layout = createMemo(() => inspectorLayout(42))
   const files = createMemo(() => snapshot().files.slice(0, 8))
   const todos = createMemo(() => snapshot().todos.slice(0, 6))
-  const summary = createMemo(() => summarizeSessions(props.store.model(props.sessionID, "")))
+  const summary = createMemo(() => props.store.summary())
 
   return (
     <box flexDirection="column" gap={1} paddingTop={1} paddingBottom={1}>
@@ -278,18 +278,14 @@ export function WorkspaceInspector(props) {
       <Panel tokens={tokens()} title="Sessions" glyph={GLYPH.ring} tone="accent">
         <box flexDirection="row" gap={1} flexShrink={0}>
           <Badge tokens={tokens()} tone="neutral">
-            {summary().total} total
+            {summary().sessions} total
           </Badge>
           <Show when={summary().running > 0}>
             <Badge tokens={tokens()} tone="accent">
               {summary().running} working
             </Badge>
           </Show>
-          <Show when={summary().pinned > 0}>
-            <Badge tokens={tokens()} tone="neutral">
-              {summary().pinned} pinned
-            </Badge>
-          </Show>
+
         </box>
       </Panel>
 
@@ -431,7 +427,7 @@ export function StatusBar(props) {
   const tokens = () => props.tokens()
   const sessionID = createMemo(() => activeSessionID(props.api))
   const snapshot = createMemo(() => workspaceSnapshot(props.api, sessionID()))
-  const summary = createMemo(() => summarizeSessions(props.store.model(sessionID(), "")))
+  const summary = createMemo(() => props.store.summary())
   const tone = createMemo(() => healthTone(snapshot()))
 
   return (
@@ -483,7 +479,7 @@ export function StatusBar(props) {
         </text>
       </Show>
       <text fg={tokens().faint} wrapMode="none" selectable={false}>
-        {summary().total} sessions
+        {summary().sessions} chats
       </text>
       <Show when={props.tooling?.indicator}>
         <text
