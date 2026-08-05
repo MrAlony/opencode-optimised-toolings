@@ -96,9 +96,9 @@ export function Activity(props) {
       marginTop={props.compact ? 0 : 1}
       paddingLeft={1}
       paddingRight={1}
-      paddingTop={0}
-      paddingBottom={0}
-      backgroundColor={active() ? props.skin.surfaceHover : undefined}
+      paddingTop={1}
+      paddingBottom={1}
+      backgroundColor={statusSurface(props.status, props.skin, active())}
       onMouseOver={() => setActive(true)}
       onMouseOut={() => setActive(false)}
       onMouseUp={toggle}

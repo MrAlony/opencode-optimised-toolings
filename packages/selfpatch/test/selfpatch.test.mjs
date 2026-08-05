@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultState, readState, sha256File, stateSummary, writeState } from "../lib/state.js"
 import { applyManifest, manifestSha256, patchFileContent } from "../lib/pipeline.js"
-import { detectBinary, isDevRuntime } from "../lib/detect.js"
+import { detectBinary, isDevRuntime, resolveOnPath, versionOf } from "../lib/detect.js"
 import { SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
 
@@ -31,6 +31,42 @@ test("alonix-toolings tool registration exposes a callable execute", async () =>
 function sha256Of(text) {
   return createHash("sha256").update(text).digest("hex")
 }
+
+test("a dev host never masks a real OpenCode binary", () => {
+  // process.execPath is node while these tests run, which previously made
+  // detection report dev-mode and the UI claim self-patching was "not
+  // applicable" even on a working installation. A real binary on PATH must win.
+  const previous = process.env.OPENCODE_TOOLINGS_BIN
+  try {
+    delete process.env.OPENCODE_TOOLINGS_BIN
+    const detected = detectBinary()
+    if (detected && !detected.devMode) {
+      assert.ok(!isDevRuntime(detected.path), "a non-dev result must not point at node/bun")
+      assert.match(detected.version ?? "", /^\d+\.\d+\.\d+$/)
+    } else if (detected) {
+      // Only acceptable when no OpenCode binary exists on this machine.
+      assert.equal(detected.devMode, true)
+      assert.ok(isDevRuntime(detected.path))
+    }
+
+    // An explicit override still takes precedence and is reported honestly.
+    process.env.OPENCODE_TOOLINGS_BIN = process.execPath
+    const overridden = detectBinary()
+    assert.ok(overridden, "an explicit dev override must still be reported")
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_TOOLINGS_BIN
+    else process.env.OPENCODE_TOOLINGS_BIN = previous
+  }
+})
+
+test("dev-runtime classification covers node, bun, and deno hosts", () => {
+  for (const host of ["node", "node.exe", "bun", "bun.exe", "deno", "deno.exe"]) {
+    assert.equal(isDevRuntime(`C:/tools/${host}`), true, `${host} must be a dev runtime`)
+  }
+  for (const real of ["opencode", "opencode.exe", "/usr/local/bin/opencode"]) {
+    assert.equal(isDevRuntime(real), false, `${real} must not be a dev runtime`)
+  }
+})
 
 test("state defaults merge and atomic persistence", async () => {
   const root = mkdtempSync(join(tmpdir(), "alonix-toolings-state-"))
@@ -156,10 +192,30 @@ test("source dependency hydration never runs third-party lifecycle scripts", () 
   assert.match(source, /\["install", "--frozen-lockfile", "--ignore-scripts"\]/)
 })
 
-test("detectBinary recognizes the dev runtime", () => {
+test("detectBinary prefers a real OpenCode binary over its dev host", () => {
+  // This test previously asserted the opposite and encoded a real defect: the
+  // plugin runs under a node host, so detection always reported dev-mode and
+  // the UI claimed self-patching was "not applicable" on working installs.
   assert.ok(isDevRuntime(process.execPath), "node should be recognized as a dev runtime")
   const info = detectBinary()
-  if (info) assert.equal(info.devMode, true)
+  if (!info) return
+  if (info.devMode) {
+    // Only valid when no OpenCode binary is installed on this machine.
+    assert.equal(resolveOnPath(), null, "dev-mode is only correct when no OpenCode binary exists")
+    return
+  }
+  assert.ok(!isDevRuntime(info.path), "a patchable binary must not be node/bun")
+  assert.match(info.version ?? "", /^\d+\.\d+\.\d+$/)
+})
+
+test("PATH resolution returns a directly spawnable binary, not an unusable shim", () => {
+  const resolved = resolveOnPath()
+  if (!resolved) return
+  // Windows npm shims (.cmd/.ps1) cannot be spawned without a shell, so
+  // resolution must reach the packaged executable itself.
+  assert.doesNotMatch(resolved, /\.(cmd|ps1|bat)$/i)
+  assert.ok(existsSync(resolved), "resolved binary must exist")
+  assert.ok(versionOf(resolved), "resolved binary must report a version without a shell")
 })
 
 test("defaultState contains every field the pipeline writes", () => {

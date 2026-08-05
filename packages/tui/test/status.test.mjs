@@ -32,9 +32,42 @@ test("indicatorFor maps statuses to visible levels", () => {
   assert.equal(indicatorFor({ status: "error", lastError: "boom" }).level, "error")
   assert.equal(indicatorFor({ status: "unsupported-version" }).level, "warn")
   assert.equal(indicatorFor({ status: "idle" }).level, "info")
+  assert.equal(indicatorFor({ status: "dev-mode" }).level, "info")
+  assert.equal(indicatorFor({ status: "no-opencode" }).level, "warn")
   assert.equal(indicatorFor({ status: "building", progressPercent: 40, stepLabel: "Rebuilding" }).level, "warn")
   assert.equal(indicatorFor({ status: "built" }).level, "info")
   assert.match(indicatorFor({ status: "built" }).text, /restart OpenCode/i)
+})
+
+test("live renderer registration outranks a stale or dev-host state record", () => {
+  // Renderers can only register through the patched core's registry, so a
+  // positive count proves the patched binary is running. The state file is
+  // written by another process and must not contradict that evidence.
+  const evidence = { renderersRegistered: 16 }
+  for (const status of ["dev-mode", "no-opencode", "idle", "unsupported-version", "ok"]) {
+    const indicator = indicatorFor({ status }, evidence)
+    assert.equal(indicator.level, "ok", `${status} must report active when renderers are registered`)
+    assert.match(indicator.text, /Patched binary active/)
+  }
+  // Genuine failures and pending restarts still win; they are actionable.
+  assert.equal(indicatorFor({ status: "error", lastError: "boom" }, evidence).level, "error")
+  assert.match(indicatorFor({ status: "built" }, evidence).text, /restart OpenCode/i)
+  // With no renderers the state file remains authoritative.
+  assert.equal(indicatorFor({ status: "dev-mode" }, { renderersRegistered: 0 }).level, "info")
+  assert.equal(indicatorFor({ status: "dev-mode" }).level, "info")
+})
+
+test("dev-mode and no-opencode explain themselves instead of saying 'not applicable'", () => {
+  const dev = indicatorFor({ status: "dev-mode" })
+  assert.match(dev.text, /dev runtime/i)
+  assert.doesNotMatch(dev.text, /not applicable/i)
+  assert.ok(dev.detail, "dev-mode must explain why the binary was left alone")
+
+  // A missing binary means renderers cannot activate, so it is a warning.
+  const missing = indicatorFor({ status: "no-opencode" })
+  assert.equal(missing.level, "warn")
+  assert.match(missing.text, /No OpenCode binary/i)
+  assert.doesNotMatch(missing.text, /not applicable/i)
 })
 
 test("indicatorFor reports stale records as checking instead of misleading states", () => {
@@ -44,7 +77,7 @@ test("indicatorFor reports stale records as checking instead of misleading state
   assert.equal(isStale(fresh), false)
   assert.equal(isStale({ status: "idle" }), false)
   assert.match(indicatorFor(stale).text, /checking/)
-  assert.equal(indicatorFor(fresh).text, "Tooling self-patch: not applicable")
+  assert.match(indicatorFor(fresh).text, /dev runtime/i)
   assert.equal(indicatorFor({ status: "idle" }).text, "Tooling self-patch pending")
   assert.equal(indicatorFor({ status: "ok", updatedAt: stale.updatedAt }).level, "ok")
 })

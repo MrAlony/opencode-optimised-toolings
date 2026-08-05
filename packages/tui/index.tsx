@@ -109,10 +109,13 @@ const tui: TuiPlugin = async (api, options) => {
     const [registered, setRegistered] = createSignal(0)
     const tooling = createMemo(() => {
       const state = toolingState()
+      const active = registered()
       return {
         state,
-        indicator: indicatorFor(state),
-        registration: { ...registration, registered: registered() },
+        // Live renderer registration is stronger evidence of the running binary
+        // than the state file, which another process owns.
+        indicator: indicatorFor(state, { renderersRegistered: active }),
+        registration: { ...registration, registered: active },
       }
     })
     return { tokens, clock, store, toolingState, setToolingState, setRegistered, tooling, disposeRoot }

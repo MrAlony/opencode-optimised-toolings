@@ -16,9 +16,9 @@ test("activity rows preserve Solid reactivity and remount details on every expan
   assert.match(kit, /focusable=\{expandable\(\)\}/)
   assert.match(kit, /stopPropagation/)
   assert.match(kit, /marginTop=\{props\.compact \? 0 : 1\}/)
-  assert.match(kit, /paddingTop=\{0\}/)
-  assert.match(kit, /paddingBottom=\{0\}/)
-  assert.match(kit, /backgroundColor=\{active\(\) \? props\.skin\.surfaceHover : undefined\}/)
+  assert.match(kit, /paddingTop=\{1\}/)
+  assert.match(kit, /paddingBottom=\{1\}/)
+  assert.match(kit, /backgroundColor=\{statusSurface\(props\.status, props\.skin, active\(\)\)\}/)
 })
 
 test("structured result status wins over stale running lifecycle while execution errors remain authoritative", async () => {

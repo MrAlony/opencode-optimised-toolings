@@ -5,6 +5,7 @@
 // render, but never own routing, keybindings, or session mutation.
 
 import { createMemo, For, Show } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import { GLYPH } from "../lib/design.js"
 import { fit, homeLayout, inspectorLayout } from "../lib/layout.js"
 import { summarizeSessions } from "../lib/sessions.js"
@@ -44,25 +45,39 @@ const KIND_GLYPH = {
 }
 
 /**
- * Prompt-adjacent context line. Kept to a single row because the host reserves
- * very little horizontal space beside the prompt.
+ * Prompt-adjacent context.
+ *
+ * The host renders this inside a row that also holds the agent and model
+ * labels, and that row has no fixed allocation, so a wide or multi-element
+ * insert steals space and wraps the model name. This is therefore a single
+ * non-shrinking `text` node whose width is bounded by the terminal, and it
+ * yields entirely on narrow terminals where the model label matters more.
  */
 export function PromptContext(props) {
   const snapshot = createMemo(() => workspaceSnapshot(props.api, props.sessionID))
   const tokens = () => props.tokens()
+  const dimensions = useTerminalDimensions()
+  // Leave the agent/model labels their share of the row before claiming any.
+  const budget = createMemo(() => Math.floor(dimensions().width * 0.28) - 2)
+  const label = createMemo(() => {
+    const percent = snapshot().context.percent
+    return [contextLine(snapshot()), percent !== null ? `ctx ${percent}%` : null].filter(Boolean).join("  ·  ")
+  })
   return (
-    <box flexDirection="row" gap={1} flexShrink={0} alignItems="center">
-      <StatusDot tokens={tokens()} tone={healthTone(snapshot())} pulse={snapshot().busy} />
-      <text fg={tokens().muted} wrapMode="none" selectable={false}>
-        {fit(contextLine(snapshot()), 48)}
+    <Show when={budget() >= 12}>
+      <text fg={tokens().faint} wrapMode="none" flexShrink={0} selectable={false}>
+        <span style={{ fg: toneColor(tokens(), healthTone(snapshot())) }}>{GLYPH.dot}</span> {fit(label(), budget())}
       </text>
-      <Show when={snapshot().context.percent !== null}>
-        <text fg={snapshot().context.percent > 85 ? tokens().warning : tokens().faint} wrapMode="none" selectable={false}>
-          {snapshot().context.percent}%
-        </text>
-      </Show>
-    </box>
+    </Show>
   )
+}
+
+function toneColor(tokens, tone) {
+  if (tone === "error") return tokens.error
+  if (tone === "warning") return tokens.warning
+  if (tone === "accent") return tokens.accent
+  if (tone === "neutral") return tokens.muted
+  return tokens.success
 }
 
 /**

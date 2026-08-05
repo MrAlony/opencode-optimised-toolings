@@ -71,7 +71,21 @@ export function isStale(state, now = Date.now()) {
   return now - timestamp > STALE_AFTER_MS
 }
 
-export function indicatorFor(state) {
+/**
+ * Describe the tooling state for the UI.
+ *
+ * `renderersRegistered` is direct runtime evidence: renderers can only register
+ * through the patched core's registry, so a positive count proves the patched
+ * binary is the one currently running. That outranks the state file, which is
+ * written by a different process and can legitimately be stale or describe a
+ * dev host. Without this the UI could claim self-patching is "not applicable"
+ * while simultaneously reporting 16/16 active renderers.
+ */
+export function indicatorFor(state, evidence = {}) {
+  const renderersRegistered = Number(evidence.renderersRegistered ?? 0) > 0
+  if (renderersRegistered && state?.status !== "error" && state?.status !== "built") {
+    return { level: "ok", text: "Patched binary active", detail: "Rich tool renderers active" }
+  }
   if (isStale(state) && ["idle", "dev-mode", "no-opencode"].includes(state?.status)) {
     return { level: "info", text: "Tooling self-patch: checking…", detail: "No fresh status record from the running OpenCode process yet" }
   }
@@ -81,8 +95,17 @@ export function indicatorFor(state) {
     case "idle":
       return { level: "info", text: "Tooling self-patch pending" }
     case "dev-mode":
+      return {
+        level: "info",
+        text: "Self-patch paused: dev runtime",
+        detail: "OpenCode is being hosted by node/bun, so the binary is left untouched",
+      }
     case "no-opencode":
-      return { level: "info", text: "Tooling self-patch: not applicable" }
+      return {
+        level: "warn",
+        text: "No OpenCode binary found to patch",
+        detail: "Rich renderers stay inactive until an OpenCode binary is detected",
+      }
     case "unsupported-version":
       return { level: "warn", text: `Tooling patch not available for OpenCode v${state.version ?? "?"}` }
     case "error":
