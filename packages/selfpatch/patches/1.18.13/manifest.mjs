@@ -126,7 +126,9 @@ function PluginTool(props: ToolProps) {
   const renderer = createMemo(() => getPluginToolRenderer(props.tool))
   return (
     <Show when={renderer()} fallback={<GenericTool {...props} />}>
-      <box>{renderer()!({ input: props.input, metadata: props.metadata, tool: props.tool, output: props.output, part: props.part })}</box>
+      <box ref={(el: BoxRenderable) => alwaysSeparate.add(el)} flexShrink={0}>
+        {renderer()!({ input: props.input, metadata: props.metadata, tool: props.tool, output: props.output, part: props.part })}
+      </box>
     </Show>
   )
 }

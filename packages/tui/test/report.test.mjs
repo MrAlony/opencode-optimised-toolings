@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { parseReportBlocks, reportStatus } from "../lib/report.js"
+import { parseReportBlocks, reportStatus, reportSummary } from "../lib/report.js"
 
 const SEARCH = `SEARCH RESULT: SUCCESS
 
@@ -23,6 +23,12 @@ EVIDENCE MEANING: Candidate enumeration and returned content evidence are comple
 
 test("reportStatus recognizes the search header", () => {
   assert.equal(reportStatus(SEARCH, "fs_search"), "SUCCESS")
+})
+
+test("reportSummary prefers the human outcome and stays transcript-sized", () => {
+  assert.equal(reportSummary(SEARCH, "fs_search"), "Search completed within all configured bounds. 1 content match(es) were found.")
+  assert.equal(reportSummary("", "web_search"), "Running web_search")
+  assert.ok(reportSummary(`WHAT HAPPENED: ${"x".repeat(180)}`, "fs_search").length <= 120)
 })
 
 test("parseReportBlocks splits sections, key-values and lists", () => {

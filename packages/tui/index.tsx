@@ -17,7 +17,7 @@ import { ReportView } from "./components/report.jsx"
 import { ShellView } from "./components/shell.jsx"
 
 const palette = {
-  panel: "#1d1d1d",
+  panel: "#242424",
   border: "#4a4a4a",
   text: "#f0f0f0",
   muted: "#a5a5a5",
@@ -34,7 +34,7 @@ function ink(map, name, fallback) {
 function skinOf(theme) {
   const map = theme?.current ?? {}
   return {
-    panel: ink(map, "backgroundPanel", palette.panel),
+    panel: ink(map, "backgroundMenu", ink(map, "backgroundPanel", palette.panel)),
     border: ink(map, "border", palette.border),
     text: ink(map, "text", palette.text),
     muted: ink(map, "textMuted", palette.muted),
@@ -62,53 +62,6 @@ function rendererFor(tool: string): RendererView {
   if (tool === "shell") return ShellView
   if (tool === "background_process") return BackgroundView
   return ReportView
-}
-
-function summarize(props: RenderProps) {
-  try {
-    const text = JSON.stringify(props.input ?? {})
-    return text.length > 80 ? `${text.slice(0, 80)}…` : text
-  } catch {
-    return ""
-  }
-}
-
-function ToolCardView(props: RenderProps & { skin: Skin }) {
-  const skin = props.skin
-  const body = String(props.output ?? "").trim()
-  const lines = body.split("\n").slice(-60)
-  const isDiff = props.tool === "fs_edit_many"
-  return (
-    <box
-      border
-      borderColor={isDiff ? skin.border : skin.accent}
-      paddingTop={0}
-      paddingBottom={1}
-      paddingLeft={1}
-      paddingRight={1}
-      flexDirection="column"
-      gap={1}
-    >
-      <text fg={skin.accent}>
-        <b>{props.tool}</b> <span style={{ fg: skin.muted }}>{summarize(props)}</span>
-      </text>
-      {body
-        ? lines.map((line) => (
-            <text
-              fg={
-                isDiff && line.startsWith("+")
-                  ? skin.success
-                  : isDiff && line.startsWith("-")
-                    ? skin.error
-                    : skin.text
-              }
-            >
-              {line}
-            </text>
-          ))
-        : null}
-    </box>
-  )
 }
 
 type RendererRegistration = {
@@ -172,7 +125,7 @@ const tui: TuiPlugin = async (api, options) => {
   }
 
   // Register rich renderers through the patched core's api.toolRenderers.
-  const skin = skinOf(api.theme)
+  const skin = { ...skinOf(api.theme), motion: options?.animations !== false }
   const extended = api as TuiPluginApi & {
     toolRenderers?: { register(name: string, renderer: (props: RenderProps) => JSX.Element): void | (() => void) }
   }

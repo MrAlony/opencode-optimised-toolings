@@ -26,6 +26,26 @@ export function reportStatus(text, tool) {
   return "PARTIAL SUCCESS"
 }
 
+export function reportSummary(text, tool) {
+  const source = String(text ?? "")
+  const preferred = [
+    /^WHAT HAPPENED: (.+)$/m,
+    /^Outcome: (.+)$/m,
+    /^Summary: (.+)$/m,
+    /^Meaning: (.+)$/m,
+  ]
+  for (const pattern of preferred) {
+    const value = source.match(pattern)?.[1]?.trim()
+    if (value) return value.slice(0, 120)
+  }
+  const first = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !/^[A-Z][A-Z ]+: (SUCCESS|PARTIAL SUCCESS|FAILED|READY)$/.test(line) && !/^=+/.test(line))
+  if (first) return first.slice(0, 120)
+  return source ? `${tool} completed` : `Running ${tool}`
+}
+
 export function parseReportBlocks(text) {
   const nodes = []
   let inSection = false
