@@ -125,9 +125,23 @@ const tui: TuiPlugin = async (api, options) => {
         registration: { ...registration, registered: active },
       }
     })
-    return { tokens, clock, store, projects, toolingState, setToolingState, setRegistered, tooling, disposeRoot }
+    const [workbenchView, setWorkbenchView] = createSignal<"activity" | "changes" | "plan">("activity")
+    return {
+      tokens,
+      clock,
+      store,
+      projects,
+      toolingState,
+      setToolingState,
+      setRegistered,
+      tooling,
+      workbenchView,
+      setWorkbenchView,
+      disposeRoot,
+    }
   })
   const { tokens, clock, store, projects, toolingState, setToolingState, setRegistered, tooling } = scope
+  const { workbenchView, setWorkbenchView } = scope
 
   // Register rich renderers through the patched core's api.toolRenderers.
   const extended = api as TuiPluginApi & {
@@ -213,14 +227,32 @@ const tui: TuiPlugin = async (api, options) => {
       if (active) openSession(api, active)
     },
     newSession: async () => {
-      const created = await projects.createSession({})
-      if (created?.id) openSessionTab(created.id)
+      try {
+        const created = await projects.createSession({})
+        if (created?.id) openSessionTab(created.id)
+      } catch (error) {
+        api.ui.toast({
+          variant: "error",
+          title: "Could not start a session",
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
     },
     chooseProjectForNewSession: () => openPalette("#"),
   }
 
+  /**
+   * Open a session's conversation. From the workbench this leaves the route,
+   * which is what a user means by "show me the chat".
+   */
+  const openChat = (sessionID: string | null) => {
+    if (sessionID) openSession(api, sessionID)
+    else api.route.navigate("home")
+  }
+
   const openPalette = (initialQuery = "") => {
-    api.ui.dialog.setSize("large")
+    // xlarge keeps titles readable; the palette sizes its columns to match.
+    api.ui.dialog.setSize("xlarge")
     api.ui.dialog.replace(() => {
       const dimensions = useTerminalDimensions()
       return (
@@ -228,6 +260,7 @@ const tui: TuiPlugin = async (api, options) => {
           <Palette
             tokens={tokens}
             dimensions={dimensions}
+            size="xlarge"
             initialQuery={initialQuery}
             loading={() => projects.loading}
             sessions={() => projects.sessionRows()}
@@ -288,15 +321,15 @@ const tui: TuiPlugin = async (api, options) => {
               api={api}
               tokens={tokens}
               store={projects}
+              // The clock drives the live activity feed; reading it inside the
+              // session view re-derives host message state on every frame.
+              tick={clock}
+              view={workbenchView}
+              onView={setWorkbenchView}
               onPalette={() => openPalette()}
-              onOpenSession={(sessionID: string) => projects.activateTab(sessionID)}
-              onCyclePane={(delta: number, available: string[]) => projects.cyclePane(delta, available)}
-              onExplorerIndex={(index: number) => projects.setExplorerIndex(index)}
-              onExit={() => {
-                const active = projects.workbench.activeID
-                if (active) openSession(api, active)
-                else api.route.navigate("home")
-              }}
+              onNewSession={() => void controller.newSession()}
+              onOpenChat={openChat}
+              onExit={() => openChat(projects.workbench.activeID)}
             />
           </ClockProvider>
         ),

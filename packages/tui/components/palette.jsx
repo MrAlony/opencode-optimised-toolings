@@ -2,15 +2,21 @@
 // Universal palette: one surface for sessions, projects, and actions.
 //
 // Typing filters everything at once; a leading `>`, `@`, or `#` narrows the
-// scope. Selection state is local; every outcome is delegated to the caller.
+// scope. Every row is fully mouse-operable.
+//
+// Rows are rendered as a single fixed-width text node built from exact column
+// arithmetic. The host dialog is a fixed-width panel, so budgeting against the
+// terminal (or letting flex shrink labels) truncates titles to a few useless
+// characters. Padding each column to a known cell count keeps the grid aligned
+// and clips gracefully instead.
 
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
 import { applyKeyToQuery, classifyKey, moveIndex, scrollWindow } from "../lib/keys.js"
-import { fit, switcherLayout } from "../lib/layout.js"
+import { fit, fitLeft, pad, paletteLayout } from "../lib/layout.js"
+import { spinnerFrame, stagger } from "../lib/motion.js"
 import { MODES, buildActions, groupActions, parseQuery } from "../lib/command-registry.js"
-import { compactPath } from "../lib/workspace.js"
-import { Badge, DiffStat, EmptyState, KeyHints, Row, Rule, SectionLabel, Spinner, StatLine } from "./ide-kit.jsx"
+import { EmptyState, KeyHints, Rule, SectionLabel, Spinner, StatLine } from "./ide-kit.jsx"
 import { useClock } from "./runtime.jsx"
 
 const HINTS = [
@@ -18,103 +24,139 @@ const HINTS = [
   { key: "↵", label: "open" },
   { key: "1-9", label: "jump" },
   { key: ">·@·#", label: "scope" },
+  { key: "click", label: "select" },
   { key: "esc", label: "close" },
 ]
 
 const KIND_GLYPH = { session: GLYPH.diamond, project: GLYPH.square, command: GLYPH.pointer }
 
+/**
+ * One palette row.
+ *
+ * The whole row is a single `text` with `wrapMode="none"`, so the terminal
+ * clips it at the panel edge rather than reflowing or shrinking columns.
+ */
 function ActionRow(props) {
+  const tokens = () => props.tokens
+  const columns = () => props.columns
   const action = () => props.action
-  const tone = createMemo(() => {
-    if (action().active) return "success"
-    if (action().running) return "accent"
-    if (action().kind === "command") return "neutral"
-    return "neutral"
+  const clock = useClock(() => (action().running || props.animateIndex !== undefined) && tokens().motion !== false)
+
+  const entrance = createMemo(() => {
+    if (props.animateIndex === undefined || tokens().motion === false) return 1
+    return stagger(clock(), props.animateIndex)
   })
+
+  const glyph = createMemo(() => {
+    if (action().running) return spinnerFrame(clock(), undefined, 90, tokens().motion !== false)
+    if (action().active) return GLYPH.diamond
+    return KIND_GLYPH[action().kind] ?? GLYPH.bullet
+  })
+
+  const glyphColor = createMemo(() => {
+    if (action().running) return tokens().accent
+    if (action().active) return tokens().success
+    if (action().kind === "command") return tokens().muted
+    return tokens().faint
+  })
+
+  const titleColor = createMemo(() => {
+    if (entrance() < 0.4) return tokens().faint
+    return props.selected || action().active ? tokens().text : tokens().muted
+  })
+
   return (
-    <Row
-      tokens={props.tokens}
-      tone={tone()}
-      selected={props.selected}
-      animateIndex={props.animateIndex}
-      onSelect={() => props.onRun(action())}
-      onHover={() => props.onHover(props.flatIndex)}
-      meta={action().meta}
-      leading={
-        <box flexDirection="row" gap={1} flexShrink={0} width={3}>
-          <Show
-            when={action().running}
-            fallback={
-              <text
-                fg={action().active ? props.tokens.success : props.tokens.faint}
-                wrapMode="none"
-                selectable={false}
-              >
-                {KIND_GLYPH[action().kind] ?? GLYPH.bullet}
-              </text>
-            }
-          >
-            <Spinner tokens={props.tokens} tone="accent" />
-          </Show>
-          <text fg={props.selected ? props.tokens.accent : props.tokens.faint} wrapMode="none" selectable={false}>
-            {action().slot ?? " "}
-          </text>
-        </box>
-      }
+    <box
+      flexDirection="row"
+      flexShrink={0}
+      height={1}
+      backgroundColor={props.selected ? tokens().selectionStrong : undefined}
+      onMouseDown={() => props.onRun(action())}
+      onMouseOver={() => props.onHover(props.flatIndex)}
     >
-      <box flexDirection="row" gap={1} minWidth={0}>
-        <text fg={props.tokens.text} wrapMode="none" selectable={false}>
-          {props.selected ? <b>{fit(action().title, props.width)}</b> : fit(action().title, props.width)}
-        </text>
-        <Show when={action().subtitle}>
-          <text fg={props.tokens.faint} wrapMode="none" selectable={false}>
-            {fit(action().subtitle, Math.max(8, Math.floor(props.width * 0.5)))}
-          </text>
+      <text wrapMode="none" selectable={false}>
+        <span style={{ fg: props.selected ? tokens().accent : tokens().borderFaint }}>
+          {props.selected ? GLYPH.blockHalf : " "}
+        </span>
+        <span style={{ fg: glyphColor() }}>{glyph()}</span>
+        <span style={{ fg: props.selected ? tokens().accent : tokens().faint }}>
+          {" "}
+          {action().slot ? String(action().slot) : " "}
+        </span>
+        <span style={{ fg: titleColor() }}>
+          {" "}
+          {pad(action().title, columns().title)}
+        </span>
+        <Show when={columns().subtitle > 0}>
+          <span style={{ fg: tokens().faint }}>
+            {" "}
+            {pad(subtitleFor(action(), columns().subtitle), columns().subtitle)}
+          </span>
         </Show>
-        <box flexGrow={1} />
-        <Show when={action().changedFiles > 0}>
-          <DiffStat tokens={props.tokens} additions={action().session?.additions} deletions={action().session?.deletions} />
+        <Show when={columns().meta > 0}>
+          <span style={{ fg: props.selected ? tokens().muted : tokens().faint }}>
+            {pad(metaFor(action()), columns().meta, "right")}
+          </span>
         </Show>
-      </box>
-    </Row>
+      </text>
+    </box>
   )
 }
 
+/** Paths read better truncated from the left; everything else from the right. */
+function subtitleFor(action, width) {
+  const value = String(action.subtitle ?? "")
+  if (!value) return ""
+  const looksLikePath = value.includes("/") || value.includes("\\")
+  return looksLikePath ? fitLeft(value, width) : fit(value, width)
+}
+
+function metaFor(action) {
+  if (action.kind === "session" && action.changedFiles > 0) return `${action.changedFiles}f`
+  return String(action.meta ?? "")
+}
+
 function Preview(props) {
+  const tokens = () => props.tokens
   const action = () => props.action
+  const width = () => props.width
+
   return (
-    <box flexDirection="column" flexShrink={0} width={props.width} paddingLeft={2} gap={1}>
-      <Show when={action()} fallback={<EmptyState tokens={props.tokens} title="Nothing selected" />}>
+    <box flexDirection="column" flexShrink={0} width={width()} paddingLeft={2} gap={1}>
+      <Show when={action()} fallback={<EmptyState tokens={tokens()} title="Nothing selected" />}>
         <box flexDirection="column">
-          <SectionLabel tokens={props.tokens}>{action().kind}</SectionLabel>
-          <text fg={props.tokens.text} wrapMode="wrap" selectable={false}>
-            <b>{fit(action().title, props.width * 2)}</b>
+          <SectionLabel tokens={tokens()}>{action().kind}</SectionLabel>
+          <text fg={tokens().text} wrapMode="wrap" selectable={false}>
+            <b>{action().title}</b>
           </text>
         </box>
 
         <Show when={action().kind === "session"}>
           <box flexDirection="column">
-            <StatLine tokens={props.tokens} label="project" labelWidth={12}>
-              {fit(action().session?.projectName ?? "", props.width - 14)}
+            <StatLine tokens={tokens()} label="project" labelWidth={12}>
+              {fit(action().session?.projectName ?? "—", width() - 16)}
             </StatLine>
-            <StatLine tokens={props.tokens} label="updated" labelWidth={12}>
+            <StatLine tokens={tokens()} label="updated" labelWidth={12}>
               {action().meta || "unknown"}
             </StatLine>
-            <StatLine tokens={props.tokens} label="changes" labelWidth={12}>
+            <StatLine tokens={tokens()} label="changes" labelWidth={12}>
               {action().changedFiles ? `${action().changedFiles} files` : "none"}
+            </StatLine>
+            <StatLine tokens={tokens()} label="state" labelWidth={12}>
+              {action().running ? "working" : action().active ? "open" : "idle"}
             </StatLine>
           </box>
         </Show>
 
         <Show when={action().kind === "project"}>
           <box flexDirection="column">
-            <StatLine tokens={props.tokens} label="sessions" labelWidth={12}>
+            <StatLine tokens={tokens()} label="sessions" labelWidth={12}>
               {action().project?.sessionCount ?? 0}
             </StatLine>
-            <StatLine tokens={props.tokens} label="running" labelWidth={12}>
+            <StatLine tokens={tokens()} label="running" labelWidth={12}>
               {action().project?.running ?? 0}
             </StatLine>
-            <StatLine tokens={props.tokens} label="changes" labelWidth={12}>
+            <StatLine tokens={tokens()} label="changes" labelWidth={12}>
               {action().changedFiles || "none"}
             </StatLine>
           </box>
@@ -122,11 +164,17 @@ function Preview(props) {
 
         <Show when={action().subtitle}>
           <box flexDirection="column">
-            <SectionLabel tokens={props.tokens}>Location</SectionLabel>
-            <text fg={props.tokens.muted} wrapMode="none" selectable={false}>
-              {compactPath(action().subtitle, props.width - 1)}
+            <SectionLabel tokens={tokens()}>Location</SectionLabel>
+            <text fg={tokens().muted} wrapMode="wrap" selectable={false}>
+              {action().subtitle}
             </text>
           </box>
+        </Show>
+
+        <Show when={action().kind === "project" && !action().project?.sessionCount}>
+          <text fg={tokens().accent} wrapMode="wrap" selectable={false}>
+            {GLYPH.pointer} Opens a new session here
+          </text>
         </Show>
       </Show>
     </box>
@@ -140,7 +188,12 @@ export function Palette(props) {
   const [offset, setOffset] = createSignal(0)
   const clock = useClock(() => tokens().motion !== false)
 
-  const layout = createMemo(() => switcherLayout(props.dimensions?.() ?? { width: 120, height: 40 }))
+  // Sized against the host dialog panel, not the terminal.
+  const layout = createMemo(() => {
+    const dimensions = props.dimensions?.() ?? { width: 120, height: 40 }
+    return paletteLayout({ size: props.size ?? "xlarge", width: dimensions.width, height: dimensions.height })
+  })
+
   const parsed = createMemo(() => parseQuery(query()))
   const actions = createMemo(() =>
     buildActions({
@@ -199,37 +252,27 @@ export function Palette(props) {
     }
   }
 
-  const entries = createMemo(() => {
-    const out = []
-    let flatIndex = 0
-    for (const group of groups()) {
-      out.push({ kind: "group", label: group.label, count: group.rows.length })
-      for (const row of group.rows) {
-        out.push({ kind: "row", action: row, flatIndex })
-        flatIndex += 1
-      }
-    }
-    return out
-  })
-
+  // Flatten groups to rows, then window the rows while keeping the header that
+  // introduces each visible run.
   const visible = createMemo(() => {
     const start = offset()
     const end = start + layout().rows
-    let seen = 0
     const out = []
-    for (const entry of entries()) {
-      if (entry.kind === "row") {
-        if (seen >= start && seen < end) out.push(entry)
-        seen += 1
-        continue
+    let flat = 0
+    for (const group of groups()) {
+      let headerEmitted = false
+      for (const row of group.rows) {
+        const current = flat
+        flat += 1
+        if (current < start || current >= end) continue
+        if (!headerEmitted) {
+          out.push({ kind: "group", label: group.label, count: group.rows.length, key: `g:${group.kind}` })
+          headerEmitted = true
+        }
+        out.push({ kind: "row", action: row, flatIndex: current, key: row.id })
       }
-      out.push(entry)
     }
-    return out.filter((entry, position) => {
-      if (entry.kind !== "group") return true
-      const next = out[position + 1]
-      return next && next.kind === "row"
-    })
+    return out
   })
 
   return (
@@ -257,41 +300,39 @@ export function Palette(props) {
         <Show when={props.loading?.()}>
           <Spinner tokens={tokens()} tone="accent" />
         </Show>
-        <Badge tokens={tokens()} tone="neutral">
+        <text fg={tokens().faint} wrapMode="none" selectable={false}>
           {actions().length}
-        </Badge>
+        </text>
       </box>
 
       <box
         flexDirection="row"
-        gap={1}
         flexShrink={0}
+        height={1}
         backgroundColor={tokens().surface}
         paddingLeft={1}
         paddingRight={1}
       >
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
-          {parsed().prefix || GLYPH.pointer}
+        <text wrapMode="none" selectable={false}>
+          <span style={{ fg: tokens().accent }}>{parsed().prefix || GLYPH.pointer} </span>
+          <span style={{ fg: query() ? tokens().text : tokens().faint }}>
+            {parsed().term || (query() ? "" : "Search sessions, projects and actions")}
+          </span>
+          <Show when={tokens().motion !== false}>
+            <span style={{ fg: tokens().accent }}>{Math.floor(clock() / 520) % 2 === 0 ? GLYPH.caret : " "}</span>
+          </Show>
         </text>
-        <text fg={query() ? tokens().text : tokens().faint} wrapMode="none" selectable={false}>
-          {parsed().term || (query() ? "" : "Search sessions, projects and actions…")}
-        </text>
-        <Show when={tokens().motion !== false}>
-          <text fg={tokens().accent} wrapMode="none" selectable={false}>
-            {Math.floor(clock() / 520) % 2 === 0 ? GLYPH.caret : " "}
-          </text>
-        </Show>
       </box>
 
       <box flexDirection="row" flexShrink={0}>
-        <box flexDirection="column" flexGrow={1} minWidth={0}>
+        <box flexDirection="column" width={layout().list} flexShrink={0}>
           <Show
             when={actions().length}
             fallback={
               <EmptyState
                 tokens={tokens()}
                 title="Nothing matches that search"
-                hint="Backspace to widen, or press esc to close"
+                hint="Backspace to widen, or esc to close"
               />
             }
           >
@@ -300,7 +341,7 @@ export function Palette(props) {
                 <Show
                   when={entry.kind === "row"}
                   fallback={
-                    <box paddingTop={1} flexShrink={0}>
+                    <box flexShrink={0} height={1}>
                       <SectionLabel tokens={tokens()} meta={entry.count}>
                         {entry.label}
                       </SectionLabel>
@@ -309,11 +350,11 @@ export function Palette(props) {
                 >
                   <ActionRow
                     tokens={tokens()}
+                    columns={layout().columns}
                     action={entry.action}
                     flatIndex={entry.flatIndex}
                     selected={entry.flatIndex === index()}
                     animateIndex={entry.flatIndex - offset()}
-                    width={layout().list - 18}
                     onRun={run}
                     onHover={setIndex}
                   />

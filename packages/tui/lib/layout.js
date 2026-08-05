@@ -57,6 +57,60 @@ export function workbenchLayout(dimensions = {}) {
 }
 
 /**
+ * Host dialog widths. `ui/dialog.tsx` renders a fixed-width panel, so any
+ * surface inside a dialog must budget against these numbers rather than the
+ * terminal width. Sizing against the terminal overflows the panel and lets the
+ * renderer shrink labels to a few characters.
+ */
+export const DIALOG_WIDTHS = { medium: 60, large: 88, xlarge: 116 }
+
+/** Horizontal padding the palette applies inside the dialog panel. */
+export const PALETTE_PADDING = 2
+
+/**
+ * Palette geometry with exact column arithmetic.
+ *
+ * Every column is resolved to a whole number of cells that sums to the list
+ * width, so rows can be rendered as fixed-width text and clipped predictably
+ * instead of being shrunk by flex layout.
+ */
+export function paletteLayout(options = {}) {
+  const size = DIALOG_WIDTHS[options.size] ? options.size : "xlarge"
+  const terminalWidth = Math.max(20, Math.floor(Number(options.width) || 80))
+  const terminalHeight = Math.max(8, Math.floor(Number(options.height) || 24))
+
+  // The dialog is fixed width but still clamped to the terminal.
+  const outer = Math.max(24, Math.min(DIALOG_WIDTHS[size], terminalWidth - 2))
+  const inner = Math.max(20, outer - PALETTE_PADDING * 2)
+
+  const showPreview = inner >= 92
+  const preview = showPreview ? Math.max(26, Math.min(38, Math.round(inner * 0.32))) : 0
+  const list = Math.max(18, inner - preview - (showPreview ? 2 : 0))
+
+  // Leading cells: selection bar, kind glyph, quick-jump slot, plus the single
+  // space that separates each of them from the next.
+  const gutter = 1
+  const glyph = 1
+  const slot = 1
+  const gaps = 3
+  const meta = list >= 54 ? 9 : 0
+  const body = Math.max(8, list - gutter - glyph - slot - gaps - meta)
+  const subtitle = body >= 42 ? Math.round(body * 0.36) : 0
+  const title = Math.max(6, body - subtitle - (subtitle ? 1 : 0))
+
+  return {
+    size,
+    outer,
+    inner,
+    list,
+    preview,
+    showPreview,
+    rows: Math.max(3, Math.min(16, terminalHeight - 14)),
+    columns: { gutter, glyph, slot, gaps, meta, body, title, subtitle },
+  }
+}
+
+/**
  * Command-palette style switcher geometry. The preview pane only appears when
  * there is genuinely room for it beside the list.
  */

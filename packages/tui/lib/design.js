@@ -157,6 +157,8 @@ export const GLYPH = {
   cornerBottomRight: "╯",
   blockFull: "█",
   blockEmpty: "░",
+  // Close affordance for tabs and dismissible chips.
+  close: "\u00d7",
   blockHalf: "▌",
   caret: "▌",
 }
