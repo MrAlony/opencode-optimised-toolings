@@ -8,6 +8,7 @@ export { PACKAGE_SPEC } from "../shared/paths.js"
 
 export const AGENTS_BLOCK_START = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: START -->"
 export const AGENTS_BLOCK_END = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: END -->"
+export const PRESERVE_FILE_SPEC_MARKER = ".alonix-preserve-file-spec"
 
 export const ALONIX_TOOLS = [
   "alonix-read", "alonix-edit", "alonix-search", "alonix-explore", "alonix-shell",
@@ -116,8 +117,11 @@ export function migrateInstalledConfig(packageRoot, options = {}) {
   if (!existsSync(configPath)) return { changed: false, skipped: "missing-config", configPath }
   const before = readFileSync(configPath, "utf8")
   const config = parseDocument(before, basename(configPath))
-  const managedSpec = options.pluginSpec ?? installedPackageSpec(packageRoot)
   const plugins = Array.isArray(config.plugin) ? config.plugin : []
+  const preservedFileSpec = existsSync(join(packageRoot, PRESERVE_FILE_SPEC_MARKER))
+    ? plugins.map(pluginSpec).find((spec) => isAlonixLocalReference(spec) && spec.replaceAll("\\", "/").toLowerCase().includes(resolve(packageRoot).replaceAll("\\", "/").toLowerCase()))
+    : null
+  const managedSpec = options.pluginSpec ?? preservedFileSpec ?? installedPackageSpec(packageRoot)
   const nextPlugins = plugins.filter((entry) => {
     const spec = pluginSpec(entry)
     return !isAlonixLocalReference(spec) && !new RegExp(`^${PACKAGE_NAME}(?:@|$)`, "i").test(spec)
@@ -172,7 +176,7 @@ export function migrateInstalledConfig(packageRoot, options = {}) {
 }
 
 export function packageTuiSpec(packageRoot) {
-  return installedPackageSpec(packageRoot)
+  return pathToFileURL(join(packageRoot, "packages", "tui", "index.tsx")).href
 }
 
 export function developmentTuiSpec(packageRoot) {

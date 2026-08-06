@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { readState, stateSummary, writeState } from "./lib/state.js"
 import { runSelfPatch } from "./lib/pipeline.js"
 import { ensureTuiCompanion } from "./lib/tui-registration.js"
+import { runtimeHealth } from "../shared/generation.js"
 
 export function repoRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
@@ -76,10 +77,15 @@ export async function SelfPatchPlugin() {
         execute: async () => {
           ensureStarted()
           const state = await readState(root)
+          const runtime = runtimeHealth(process.env, root)
+          const short = (value) => typeof value === "string" ? value.slice(0, 16) : "unknown"
           return [
             `Enhancement status: ${state.status}`,
             `OpenCode version: ${state.version ?? "unknown"}`,
             `Plugin active: yes`,
+            `Runtime parity: ${runtime.exact ? "exact" : `not proven (${runtime.reason})`}`,
+            runtime.server ? `Server loaded: v${runtime.server.version ?? "unknown"} · source ${short(runtime.server.sourceFingerprint)} · dependencies ${short(runtime.server.dependencyFingerprint)}` : "Server loaded: attestation unavailable",
+            runtime.tui ? `TUI loaded: v${runtime.tui.version ?? "unknown"} · ${runtime.tui.status}/${runtime.tui.stage ?? "unknown"} · source ${short(runtime.tui.sourceFingerprint)} · dependencies ${short(runtime.tui.dependencyFingerprint)}` : "TUI loaded: attestation unavailable",
             `Optional host enhancements: ${state.renderersActive ? "active" : "inactive; portable plugin features remain available"}`,
             state.compatibilityProfile ? `Compatibility profile: v${state.compatibilityProfile} (${state.compatibilityMode ?? "verified"})` : null,
             tuiRegistration.error

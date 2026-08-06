@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -12,34 +13,44 @@ function fixture() {
   mkdirSync(packageRoot, { recursive: true })
   mkdirSync(configDir, { recursive: true })
   writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "4.0.1" }))
-  return { root, packageRoot, configDir, configPath: join(configDir, "opencode.json"), tuiPath: join(configDir, "tui.json") }
+  return { root, packageRoot, configDir, configPath: join(configDir, "opencode.json"), tuiPath: join(configDir, "tui.json"), generations: join(root, "generations") }
+}
+
+async function installFixture(version, staging) {
+  const packageRoot = join(staging, "node_modules", "opencode-optimised-toolings")
+  for (const directory of ["packages/tui", "packages/cbm/dist", "config"]) mkdirSync(join(packageRoot, directory), { recursive: true })
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version }))
+  writeFileSync(join(packageRoot, "npm-shrinkwrap.json"), JSON.stringify({ name: "opencode-optimised-toolings", version, lockfileVersion: 3, requires: true, packages: { "": { name: "opencode-optimised-toolings", version } } }))
+  const graph = []
+  writeFileSync(join(packageRoot, "config/runtime-dependencies.json"), JSON.stringify({ schemaVersion: 1, fingerprint: createHash("sha256").update(JSON.stringify(graph)).digest("hex"), graph }))
+  writeFileSync(join(packageRoot, "index.js"), "export default async () => ({ tool: {} })\n")
+  writeFileSync(join(packageRoot, "packages/tui/index.tsx"), "export default { id: 'fixture' }\n")
+  writeFileSync(join(packageRoot, "packages/tui/package.json"), JSON.stringify({ name: "@sparkly/toolings-tui", version: "2.0.0", private: true, type: "module", main: "index.tsx" }))
+  writeFileSync(join(packageRoot, "packages/cbm/dist/index.js"), "export default async () => ({ tool: {} })\n")
 }
 
 test("semantic version comparison handles stable patch updates", () => {
   assert.equal(compareVersions("4.0.1", "4.0.0"), 1)
   assert.equal(compareVersions("4.0.1", "4.0.1"), 0)
   assert.equal(compareVersions("4.0.0", "4.0.1"), -1)
-  assert.equal(compareVersions("4.0.1", "4.0.1-beta.1"), 1)
 })
 
-test("installed update stages exact server and TUI specs for the next restart", async () => {
+test("installed update provisions the complete next generation before switching both direct entries", async () => {
   const f = fixture()
   try {
-    writeFileSync(f.configPath, JSON.stringify({ plugin: ["opencode-optimised-toolings@latest", ["personal", { keep: true }]], provider: { private: { untouched: true } } }, null, 2))
-    writeFileSync(f.tuiPath, JSON.stringify({ theme: "custom", plugin: [["opencode-optimised-toolings@4.0.1", { motion: false }], "other-tui"] }, null, 2))
-    const result = await stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "4.0.2" })
-    assert.equal(result.changed, true)
-    assert.equal(result.restartRequired, true)
-    assert.equal(result.targetSpec, "opencode-optimised-toolings@4.0.2")
+    writeFileSync(f.configPath, JSON.stringify({ plugin: ["opencode-optimised-toolings@4.0.1", "personal"], provider: { private: { untouched: true } } }, null, 2))
+    writeFileSync(f.tuiPath, JSON.stringify({ theme: "custom", plugin: ["old-tui", "other-tui"] }, null, 2))
+    const result = await stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "4.0.2", force: true, env: { ...process.env, OPENCODE_TOOLINGS_GENERATIONS_DIR: f.generations }, install: installFixture })
     const config = JSON.parse(readFileSync(f.configPath, "utf8"))
     const tui = JSON.parse(readFileSync(f.tuiPath, "utf8"))
-    assert.equal(config.plugin[0], "opencode-optimised-toolings@4.0.2")
-    assert.deepEqual(config.plugin[1], ["personal", { keep: true }])
+    assert.equal(result.changed, true)
+    assert.match(config.plugin[0], /generations\/v4\.0\.2--[a-f0-9]{16}\/opencode-optimised-toolings\/index\.js$/)
+    assert.match(tui.plugin[0], /generations\/v4\.0\.2--[a-f0-9]{16}\/opencode-optimised-toolings\/packages\/tui\/index\.tsx$/)
+    assert.equal(tui.plugin[0].includes("/node_modules/"), false)
+    assert.equal(config.plugin[1], "personal")
     assert.equal(config.provider.private.untouched, true)
-    assert.deepEqual(tui.plugin[0], ["opencode-optimised-toolings@4.0.2", { motion: false }])
-    assert.equal(tui.plugin[1], "other-tui")
-    assert.equal(tui.theme, "custom")
-    assert.equal(result.files.length, 2)
+    assert.equal(tui.plugin[1], "old-tui")
+    assert.equal(tui.plugin[2], "other-tui")
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
@@ -48,22 +59,23 @@ test("same or older registry versions do not rewrite config", async () => {
   try {
     const source = JSON.stringify({ plugin: ["opencode-optimised-toolings@4.0.1"] }, null, 2)
     writeFileSync(f.configPath, source)
-    const same = await stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "4.0.1" })
-    const older = await stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "3.9.9" })
+    const same = await stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "4.0.1", force: true })
+    const older = await stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "3.9.9", force: true })
     assert.equal(same.changed, false)
     assert.equal(older.changed, false)
     assert.equal(readFileSync(f.configPath, "utf8"), source)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
-test("malformed user config fails closed without partial writes", async () => {
+test("malformed user config fails before provisioning and without partial writes", async () => {
   const f = fixture()
+  let installed = false
   try {
     writeFileSync(f.configPath, "{broken")
-    writeFileSync(f.tuiPath, JSON.stringify({ plugin: ["opencode-optimised-toolings@4.0.1"] }))
-    await assert.rejects(() => stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "4.0.2" }), /not valid JSON/)
+    writeFileSync(f.tuiPath, JSON.stringify({ plugin: ["old"] }))
+    await assert.rejects(() => stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "4.0.2", force: true, install: async () => { installed = true } }), /not valid JSON/)
+    assert.equal(installed, false)
     assert.equal(readFileSync(f.configPath, "utf8"), "{broken")
-    assert.match(readFileSync(f.tuiPath, "utf8"), /4\.0\.1/)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 

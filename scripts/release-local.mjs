@@ -111,6 +111,9 @@ try {
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], { cwd: consumerRoot });
   const probe = `
     process.env.OPENCODE_TOOLINGS_MODE = "development";
+    const generation = await import(${JSON.stringify(pathToFileURL(join(consumerRoot, "node_modules", packageName, "packages", "shared", "generation.js")).href)});
+    const attestation = await generation.runtimeAttestation(${JSON.stringify(join(consumerRoot, "node_modules", packageName))}, { role: "release-consumer" });
+    if (attestation.dependencyMatchesExpected !== true) throw new Error("packed consumer dependency graph does not match the packaged attestation");
     const module = await import(${JSON.stringify(pathToFileURL(join(consumerRoot, "node_modules", packageName, "index.js")).href)});
     const hooks = await module.default({});
     const names = Object.keys(hooks.tool ?? {}).sort();

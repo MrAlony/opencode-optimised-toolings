@@ -40,6 +40,7 @@ test("indicatorFor maps statuses to visible levels", () => {
   assert.match(indicatorFor({ status: "portable", version: "9.9.9" }).detail, /Portable IDE features/)
   assert.equal(indicatorFor({ status: "building", progressPercent: 40, stepLabel: "Rebuilding" }).level, "warn")
   assert.equal(indicatorFor({ status: "built" }).level, "info")
+  assert.equal(indicatorFor({ status: "installed" }).text, "Host enhancements installed")
   assert.match(indicatorFor({ status: "built" }).text, /restart OpenCode/i)
 })
 
@@ -94,6 +95,7 @@ test("toastForTransition only fires on meaningful transitions", () => {
   assert.ok(toastForTransition({ status: "building" }, { status: "built" }))
   assert.match(toastForTransition({ status: "building" }, { status: "built" }).message, /restart OpenCode/i)
   assert.equal(toastForTransition({ status: "built" }, { status: "built" }), null)
+  assert.equal(toastForTransition({ status: "building" }, { status: "built" }, { renderersRegistered: 16 }), null)
   assert.ok(toastForTransition({ status: "built" }, { status: "ok" }))
   assert.ok(toastForTransition({ status: "building" }, { status: "error", lastError: "x" }))
   assert.equal(toastForTransition({ status: "error" }, { status: "error", lastError: "y" }), null)

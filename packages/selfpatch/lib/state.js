@@ -15,6 +15,7 @@ export const STATUS_ORDER = [
   "patching",
   "building",
   "built",
+  "installed",
   "swapping",
   "restarting",
   "ok",

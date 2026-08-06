@@ -689,18 +689,18 @@ export async function runSelfPatch(root) {
       const patchedSha = await sha256File(patchedPath)
       if (patchedSha === officialSha && artifactMarker?.manifestSha256 === manifestSha && artifactMarker?.binarySha256 === patchedSha) {
         await writeState(root, {
-          status: "ok",
+          status: "installed",
           version: bin.version,
           binaryPath: bin.path,
           officialSha256: officialSha,
           patchedSha256: patchedSha,
           patchedPath,
-          renderersActive: true,
+          renderersActive: false,
           compatibilityProfile: profile.profileVersion,
           compatibilityMode: profile.exact ? "exact" : "verified-source",
           stepLabel: profile.exact
-            ? "Optional host enhancements active with an exact profile"
-            : `Optional host enhancements active via verified profile v${profile.profileVersion}`,
+            ? "Optional host enhancements installed with an exact profile; current-process activation is verified by the TUI"
+            : `Optional host enhancements installed via verified profile v${profile.profileVersion}; current-process activation is verified by the TUI`,
         })
         return null
       }
@@ -721,15 +721,19 @@ export async function runSelfPatch(root) {
         const patchedSha = await sha256File(patchedPath)
         const installed = await installPatchedBinary({ officialPath: bin.path, patchedPath })
         await writeState(root, {
-          status: "built",
+          status: installed.installed ? "built" : "installed",
           progressPercent: 100,
-          stepLabel: "Patched binary installed — restart OpenCode to activate",
+          stepLabel: installed.installed
+            ? "Patched binary installed — restart OpenCode to activate"
+            : "Patched binary already installed; current-process activation is verified by the TUI",
           version: bin.version,
           binaryPath: bin.path,
-          officialSha256: officialSha,
+          officialSha256: installed.officialSha,
           patchedSha256: patchedSha,
           patchedPath,
           renderersActive: false,
+          compatibilityProfile: profile.profileVersion,
+          compatibilityMode: profile.exact ? "exact" : "verified-source",
         })
         return { officialPath: bin.path, patchedPath, officialSha, patchedSha, installed }
       }
@@ -800,15 +804,19 @@ export async function runSelfPatch(root) {
     })
     const installed = await installPatchedBinary({ officialPath: bin.path, patchedPath })
     await writeState(root, {
-      status: "built",
+      status: installed.installed ? "built" : "installed",
       progressPercent: 100,
-      stepLabel: "Patched binary installed — restart OpenCode to activate",
+      stepLabel: installed.installed
+        ? "Patched binary installed — restart OpenCode to activate"
+        : "Patched binary already installed; current-process activation is verified by the TUI",
       version: bin.version,
       binaryPath: bin.path,
-      officialSha256: officialSha,
+      officialSha256: installed.officialSha,
       patchedSha256: patchedSha,
       patchedPath,
       renderersActive: false,
+      compatibilityProfile: profile.profileVersion,
+      compatibilityMode: profile.exact ? "exact" : "verified-source",
       logTail: "",
     })
     return { officialPath: bin.path, patchedPath, officialSha, patchedSha, installed }

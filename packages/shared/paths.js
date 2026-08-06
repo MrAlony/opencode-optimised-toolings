@@ -23,26 +23,37 @@ export function installedPackageSpec(packageRoot) {
 }
 
 export function packageRootFrom(importMetaUrl) {
-  let current = dirname(fileURLToPath(importMetaUrl))
-  for (let depth = 0; depth < 10; depth += 1) {
+  const entryDirectory = dirname(fileURLToPath(importMetaUrl))
+  let current = entryDirectory
+  let nearestPackage = null
+  for (let depth = 0; depth < 12; depth += 1) {
     try {
       const packageFile = join(current, "package.json")
-      if (existsSync(packageFile)) return current
+      if (existsSync(packageFile)) {
+        nearestPackage ??= current
+        const data = JSON.parse(readFileSync(packageFile, "utf8"))
+        if (data?.name === PACKAGE_NAME) return current
+      }
     } catch {}
     const parent = dirname(current)
     if (parent === current) break
     current = parent
   }
-  return dirname(fileURLToPath(importMetaUrl))
+  return nearestPackage ?? entryDirectory
 }
 
 export function isDevelopmentCheckout(root) {
   if (process.env.OPENCODE_TOOLINGS_PACKAGE_MODE === "installed") return false
   if (process.env.OPENCODE_TOOLINGS_PACKAGE_MODE === "development") return true
-  // npm-installed plugins live below node_modules. All other roots (a clone,
-  // linked checkout, or isolated test fixture) keep their own runtime unless an
-  // explicit user data directory was supplied.
-  return !String(root ?? "").replaceAll("\\", "/").toLowerCase().includes("/node_modules/")
+  const value = resolve(String(root ?? ""))
+  // Immutable generations intentionally keep executable TSX source outside
+  // node_modules so OpenCode's OpenTUI/Solid transform can process it. Their
+  // parent marker is the authoritative installed-runtime identity.
+  if (existsSync(join(dirname(value), ".alonix-generation.json"))) return false
+  // npm-installed transport packages live below node_modules. All other roots
+  // (a clone, linked checkout, or isolated test fixture) keep their own runtime
+  // unless an explicit user data directory was supplied.
+  return !value.replaceAll("\\", "/").toLowerCase().includes("/node_modules/")
 }
 
 export function openCodeConfigDir(env = process.env) {

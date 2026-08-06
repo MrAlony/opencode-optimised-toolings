@@ -17,13 +17,13 @@ Fully quit and restart OpenCode. That single package entry is the complete insta
 On package load Alonix:
 
 1. Registers every server-side tool from the package.
-2. Registers the same npm package as the TUI companion; OpenCode resolves its `./tui` export.
+2. Provisions one immutable package generation under `~/.config/opencode/alonix/runtime/generations/` and points both the server and TUI directly at files from that same root. This bypasses OpenCode's non-validating npm caches while retaining npm as the update transport.
 3. Supplies missing Alonix tool permissions, optimized instructions, and the packaged CBM skill in memory while preserving explicit user choices.
 4. Migrates only legacy Alonix checkout references when running from an installed npm package. Personal providers, models, plugins, skills, permissions, and unrelated configuration remain untouched.
 5. Stores mutable state under `~/.config/opencode/alonix/` rather than inside an immutable npm cache.
 6. Provisions heavyweight optional assets lazily so startup remains fast and offline-safe.
 
-The package is idempotent and self-healing. Interrupted setup is retried from verified state, while malformed or locked user configuration fails safely without preventing current-process tool registration.
+The package is idempotent and self-healing. An update is fully installed and validated in a new immutable generation before either config file changes. Server and TUI entries then switch together in a rollback-capable transaction; an older OpenCode process cannot downgrade a newer configured generation. Incomplete, corrupt, offline, interrupted, or malformed states leave the previous generation active. Direct checkout development and installed generations use the same one-root/two-direct-entry topology.
 
 ## Included capabilities
 

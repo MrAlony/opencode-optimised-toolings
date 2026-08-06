@@ -319,6 +319,27 @@ test("settings is a first-class mouse-accessible route", async () => {
   assert.match(settingsLib, /if \(!changes\.length\) return \{[\s\S]*changed: false/, "duplicate saves must be strict no-ops")
 })
 
+test("installed TUI resolves and attests the one direct immutable generation root", async () => {
+  const entry = await source("index.tsx")
+  assert.match(entry, /const root = packageRootFrom\(import\.meta\.url\)/)
+  assert.match(entry, /directGeneration: true/)
+  assert.match(entry, /runtimeAttestation\(root, \{ role: "tui" \}\)/)
+  assert.match(entry, /sourceMatchesMarker/)
+  assert.match(entry, /dependencyFingerprint/)
+  assert.match(entry, /record\("active", "complete"\)/)
+  assert.doesNotMatch(entry, /loadedTuiBridgeIdentity|compareRuntimeIdentity|tui-loader/)
+  assert.doesNotMatch(entry, /packages[\\/]tui[\\/]package\.json/)
+})
+
+test("server and TUI direct entries are provisioned together before activation", async () => {
+  const generation = await source("../shared/generation.js")
+  assert.match(generation, /generationSpecs/)
+  assert.match(generation, /validateGeneration/)
+  assert.match(generation, /activatePackageGeneration/)
+  assert.match(generation, /for \(const \[role, file\] of Object\.entries\(paths\)\)/)
+  assert.match(generation, /for \(const item of applied\.reverse\(\)\)/)
+})
+
 test("settings owns one marked AGENTS block and never edits personal models or providers", async () => {
   const sourceText = await source("lib/settings.js")
   assert.match(sourceText, /ALONIX OPTIMIZED TOOL INSTRUCTIONS: START/)

@@ -118,6 +118,12 @@ export function indicatorFor(state, evidence = {}) {
   switch (state?.status) {
     case "ok":
       return { level: "ok", text: "Patched binary active", detail: "Rich tool renderers active" }
+    case "installed":
+      return {
+        level: "info",
+        text: "Host enhancements installed",
+        detail: "This process has not exposed live rich-renderer capability evidence",
+      }
     case "idle":
       return { level: "info", text: "Tooling self-patch pending" }
     case "dev-mode":
@@ -155,9 +161,9 @@ export function indicatorFor(state, evidence = {}) {
   }
 }
 
-export function toastForTransition(prev, next) {
+export function toastForTransition(prev, next, evidence = {}) {
   if (!prev) return null
-  if (next?.status === "built" && prev?.status !== "built") {
+  if (next?.status === "built" && prev?.status !== "built" && Number(evidence.renderersRegistered ?? 0) <= 0) {
     return { variant: "info", title: "OpenCode patched", message: "Patched binary installed — restart OpenCode to activate rich tool renderers." }
   }
   if (next?.status === "ok" && prev?.status === "built") {

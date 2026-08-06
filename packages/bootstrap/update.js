@@ -1,59 +1,10 @@
-import { existsSync } from "node:fs"
-import { promises as fs } from "node:fs"
-import { basename, dirname, join } from "node:path"
-import { randomUUID } from "node:crypto"
-import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser"
-import {
-  PACKAGE_NAME,
-  installedPackageSpec,
-  isDevelopmentCheckout,
-  openCodeConfigDir,
-  packageVersion,
-} from "../shared/paths.js"
+import { isDevelopmentCheckout, packageVersion } from "../shared/paths.js"
+import { activatePackageGeneration, ensurePackageGeneration, validateActivationConfig } from "../shared/generation.js"
 
+const PACKAGE_NAME = "opencode-optimised-toolings"
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`
 const CHECK_DELAY_MS = 1_500
 const CHECK_TIMEOUT_MS = 5_000
-
-function parseDocument(text, label) {
-  const errors = []
-  const data = parse(text || "{}", errors, { allowTrailingComma: true, disallowComments: false })
-  if (errors.length) {
-    const detail = errors.slice(0, 3).map((item) => `${printParseErrorCode(item.error)} at ${item.offset}`).join(", ")
-    throw new Error(`${label} is not valid JSON/JSONC (${detail})`)
-  }
-  return data && typeof data === "object" && !Array.isArray(data) ? data : {}
-}
-
-function pluginSpec(entry) {
-  return String(Array.isArray(entry) ? entry[0] : entry ?? "")
-}
-
-function isManagedSpec(value) {
-  return new RegExp(`^(?:npm:)?${PACKAGE_NAME}(?:@|$)`, "i").test(String(value ?? "").trim())
-}
-
-function replaceManagedPlugin(list, spec) {
-  const input = Array.isArray(list) ? list : []
-  const output = []
-  let inserted = false
-  for (const entry of input) {
-    if (!isManagedSpec(pluginSpec(entry))) {
-      output.push(entry)
-      continue
-    }
-    if (inserted) continue
-    output.push(Array.isArray(entry) ? [spec, ...entry.slice(1)] : spec)
-    inserted = true
-  }
-  if (!inserted) output.unshift(spec)
-  return output
-}
-
-function setJsonc(text, path, value) {
-  const eol = text.includes("\r\n") ? "\r\n" : "\n"
-  return applyEdits(text, modify(text, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }))
-}
 
 function versionParts(value) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(value ?? ""))
@@ -72,13 +23,6 @@ export function compareVersions(left, right) {
   if (!a.prerelease) return 1
   if (!b.prerelease) return -1
   return a.prerelease.localeCompare(b.prerelease)
-}
-
-async function atomicWrite(file, text) {
-  await fs.mkdir(dirname(file), { recursive: true })
-  const temporary = join(dirname(file), `.${basename(file)}.${process.pid}.${randomUUID()}.tmp`)
-  await fs.writeFile(temporary, text, { encoding: "utf8", mode: 0o600 })
-  await fs.rename(temporary, file)
 }
 
 async function latestVersion(fetchImpl = globalThis.fetch) {
@@ -104,41 +48,30 @@ export async function stagePackageUpdate(packageRoot, options = {}) {
   const latest = options.latestVersion ?? await latestVersion(options.fetch)
   if (compareVersions(latest, current) <= 0) return { changed: false, current, latest }
 
-  const configDir = options.configDir ?? openCodeConfigDir(options.env)
-  const opencodeJsonc = join(configDir, "opencode.jsonc")
-  const opencodeJson = join(configDir, "opencode.json")
-  const configPath = existsSync(opencodeJsonc) ? opencodeJsonc : opencodeJson
-  const tuiPath = join(configDir, "tui.json")
-  const targetSpec = `${PACKAGE_NAME}@${latest}`
-  const planned = []
+  // Reject malformed destination config before any network or filesystem-heavy
+  // provisioning work. A broken user file is never partially bypassed.
+  await validateActivationConfig(options)
 
-  for (const file of [configPath, tuiPath]) {
-    if (!existsSync(file)) continue
-    const before = await fs.readFile(file, "utf8")
-    const data = parseDocument(before, basename(file))
-    const plugins = replaceManagedPlugin(data.plugin, targetSpec)
-    const after = setJsonc(before, ["plugin"], plugins)
-    parseDocument(after, basename(file))
-    if (after !== before) planned.push({ file, before, after })
+  // The complete next generation is installed and validated before either
+  // config file is touched. Server and TUI then switch to direct files from the
+  // same immutable root in one rollback-capable transaction.
+  const generation = await ensurePackageGeneration(packageRoot, {
+    ...options,
+    version: latest,
+    source: "registry",
+  })
+  const activation = await activatePackageGeneration(generation, options)
+  return {
+    changed: activation.changed,
+    current,
+    latest,
+    generation: generation.root,
+    serverSpec: generation.specs.server,
+    tuiSpec: generation.specs.tui,
+    restartRequired: activation.changed,
+    files: activation.files,
+    backups: activation.backups ?? [],
   }
-  if (!planned.length) return { changed: false, current, latest, targetSpec }
-
-  const backupDir = join(configDir, "alonix", "backups")
-  await fs.mkdir(backupDir, { recursive: true })
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-  const applied = []
-  try {
-    for (const item of planned) {
-      const backup = join(backupDir, `${stamp}-update-${basename(item.file)}`)
-      await fs.writeFile(backup, item.before, { encoding: "utf8", mode: 0o600 })
-      await atomicWrite(item.file, item.after)
-      applied.push(item)
-    }
-  } catch (error) {
-    for (const item of applied.reverse()) await atomicWrite(item.file, item.before).catch(() => {})
-    throw error
-  }
-  return { changed: true, current, latest, targetSpec, restartRequired: true, files: planned.map((item) => item.file) }
 }
 
 let scheduled = false
@@ -152,8 +85,4 @@ export function schedulePackageUpdate(packageRoot, options = {}) {
   }, options.delayMs ?? CHECK_DELAY_MS)
   timer?.unref?.()
   return true
-}
-
-export function currentInstalledSpec(packageRoot) {
-  return installedPackageSpec(packageRoot)
 }

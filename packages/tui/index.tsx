@@ -3,12 +3,13 @@ import type { JSX } from "@opentui/solid"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { createMemo, createRoot, createSignal } from "solid-js"
+import { runtimeAttestation, writeTuiLifecycle } from "../shared/generation.js"
+import { packageRootFrom } from "../shared/paths.js"
 import {
   customTools,
   formatStateLog,
   indicatorFor,
   readStateSync,
-  rootFromModule,
   statePathForRoot,
   toastForTransition,
 } from "./lib/status.js"
@@ -99,9 +100,38 @@ function toolSkin(tokens: Tokens) {
 const tui: TuiPlugin = async (api, options) => {
   if (options?.enabled === false) return
 
-  const root = rootFromModule(import.meta.url)
+  // Server and TUI are direct files from one immutable generation root. This is
+  // intentionally identical to the known-good direct-checkout topology.
+  const root = packageRootFrom(import.meta.url)
   const statePath = statePathForRoot(root)
   const motion = options?.animations !== false
+  const attestation = await runtimeAttestation(root, { role: "tui" })
+  const lifecycle = {
+    version: attestation.version ?? undefined,
+    root,
+    directGeneration: true,
+    sourceFingerprint: attestation.sourceFingerprint,
+    expectedSourceFingerprint: attestation.expectedSourceFingerprint,
+    sourceMatchesMarker: attestation.sourceMatchesMarker,
+    dependencyFingerprint: attestation.dependencyFingerprint,
+    dependencies: attestation.dependencies,
+    stage: "initializing",
+    renderersAvailable: false,
+    renderersRegistered: 0,
+    renderersFailed: [] as string[],
+    routesRegistered: false,
+    slotsRegistered: false,
+    keymapRegistered: false,
+  }
+  const record = (status: string, stage: string, detail: Record<string, unknown> = {}) => {
+    lifecycle.stage = stage
+    try { writeTuiLifecycle(root, status, { ...lifecycle, ...detail }) } catch {}
+  }
+  record("initializing", "runtime-attested")
+  if (attestation.sourceMatchesMarker === false) {
+    record("failed", "runtime-attestation", { error: "Loaded TUI source bytes do not match the immutable generation marker" })
+    throw new Error("Alonix refused a drifted TUI generation")
+  }
 
   // Make generic custom-tool output visible even before the patched binary exists.
   try {
@@ -120,7 +150,10 @@ const tui: TuiPlugin = async (api, options) => {
   // async, so no ambient Solid owner is guaranteed when it runs, and memos
   // created without an owner would never be disposed. The root is torn down with
   // the plugin lifecycle.
-  const scope = createRoot((disposeRoot) => {
+  record("initializing", "creating-reactive-scope")
+  const scope = (() => {
+    try {
+      return createRoot((disposeRoot) => {
     const tokens = createSkin(api, { motion })
     const clock = createClock(motion)
     const projects = createProjectStore(api)
@@ -148,6 +181,7 @@ const tui: TuiPlugin = async (api, options) => {
       projects,
       toolingState,
       setToolingState,
+      registered,
       setRegistered,
       tooling,
       workbenchView,
@@ -156,11 +190,17 @@ const tui: TuiPlugin = async (api, options) => {
       setWorkbenchMode,
       dockOpen,
       setDockOpen,
-      disposeRoot,
+        disposeRoot,
+      }
+    })
+    } catch (error) {
+      record("failed", "creating-reactive-scope", { error: error instanceof Error ? error.stack ?? error.message : String(error) })
+      throw error
     }
-  })
-  const { tokens, clock, projects, toolingState, setToolingState, setRegistered, tooling } = scope
+  })()
+  const { tokens, clock, projects, toolingState, setToolingState, registered, setRegistered, tooling } = scope
   const { workbenchView, setWorkbenchView, workbenchMode, setWorkbenchMode, dockOpen, setDockOpen } = scope
+  record("initializing", "reactive-scope-ready")
 
   const toggleDock = () => {
     const next = !dockOpen()
@@ -178,6 +218,7 @@ const tui: TuiPlugin = async (api, options) => {
   }
   const registry = extended.toolRenderers
   registration.available = Boolean(registry && typeof registry.register === "function")
+  lifecycle.renderersAvailable = registration.available
   if (registry && typeof registry.register === "function") {
     for (const name of customTools) {
       try {
@@ -191,6 +232,9 @@ const tui: TuiPlugin = async (api, options) => {
     }
     setRegistered(registration.registered)
   }
+  lifecycle.renderersRegistered = registration.registered
+  lifecycle.renderersFailed = [...registration.failed]
+  record("initializing", "renderers-registered")
 
   const openSwitcher = () => openPalette("")
 
@@ -430,8 +474,10 @@ const tui: TuiPlugin = async (api, options) => {
       },
     ])
     if (typeof disposeRoute === "function") api.lifecycle.onDispose(disposeRoute)
-  } catch {
-    // route.register is plugin-context only; ignore otherwise.
+    lifecycle.routesRegistered = true
+    record("initializing", "routes-registered")
+  } catch (error) {
+    record("degraded", "routes-unavailable", { routeError: error instanceof Error ? error.message : String(error) })
   }
 
   try {
@@ -526,11 +572,15 @@ const tui: TuiPlugin = async (api, options) => {
         },
       },
     })
-  } catch {
-    // slots.register is plugin-context only; ignore otherwise.
+    lifecycle.slotsRegistered = true
+    record("initializing", "slots-registered")
+  } catch (error) {
+    record("degraded", "slots-unavailable", { slotError: error instanceof Error ? error.message : String(error) })
   }
 
-  api.keymap.registerLayer({
+  record("initializing", "registering-keymap")
+  try {
+    api.keymap.registerLayer({
     commands: [
       {
         name: "alonix-ide.palette",
@@ -615,22 +665,32 @@ const tui: TuiPlugin = async (api, options) => {
         },
       },
     ],
-    bindings: [],
-  })
+      bindings: [],
+    })
+    lifecycle.keymapRegistered = true
+    record("active", "complete")
+  } catch (error) {
+    record("failed", "registering-keymap", { error: error instanceof Error ? error.stack ?? error.message : String(error) })
+    throw error
+  }
 
   // Live patch-progress toasts, one per transition, from the same poller.
   let previous: unknown = null
   const poll = setInterval(() => {
-    const state = readStateSync(statePath)
-    setToolingState(state)
-    const toast = toastForTransition(previous, state)
-    previous = state
-    if (toast) {
-      try {
-        api.ui.toast(toast)
-      } catch {
-        // toasts are best-effort
+    try {
+      const state = readStateSync(statePath)
+      setToolingState(state)
+      const toast = toastForTransition(previous, state, { renderersRegistered: registered() })
+      previous = state
+      if (toast) {
+        try {
+          api.ui.toast(toast)
+        } catch {
+          // toasts are best-effort
+        }
       }
+    } catch (error) {
+      record("degraded", "status-poll-failed", { pollError: error instanceof Error ? error.message : String(error) })
     }
   }, 750)
   api.lifecycle.onDispose(() => {

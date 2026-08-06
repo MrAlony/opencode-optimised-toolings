@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { applyRuntimeDefaults, migrateInstalledConfig, PACKAGE_SPEC } from "../packages/bootstrap/index.js"
+import { applyRuntimeDefaults, migrateInstalledConfig, packageTuiSpec, PACKAGE_SPEC, PRESERVE_FILE_SPEC_MARKER } from "../packages/bootstrap/index.js"
 import { installedPackageSpec, runtimeRootForPackage } from "../packages/shared/paths.js"
 import plugin from "../index.js"
 
@@ -33,11 +33,20 @@ test("root aggregator preserves config hooks and registers every tool family", a
   }
 })
 
-test("installed package specs pin their own exact version to escape sticky latest caches", () => {
+test("published runtime preserves the local TUI module boundary while root identity stays authoritative", () => {
+  const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"))
+  assert.ok(packageJson.files.includes("packages/tui/package.json"))
+  assert.equal(packageJson.name, "opencode-optimised-toolings")
+})
+
+test("installed package specs use direct entries from one package root", () => {
   const root = mkdtempSync(join(tmpdir(), "alonix-exact-spec-"))
   try {
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "4.0.1" }))
     assert.equal(installedPackageSpec(root), "opencode-optimised-toolings@4.0.1")
+    assert.match(packageTuiSpec(root), /^file:\/\//)
+    assert.match(packageTuiSpec(root), /packages\/tui\/index\.tsx$/i)
+    assert.doesNotMatch(packageTuiSpec(root), /tui-loader/i)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -72,6 +81,25 @@ test("installed migration removes only Alonix checkout references", () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("an isolated installed candidate can explicitly preserve its own verified file spec", () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-zero-touch-candidate-"))
+  try {
+    const configDir = join(root, "user-config")
+    const packageRoot = join(root, "candidate", "node_modules", "opencode-optimised-toolings")
+    mkdirSync(join(packageRoot, "config"), { recursive: true })
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "4.0.1" }))
+    writeFileSync(join(packageRoot, "config", "AGENTS.md"), "# Alonix guidance\n")
+    writeFileSync(join(packageRoot, PRESERVE_FILE_SPEC_MARKER), "candidate\n")
+    const fileSpec = `file:///${join(packageRoot, "index.js").replaceAll("\\", "/")}`
+    const configPath = join(configDir, "opencode.json")
+    writeFileSync(configPath, JSON.stringify({ plugin: [fileSpec, "personal-plugin"] }, null, 2))
+    migrateInstalledConfig(packageRoot, { configDir, force: true })
+    const config = JSON.parse(readFileSync(configPath, "utf8"))
+    assert.deepEqual(config.plugin, [fileSpec, "personal-plugin"])
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test("installed migration honors the persisted instructions opt-out", () => {
