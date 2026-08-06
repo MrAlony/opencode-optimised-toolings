@@ -6,6 +6,7 @@ import { StealthToolingPlugin } from "./packages/stealth/index.js";
 import { SelfPatchPlugin } from "./packages/selfpatch/index.js";
 import { applyRuntimeDefaults, migrateInstalledConfig } from "./packages/bootstrap/index.js";
 import { packageRootFrom } from "./packages/shared/paths.js";
+import { schedulePackageUpdate } from "./packages/bootstrap/update.js";
 
 function combineHooks(parts) {
   const output = { tool: {} };
@@ -32,6 +33,10 @@ export const OptimisedToolingsPlugin = async (input) => {
   // Migration is deliberately failure-isolated: invalid user JSONC or a locked
   // config can never prevent tool registration in the current process.
   try { migrateInstalledConfig(packageRoot); } catch (error) { console.warn(`[alonix] zero-touch config migration skipped: ${error?.message ?? error}`); }
+  // Never hot-swap code used by the running process. A lightweight background
+  // check stages exact server/TUI package specs for the next restart, avoiding
+  // OpenCode's sticky @latest cache identity.
+  schedulePackageUpdate(packageRoot);
   const combined = combineHooks(await Promise.all([
   FsToolingPlugin(input),
   EnhancedTerminalPlugin(input),

@@ -62,19 +62,22 @@ function SessionLine(props) {
   )
 }
 
+const EMPTY_CURRENT_SESSION = Object.freeze({ id: "", title: "", directory: "", projectName: "", running: false })
+
 function CurrentChat(props) {
   const tokens = () => props.tokens
-  const session = () => props.session
+  const session = () => props.session ?? null
+  const current = () => session() ?? EMPTY_CURRENT_SESSION
   const clock = useClock(() => session()?.running === true && tokens().motion !== false)
   const activity = createMemo(() => {
-    if (!session()) return null
+    if (!session()) return { busy: false, headline: "Idle", events: [] }
     void clock()
-    return liveActivity(props.api, session().id, { limit: 6 })
+    return liveActivity(props.api, session().id, { limit: 6 }) ?? { busy: false, headline: "Idle", events: [] }
   })
-  const snapshot = createMemo(() => (session() ? workspaceSnapshot(props.api, session().id) : null))
+  const snapshot = createMemo(() => (session() ? workspaceSnapshot(props.api, session().id) : { attention: 0, changedFiles: 0, additions: 0, deletions: 0 }))
 
   return (
-    <Card tokens={tokens()} title="Current chat" glyph={GLYPH.diamond} tone={activity()?.busy ? "accent" : "neutral"} minHeight={10}>
+    <Card tokens={tokens()} title="Current chat" glyph={GLYPH.diamond} tone={activity().busy ? "accent" : "neutral"} minHeight={10}>
       <Show
         when={session()}
         fallback={
@@ -88,13 +91,13 @@ function CurrentChat(props) {
         <box flexDirection="column" paddingLeft={1} paddingRight={1} gap={1}>
           <box flexDirection="row" flexShrink={0}>
             <box flexDirection="column" flexGrow={1} minWidth={0}>
-              <text fg={tokens().text} wrapMode="none" selectable={false}><b>{fit(session().title, props.width - 18)}</b></text>
-              <text fg={tokens().faint} wrapMode="none" selectable={false}>{fitLeft(session().directory || session().projectName || "", props.width - 8)}</text>
+              <text fg={tokens().text} wrapMode="none" selectable={false}><b>{fit(current().title, props.width - 18)}</b></text>
+              <text fg={tokens().faint} wrapMode="none" selectable={false}>{fitLeft(current().directory || current().projectName || "", props.width - 8)}</text>
             </box>
-            <Button tokens={tokens()} variant="primary" glyph={GLYPH.pointer} onPress={() => props.onOpen?.(session())}>Open chat</Button>
+            <Button tokens={tokens()} variant="primary" glyph={GLYPH.pointer} onPress={() => { const value = session(); if (value) props.onOpen?.(value) }}>Open chat</Button>
           </box>
-          <ActivityLine tokens={tokens()} busy={activity()?.busy} width={props.width - 6}>{activity()?.headline ?? "Idle"}</ActivityLine>
-          <For each={activity()?.events?.slice(0, 4) ?? []}>
+          <ActivityLine tokens={tokens()} busy={activity().busy} width={props.width - 6}>{activity().headline}</ActivityLine>
+          <For each={activity().events.slice(0, 4)}>
             {(event) => (
               <text wrapMode="none" selectable={false}>
                 <span style={{ fg: event.running ? tokens().accent : event.failed ? tokens().error : tokens().success }}>{event.running ? GLYPH.pointer : event.failed ? GLYPH.fail : GLYPH.ok}</span>
@@ -102,10 +105,10 @@ function CurrentChat(props) {
               </text>
             )}
           </For>
-          <Show when={snapshot()?.attention > 0}>
+          <Show when={snapshot().attention > 0}>
             <text fg={tokens().warning} wrapMode="none" selectable={false}>{GLYPH.diamond} Agent is waiting for you</text>
           </Show>
-          <Show when={snapshot()?.changedFiles > 0}>
+          <Show when={snapshot().changedFiles > 0}>
             <text fg={tokens().faint} wrapMode="none" selectable={false}>{snapshot().changedFiles} files changed · +{snapshot().additions} -{snapshot().deletions}</text>
           </Show>
         </box>

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser"
-import { PACKAGE_NAME, PACKAGE_SPEC, isDevelopmentCheckout, openCodeConfigDir } from "../shared/paths.js"
+import { PACKAGE_NAME, PACKAGE_SPEC, installedPackageSpec, isDevelopmentCheckout, openCodeConfigDir } from "../shared/paths.js"
 export { PACKAGE_SPEC } from "../shared/paths.js"
 
 export const AGENTS_BLOCK_START = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: START -->"
@@ -116,12 +116,13 @@ export function migrateInstalledConfig(packageRoot, options = {}) {
   if (!existsSync(configPath)) return { changed: false, skipped: "missing-config", configPath }
   const before = readFileSync(configPath, "utf8")
   const config = parseDocument(before, basename(configPath))
+  const managedSpec = options.pluginSpec ?? installedPackageSpec(packageRoot)
   const plugins = Array.isArray(config.plugin) ? config.plugin : []
   const nextPlugins = plugins.filter((entry) => {
     const spec = pluginSpec(entry)
     return !isAlonixLocalReference(spec) && !new RegExp(`^${PACKAGE_NAME}(?:@|$)`, "i").test(spec)
   })
-  nextPlugins.unshift(PACKAGE_SPEC)
+  nextPlugins.unshift(managedSpec)
 
   const skills = config.skills && typeof config.skills === "object" && !Array.isArray(config.skills) ? config.skills : {}
   const paths = Array.isArray(skills.paths) ? skills.paths.filter((entry) => !isLegacyCbmSkillPath(entry)) : []
@@ -167,11 +168,11 @@ export function migrateInstalledConfig(packageRoot, options = {}) {
     if (agentsChanged) agentsBefore ? writeAtomic(agentsPath, agentsBefore) : rmSync(agentsPath, { force: true })
     throw error
   }
-  return { changed: true, configPath, backupPath, agentsPath, agentsBackupPath, plugin: PACKAGE_SPEC }
+  return { changed: true, configPath, backupPath, agentsPath, agentsBackupPath, plugin: managedSpec }
 }
 
-export function packageTuiSpec() {
-  return PACKAGE_SPEC
+export function packageTuiSpec(packageRoot) {
+  return installedPackageSpec(packageRoot)
 }
 
 export function developmentTuiSpec(packageRoot) {

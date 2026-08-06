@@ -141,6 +141,41 @@ test("a session reachable from two directories is listed once", async () => {
   })
 })
 
+test("registered folders render immediately before the SDK refresh settles", async () => {
+  const api = createApi({ kv: { alonix_registered_projects: ["C:/work/saved"] } })
+  api.client.project.list = async () => new Promise(() => {})
+  const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+  process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = "100"
+  try {
+    await withStore(api, (store) => {
+      assert.equal(store.projects.length, 1)
+      assert.equal(store.projects[0].worktree, "C:/work/saved")
+      assert.equal(store.projectRows()[0].name, "saved")
+    })
+  } finally {
+    if (previous === undefined) delete process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+    else process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = previous
+  }
+})
+
+test("a hung SDK request times out and never leaves folders loading forever", async () => {
+  const api = createApi({ kv: { alonix_registered_projects: ["C:/work/saved"] } })
+  api.client.project.list = async () => new Promise(() => {})
+  const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+  process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = "100"
+  try {
+    await withStore(api, async (store) => {
+      await new Promise((resolve) => setTimeout(resolve, 140))
+      assert.equal(store.loading, false, "a missing SDK response must not trap the dock in loading")
+      assert.equal(store.projects.length, 1, "persisted folders remain usable")
+      assert.match(store.error, /project listing.*timed out/i)
+    })
+  } finally {
+    if (previous === undefined) delete process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+    else process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = previous
+  }
+})
+
 test("one unreachable project does not blank the whole portfolio", async () => {
   const api = createApi()
   api.client.session.list = async (args) => {

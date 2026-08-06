@@ -3,8 +3,8 @@ import { randomBytes } from "node:crypto"
 import { homedir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { PACKAGE_SPEC, isDevelopmentCheckout } from "../../shared/paths.js"
-import { developmentTuiSpec } from "../../bootstrap/index.js"
+import { isDevelopmentCheckout } from "../../shared/paths.js"
+import { developmentTuiSpec, packageTuiSpec } from "../../bootstrap/index.js"
 
 const LOCK_WAIT_MS = 10_000
 const LOCK_STALE_MS = 30_000
@@ -15,7 +15,7 @@ export function openCodeConfigDirectory(env = process.env) {
 
 export function tuiCompanionSpec(root, options = {}) {
   if (typeof options.spec === "string" && options.spec.trim()) return options.spec.trim()
-  return isDevelopmentCheckout(root) ? developmentTuiSpec(root) : PACKAGE_SPEC
+  return isDevelopmentCheckout(root) ? developmentTuiSpec(root) : packageTuiSpec(root)
 }
 
 function entrySpec(entry) {

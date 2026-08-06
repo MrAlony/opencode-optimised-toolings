@@ -27,9 +27,9 @@ function SessionRow(props) {
   const session = () => props.session
   const clock = useClock(() => session().running === true && tokens().motion !== false)
   const activity = createMemo(() => {
-    if (!props.api || !session().running) return null
+    if (!props.api || !session().running) return { busy: false, headline: "", events: [] }
     void clock()
-    return liveActivity(props.api, session().id, { limit: 1 })
+    return liveActivity(props.api, session().id, { limit: 1 }) ?? { busy: false, headline: "", events: [] }
   })
   const glyph = createMemo(() => {
     if (session().running) return spinnerFrame(clock(), undefined, 90, tokens().motion !== false)
@@ -50,7 +50,7 @@ function SessionRow(props) {
           </span>
         </text>
       </ClickRow>
-      <Show when={activity()?.busy}>
+      <Show when={activity().busy}>
         <text fg={tokens().accent} wrapMode="none" selectable={false}>
           {"      "}{fit(activity().headline, Math.max(6, props.width - 8))}
         </text>
@@ -266,7 +266,19 @@ export function Dock(props) {
               <text fg={tokens().faint} wrapMode="none" selectable={false}>+ new · × hide</text>
             </box>
 
-            <Show when={projects().length} fallback={<box paddingLeft={1} paddingRight={1}><text fg={tokens().muted} wrapMode="wrap" selectable={false}>{store.loading ? "Loading folders…" : "No folders yet. Add one to start working."}</text></box>}>
+            <Show
+              when={projects().length}
+              fallback={
+                <box flexDirection="column" paddingLeft={1} paddingRight={1} gap={1}>
+                  <text fg={store.error ? tokens().warning : tokens().muted} wrapMode="wrap" selectable={false}>
+                    {store.loading ? "Loading folders…" : store.error ? "Folders could not be refreshed." : "No folders yet. Add one to start working."}
+                  </text>
+                  <Show when={!store.loading && store.error}>
+                    <Button tokens={tokens()} width="100%" variant="secondary" onPress={() => store.reload?.()}>Try again</Button>
+                  </Show>
+                </box>
+              }
+            >
               <For each={projects()}>
                 {(project) => (
                   <box flexDirection="column" flexShrink={0}>

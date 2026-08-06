@@ -185,8 +185,10 @@ export function HomeDeck(props) {
   )
 }
 
+const EMPTY_TOOLING = Object.freeze({ indicator: { level: "info", text: "" }, state: {}, registration: { registered: 0, available: false } })
+
 function ToolingPanel(props) {
-  const tooling = () => props.tooling
+  const tooling = () => props.tooling ?? EMPTY_TOOLING
   const tone = createMemo(() => {
     const level = tooling()?.indicator?.level
     if (level === "error") return "error"
@@ -219,7 +221,7 @@ function ToolingPanel(props) {
           </text>
         </box>
       </Show>
-      <Show when={tooling()?.state?.lastError && tooling()?.indicator?.level === "error"}>
+      <Show when={tooling().state?.lastError && tooling().indicator?.level === "error"}>
         <text fg={props.tokens.error} wrapMode="none" selectable={false}>
           {fit(String(tooling().state.lastError), props.width)}
         </text>

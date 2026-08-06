@@ -25,10 +25,10 @@ function RailRow(props) {
   const clock = useClock(() => session().running === true && tokens().motion !== false)
 
   const activity = createMemo(() => {
-    if (!props.api) return null
+    if (!props.api) return { busy: false, headline: "", events: [] }
     // Re-read on each tick so the line tracks the agent live.
     void clock()
-    return liveActivity(props.api, session().id, { limit: 1 })
+    return liveActivity(props.api, session().id, { limit: 1 }) ?? { busy: false, headline: "", events: [] }
   })
 
   const glyph = createMemo(() => {
@@ -70,14 +70,14 @@ function RailRow(props) {
         </text>
       </Show>
 
-      <Show when={activity()?.busy}>
+      <Show when={activity().busy}>
         <text fg={tokens().accent} wrapMode="none" selectable={false}>
           {"  "}
           {fit(activity().headline, width() - 2)}
         </text>
       </Show>
 
-      <Show when={!activity()?.busy && session().changedFiles > 0}>
+      <Show when={!activity().busy && session().changedFiles > 0}>
         <text fg={tokens().faint} wrapMode="none" selectable={false}>
           {"  "}
           {session().changedFiles} changed

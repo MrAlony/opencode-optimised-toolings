@@ -1,10 +1,26 @@
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 export const PACKAGE_NAME = "opencode-optimised-toolings"
 export const PACKAGE_SPEC = `${PACKAGE_NAME}@latest`
+
+export function packageVersion(packageRoot) {
+  try {
+    const data = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
+    return typeof data?.version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(data.version)
+      ? data.version
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function installedPackageSpec(packageRoot) {
+  const version = packageVersion(packageRoot)
+  return version ? `${PACKAGE_NAME}@${version}` : PACKAGE_SPEC
+}
 
 export function packageRootFrom(importMetaUrl) {
   let current = dirname(fileURLToPath(importMetaUrl))

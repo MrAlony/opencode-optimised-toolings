@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { applyRuntimeDefaults, migrateInstalledConfig, PACKAGE_SPEC } from "../packages/bootstrap/index.js"
-import { runtimeRootForPackage } from "../packages/shared/paths.js"
+import { installedPackageSpec, runtimeRootForPackage } from "../packages/shared/paths.js"
 import plugin from "../index.js"
 
 test("root aggregator preserves config hooks and registers every tool family", async () => {
@@ -33,6 +33,14 @@ test("root aggregator preserves config hooks and registers every tool family", a
   }
 })
 
+test("installed package specs pin their own exact version to escape sticky latest caches", () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-exact-spec-"))
+  try {
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "4.0.1" }))
+    assert.equal(installedPackageSpec(root), "opencode-optimised-toolings@4.0.1")
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test("installed migration removes only Alonix checkout references", () => {
   const root = mkdtempSync(join(tmpdir(), "alonix-zero-touch-migrate-"))
   try {
@@ -47,11 +55,12 @@ test("installed migration removes only Alonix checkout references", () => {
     }, null, 2))
     writeFileSync(join(configDir, "AGENTS.md"), "# Personal guidance\n")
     mkdirSync(join(root, "config"), { recursive: true })
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "4.0.1" }))
     writeFileSync(join(root, "config", "AGENTS.md"), "# Alonix guidance\n")
     const result = migrateInstalledConfig(root, { configDir, force: true })
     assert.equal(result.changed, true)
     const config = JSON.parse(readFileSync(configPath, "utf8"))
-    assert.deepEqual(config.plugin, [PACKAGE_SPEC, "personal-plugin", "@tarquinen/opencode-dcp@latest"])
+    assert.deepEqual(config.plugin, ["opencode-optimised-toolings@4.0.1", "personal-plugin", "@tarquinen/opencode-dcp@latest"])
     assert.deepEqual(config.skills.paths, ["C:/personal/skill"])
     assert.deepEqual(config.instructions, ["personal.md"])
     assert.equal(config.provider.personal.apiKey, "untouched")

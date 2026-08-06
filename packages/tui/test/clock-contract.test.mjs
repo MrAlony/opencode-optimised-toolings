@@ -84,6 +84,32 @@ test("the session sidebar does not duplicate the dock's project list", async () 
   )
 })
 
+test("nullable async and selection state is never dereferenced behind only a visual Show guard", async () => {
+  const projectAdd = await source("components/project-add.jsx")
+  const palette = await source("components/palette.jsx")
+  const switcher = await source("components/session-switcher.jsx")
+  const operations = await source("components/operations.jsx")
+  assert.match(projectAdd, /const listingState = createMemo/)
+  assert.doesNotMatch(projectAdd, /listing\(\)\.error/)
+  assert.match(palette, /EMPTY_PREVIEW_ACTION/)
+  assert.match(switcher, /EMPTY_PREVIEW_ROW/)
+  assert.match(operations, /EMPTY_CURRENT_SESSION/)
+  for (const [name, text] of [["dock", await source("components/dock.jsx")], ["session rail", await source("components/session-rail.jsx")], ["operations", operations]]) {
+    assert.doesNotMatch(text, /activity\(\)\?\./, `${name} must use a stable activity view model`)
+  }
+  assert.doesNotMatch(operations, /snapshot\(\)\?\./)
+})
+
+test("folder loading is bounded and exposes recovery instead of a permanent spinner", async () => {
+  const dock = await source("components/dock.jsx")
+  const store = await source("components/project-store.jsx")
+  assert.match(store, /withDeadline/)
+  assert.match(store, /ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS/)
+  assert.match(store, /projects: mergeProjects\(\[\], initialRegisteredProjects\)/)
+  assert.match(dock, /Folders could not be refreshed/)
+  assert.match(dock, />Try again<\/Button>/)
+})
+
 test("the dock offers pointer paths for every core action", async () => {
   const text = await source("components/dock.jsx")
   assert.match(text, /<Button/, "global dock actions must use the shared button control")

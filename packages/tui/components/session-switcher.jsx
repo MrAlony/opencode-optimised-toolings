@@ -77,45 +77,48 @@ function SessionRow(props) {
   )
 }
 
+const EMPTY_PREVIEW_ROW = Object.freeze({ title: "", active: false, running: false, state: "idle", relative: "", changedFiles: 0, cost: 0, pinned: false, directory: "" })
+
 function Preview(props) {
-  const row = () => props.row
+  const row = () => props.row ?? null
+  const view = () => row() ?? EMPTY_PREVIEW_ROW
   return (
     <box flexDirection="column" flexShrink={0} width={props.width} paddingLeft={2} gap={1}>
       <Show when={row()} fallback={<EmptyState tokens={props.tokens} title="No session selected" />}>
         <box flexDirection="column">
           <SectionLabel tokens={props.tokens}>Session</SectionLabel>
           <text fg={props.tokens.text} wrapMode="wrap" selectable={false}>
-            <b>{fit(row().title, props.width * 2)}</b>
+            <b>{fit(view().title, props.width * 2)}</b>
           </text>
         </box>
 
         <box flexDirection="column">
           <StatLine tokens={props.tokens} label="state" labelWidth={12} color={props.tokens.text}>
-            {row().active ? "current" : row().running ? row().state : "idle"}
+            {view().active ? "current" : view().running ? view().state : "idle"}
           </StatLine>
           <StatLine tokens={props.tokens} label="updated" labelWidth={12}>
-            {row().relative || "unknown"}
+            {view().relative || "unknown"}
           </StatLine>
           <StatLine tokens={props.tokens} label="changes" labelWidth={12}>
-            {row().changedFiles ? `${row().changedFiles} files` : "none"}
+            {view().changedFiles ? `${view().changedFiles} files` : "none"}
           </StatLine>
-          <Show when={row().cost > 0}>
+          <Show when={view().cost > 0}>
             <StatLine tokens={props.tokens} label="cost" labelWidth={12}>
-              ${row().cost.toFixed(2)}
+              ${view().cost.toFixed(2)}
             </StatLine>
           </Show>
-          <Show when={row().pinned}>
+          <Show when={view().pinned}>
             <StatLine tokens={props.tokens} label="pinned" labelWidth={12} color={props.tokens.accent}>
               yes
             </StatLine>
           </Show>
         </box>
 
-        <Show when={row().directory}>
+        <Show when={view().directory}>
           <box flexDirection="column">
             <SectionLabel tokens={props.tokens}>Directory</SectionLabel>
             <text fg={props.tokens.muted} wrapMode="none" selectable={false}>
-              {compactPath(row().directory, props.width - 1)}
+              {compactPath(view().directory, props.width - 1)}
             </text>
           </box>
         </Show>

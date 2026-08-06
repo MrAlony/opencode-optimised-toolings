@@ -108,15 +108,19 @@ export function ProjectAdd(props) {
   }
 
   const [listing] = createResource(directory, cachedListing)
+  // Solid resources are undefined during their initial and transition frames.
+  // Keep render expressions on a stable value instead of dereferencing the
+  // resource twice across a conditional boundary.
+  const listingState = createMemo(() => listing() ?? { entries: [], isProject: false, error: "" })
 
   const known = createMemo(() => (props.projects?.() ?? []).map((project) => project.worktree))
 
   const model = createMemo(() =>
     browseModel({
       directory: directory(),
-      entries: listing()?.entries ?? [],
+      entries: listingState().entries,
       knownProjects: known(),
-      isProject: listing()?.isProject === true,
+      isProject: listingState().isProject === true,
       query: deferredTyped(),
     }),
   )
@@ -312,9 +316,9 @@ export function ProjectAdd(props) {
         onKeyDown={handleKey}
       />
 
-      <Show when={listing()?.error}>
+      <Show when={listingState().error}>
         <text fg={tokens().error} wrapMode="wrap" selectable={false}>
-          {fit(listing().error, width() * 2)}
+          {fit(listingState().error, width() * 2)}
         </text>
       </Show>
       <Show when={failure()}>

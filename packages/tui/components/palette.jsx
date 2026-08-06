@@ -123,9 +123,12 @@ function metaFor(action) {
   return String(action.meta ?? "")
 }
 
+const EMPTY_PREVIEW_ACTION = Object.freeze({ kind: "none", title: "", subtitle: "", meta: "", changedFiles: 0, running: false, active: false })
+
 function Preview(props) {
   const tokens = () => props.tokens
-  const action = () => props.action
+  const action = () => props.action ?? null
+  const view = () => action() ?? EMPTY_PREVIEW_ACTION
   const width = () => props.width
 
   return (
@@ -141,53 +144,53 @@ function Preview(props) {
     >
       <Show when={action()} fallback={<EmptyState tokens={tokens()} title="Nothing selected" />}>
         <box flexDirection="column">
-          <SectionLabel tokens={tokens()}>{action().kind}</SectionLabel>
+          <SectionLabel tokens={tokens()}>{view().kind}</SectionLabel>
           <text fg={tokens().text} wrapMode="wrap" selectable={false}>
-            <b>{action().title}</b>
+            <b>{view().title}</b>
           </text>
         </box>
 
-        <Show when={action().kind === "session"}>
+        <Show when={view().kind === "session"}>
           <box flexDirection="column">
             <StatLine tokens={tokens()} label="project" labelWidth={12}>
-              {fit(action().session?.projectName ?? "—", width() - 16)}
+              {fit(view().session?.projectName ?? "—", width() - 16)}
             </StatLine>
             <StatLine tokens={tokens()} label="updated" labelWidth={12}>
-              {action().meta || "unknown"}
+              {view().meta || "unknown"}
             </StatLine>
             <StatLine tokens={tokens()} label="changes" labelWidth={12}>
-              {action().changedFiles ? `${action().changedFiles} files` : "none"}
+              {view().changedFiles ? `${view().changedFiles} files` : "none"}
             </StatLine>
             <StatLine tokens={tokens()} label="state" labelWidth={12}>
-              {action().running ? "working" : action().active ? "open" : "idle"}
+              {view().running ? "working" : view().active ? "open" : "idle"}
             </StatLine>
           </box>
         </Show>
 
-        <Show when={action().kind === "project"}>
+        <Show when={view().kind === "project"}>
           <box flexDirection="column">
             <StatLine tokens={tokens()} label="sessions" labelWidth={12}>
-              {action().project?.sessionCount ?? 0}
+              {view().project?.sessionCount ?? 0}
             </StatLine>
             <StatLine tokens={tokens()} label="running" labelWidth={12}>
-              {action().project?.running ?? 0}
+              {view().project?.running ?? 0}
             </StatLine>
             <StatLine tokens={tokens()} label="changes" labelWidth={12}>
-              {action().changedFiles || "none"}
+              {view().changedFiles || "none"}
             </StatLine>
           </box>
         </Show>
 
-        <Show when={action().subtitle}>
+        <Show when={view().subtitle}>
           <box flexDirection="column">
             <SectionLabel tokens={tokens()}>Location</SectionLabel>
             <text fg={tokens().muted} wrapMode="wrap" selectable={false}>
-              {action().subtitle}
+              {view().subtitle}
             </text>
           </box>
         </Show>
 
-        <Show when={action().kind === "project"}>
+        <Show when={view().kind === "project"}>
           <text fg={tokens().accent} wrapMode="wrap" selectable={false}>
             {GLYPH.pointer} Prepares a new chat here; it is created after your first message
           </text>

@@ -51,6 +51,9 @@ const SDK_CONCURRENCY = 4
 const PRESENCE_RECENT_LIMIT = 12
 const PRESENCE_ROTATING_LIMIT = 8
 const SESSION_LIMIT = 400
+const SDK_REQUEST_TIMEOUT_MS = 6_000
+const SDK_REQUEST_TIMEOUT_MIN_MS = 100
+const SDK_REQUEST_TIMEOUT_MAX_MS = 30_000
 
 function readKv(api, key, fallback) {
   try {
@@ -101,6 +104,27 @@ function normalizeDirectories(value, limit = 200) {
   return out
 }
 
+function sdkRequestTimeoutMs() {
+  const configured = Number(process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS)
+  if (!Number.isFinite(configured)) return SDK_REQUEST_TIMEOUT_MS
+  return Math.max(SDK_REQUEST_TIMEOUT_MIN_MS, Math.min(SDK_REQUEST_TIMEOUT_MAX_MS, Math.floor(configured)))
+}
+
+async function withDeadline(operation, label, timeoutMs = sdkRequestTimeoutMs()) {
+  let timer
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+        timer?.unref?.()
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 async function mapSettledBounded(items, worker, concurrency = SDK_CONCURRENCY) {
   const rows = Array.from(items ?? [])
   const results = new Array(rows.length)
@@ -144,7 +168,9 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
     return Array.isArray(settled.value) ? settled.value : undefined
   }
 
-  const projectSettled = await Promise.allSettled([listProjects(client)])
+  const projectSettled = await Promise.allSettled([
+    withDeadline(() => listProjects(client), "Project listing"),
+  ])
   const serverProjects = unwrap(projectSettled[0], "projects")
   const projects = mergeProjects(serverProjects, registeredDirectories)
 
@@ -156,12 +182,17 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
     if (worktree) directories.add(worktree)
   }
 
-  const listFor = (directory) => listSessions(client, { directory, roots: true, limit: SESSION_LIMIT })
-
   const targets = [...directories]
+  const directoryLabel = (directory) => directory || "current directory"
   const [settled, statusSettled] = await Promise.all([
-    mapSettledBounded(targets, (directory) => listFor(directory)),
-    mapSettledBounded(targets, (directory) => listStatuses(client, directory)),
+    mapSettledBounded(targets, (directory) => withDeadline(
+      () => listSessions(client, { directory, roots: true, limit: SESSION_LIMIT }),
+      `Chat listing (${directoryLabel(directory)})`,
+    )),
+    mapSettledBounded(targets, (directory) => withDeadline(
+      () => listStatuses(client, directory),
+      `Chat status (${directoryLabel(directory)})`,
+    )),
   ])
 
   // Merge and de-duplicate: a session reachable from two directories is one
@@ -197,7 +228,10 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
       seen.add(session.id)
       if (candidates.length >= PRESENCE_RECENT_LIMIT) break
     }
-    const messageResults = await mapSettledBounded(candidates, (session) => listMessages(client, session, 1))
+    const messageResults = await mapSettledBounded(candidates, (session) => withDeadline(
+      () => listMessages(client, session, 1),
+      `Recent activity (${session.id})`,
+    ))
     messageResults.forEach((result, index) => {
       if (result.status !== "fulfilled") return
       const session = candidates[index]
@@ -228,7 +262,10 @@ async function loadPresence(api, projects, sessions, activeSessionID = null, rot
     if (worktree) directories.add(worktree)
   }
 
-  const statusResults = await mapSettledBounded([...directories], (directory) => listStatuses(client, directory))
+  const statusResults = await mapSettledBounded([...directories], (directory) => withDeadline(
+    () => listStatuses(client, directory),
+    `Presence status (${directory || "current directory"})`,
+  ))
   const live = {}
   for (const result of statusResults) {
     if (result.status === "fulfilled") Object.assign(live, result.value ?? {})
@@ -257,7 +294,10 @@ async function loadPresence(api, projects, sessions, activeSessionID = null, rot
   }
 
   const durable = {}
-  const messageResults = await mapSettledBounded(candidates, (session) => listMessages(client, session, 1))
+  const messageResults = await mapSettledBounded(candidates, (session) => withDeadline(
+    () => listMessages(client, session, 1),
+    `Presence activity (${session.id})`,
+  ))
   messageResults.forEach((result, index) => {
     if (result.status !== "fulfilled") return
     const session = candidates[index]
@@ -280,11 +320,14 @@ function errorText(error) {
 }
 
 export function createProjectStore(api) {
+  const initialRegisteredProjects = normalizeDirectories(readKv(api, REGISTERED_PROJECTS_KEY, []))
   const [store, setStore] = createStore({
-    projects: [],
+    // Registered folders are durable local state. Render them immediately while
+    // the authoritative SDK refresh runs, rather than showing an empty spinner.
+    projects: mergeProjects([], initialRegisteredProjects),
     sessions: [],
     statuses: {},
-    registeredProjects: normalizeDirectories(readKv(api, REGISTERED_PROJECTS_KEY, [])),
+    registeredProjects: initialRegisteredProjects,
     selectedProjectID: null,
     selectedProjectDirectory: "",
     pinnedProjects: normalizeIds(readKv(api, PINNED_PROJECTS_KEY, [])),
