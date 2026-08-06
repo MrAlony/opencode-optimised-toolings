@@ -2,7 +2,9 @@ import { promises as fs } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { homedir } from "node:os"
 import path from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
+import { fileURLToPath } from "node:url"
+import { PACKAGE_SPEC, isDevelopmentCheckout } from "../../shared/paths.js"
+import { developmentTuiSpec } from "../../bootstrap/index.js"
 
 const LOCK_WAIT_MS = 10_000
 const LOCK_STALE_MS = 30_000
@@ -11,16 +13,25 @@ export function openCodeConfigDirectory(env = process.env) {
   return env.OPENCODE_CONFIG_DIR || path.join(homedir(), ".config", "opencode")
 }
 
-export function tuiCompanionSpec(root) {
-  return pathToFileURL(path.join(root, "packages", "tui", "index.tsx")).href
+export function tuiCompanionSpec(root, options = {}) {
+  if (typeof options.spec === "string" && options.spec.trim()) return options.spec.trim()
+  return isDevelopmentCheckout(root) ? developmentTuiSpec(root) : PACKAGE_SPEC
 }
 
 function entrySpec(entry) {
   return Array.isArray(entry) ? entry[0] : entry
 }
 
+function packageIdentity(spec) {
+  const value = String(spec ?? "").trim()
+  const match = /^(?:npm:)?(opencode-optimised-toolings)(?:@.*)?$/i.exec(value)
+  return match ? `npm:${match[1].toLowerCase()}` : null
+}
+
 function specIdentity(spec) {
   if (typeof spec !== "string") return null
+  const packageID = packageIdentity(spec)
+  if (packageID) return packageID
   try {
     if (spec.startsWith("file:")) {
       const value = path.resolve(fileURLToPath(spec)).replaceAll("\\", "/")
@@ -123,7 +134,7 @@ export async function ensureTuiCompanion(root, options = {}) {
   const configPath = path.join(directory, "tui.json")
   const markerPath = path.join(directory, ".sparkly-toolings-tui.json")
   const lockPath = path.join(directory, ".sparkly-alonix-toolings-tui.lock")
-  const spec = tuiCompanionSpec(root)
+  const spec = tuiCompanionSpec(root, options)
   await fs.mkdir(directory, { recursive: true })
   await acquireLock(lockPath)
   try {
@@ -161,6 +172,9 @@ export async function ensureTuiCompanion(root, options = {}) {
         continue
       }
       if (previousIdentity && previousIdentity !== identity && entryIdentity === previousIdentity) continue
+      // Clean checkout-based companion entries even when an old marker was
+      // lost. This is narrowly scoped to this package's TUI entry.
+      if (identity?.startsWith("npm:") && typeof entrySpec(entry) === "string" && /opencode-optimised-toolings[\\/]packages[\\/]tui[\\/]index\.tsx/i.test(entrySpec(entry))) continue
       nextPlugins.push(entry)
     }
     if (!keptCompanion) nextPlugins.push(spec)

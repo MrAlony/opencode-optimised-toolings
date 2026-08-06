@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import { runtimeRootForPackage } from "../../shared/paths.js"
 
 export const STATUS_ORDER = [
   "idle",
@@ -40,7 +41,7 @@ export function defaultState() {
 }
 
 export function runtimeDir(root) {
-  return path.join(root, "runtime")
+  return runtimeRootForPackage(root)
 }
 
 export function stateFile(root) {

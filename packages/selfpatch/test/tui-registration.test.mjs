@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ensureTuiCompanion, tuiCompanionSpec } from "../lib/tui-registration.js"
+import { PACKAGE_SPEC } from "../../shared/paths.js"
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "alonix-toolings-tui-registration-"))
@@ -62,6 +63,25 @@ test("registration preserves unrelated TUI settings and tuple plugins", async ()
     assert.deepEqual(config.plugin[0], ["unrelated", { enabled: true }])
     assert.equal(config.plugin[1], tuiCompanionSpec(f.root))
   } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+test("installed package registration uses the npm identity and removes checkout URLs", async () => {
+  const f = fixture()
+  const previousMode = process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
+  try {
+    process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = "installed"
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(f.configDirectory, { recursive: true }))
+    const checkout = "file:///C:/dev/opencode-optimised-toolings/packages/tui/index.tsx"
+    writeFileSync(f.configPath, JSON.stringify({ plugin: [checkout, "unrelated"] }))
+    const result = await ensureTuiCompanion(f.root, { configDirectory: f.configDirectory })
+    const config = JSON.parse(readFileSync(f.configPath, "utf8"))
+    assert.equal(result.spec, PACKAGE_SPEC)
+    assert.deepEqual(config.plugin, ["unrelated", PACKAGE_SPEC])
+  } finally {
+    if (previousMode === undefined) delete process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
+    else process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = previousMode
     rmSync(f.root, { recursive: true, force: true })
   }
 })

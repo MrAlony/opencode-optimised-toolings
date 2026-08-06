@@ -94,6 +94,7 @@ export function settingsPaths(options = {}) {
     agentsPath: resolve(options.agentsPath ?? join(configDir, "AGENTS.md")),
     secretsPath: resolve(options.secretsPath ?? join(alonixDir, "secrets.json")),
     backupsDir: resolve(options.backupsDir ?? join(alonixDir, "backups")),
+    instructionDisablePath: resolve(options.instructionDisablePath ?? join(alonixDir, "instructions.disabled")),
     instructionSource: resolve(options.instructionSource ?? join(packageRoot, "config", "AGENTS.md")),
   }
 }
@@ -313,15 +314,19 @@ export function applyManagedSettings(input, options = {}) {
 
   const instructionText = readText(paths.instructionSource)
   if (input?.instructions?.enabled && !instructionText) throw new Error("The packaged Alonix instruction profile is missing")
-  const agentsText = managedAgentsText(readText(paths.agentsPath), instructionText, input?.instructions?.enabled === true)
+  const instructionsEnabled = input?.instructions?.enabled === true
+  const agentsText = managedAgentsText(readText(paths.agentsPath), instructionText, instructionsEnabled)
 
   const intended = [
     { path: paths.configPath, content: configText },
     { path: paths.dcpPath, content: dcpText },
     { path: paths.secretsPath, content: secretsText, mode: 0o600 },
-    input?.instructions?.enabled || existsFile(paths.agentsPath)
+    instructionsEnabled || existsFile(paths.agentsPath)
       ? { path: paths.agentsPath, content: agentsText }
       : { path: paths.agentsPath, delete: true },
+    instructionsEnabled
+      ? { path: paths.instructionDisablePath, delete: true }
+      : { path: paths.instructionDisablePath, content: "Alonix optimized instructions disabled by user.\n", mode: 0o600 },
     // Clean up the superseded owned file after migrating its content into the
     // user's marked AGENTS.md block.
     { path: paths.instructionPath, delete: true },

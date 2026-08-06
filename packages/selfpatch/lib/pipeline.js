@@ -4,7 +4,7 @@ import path from "node:path"
 import os from "node:os"
 import { createHash } from "node:crypto"
 import { pathToFileURL } from "node:url"
-import { patchedBinaryPath, readState, sha256File, writeState } from "./state.js"
+import { patchedBinaryPath, readState, runtimeDir, sha256File, writeState } from "./state.js"
 import { detectBinary } from "./detect.js"
 import { installPatchedBinary } from "./restart.js"
 import { bunCacheEntries, looksLikeBrokenInstall, packagesFromBuildLog, verifyPackages } from "./integrity.js"
@@ -25,15 +25,15 @@ export function patchProfilesDir(root) {
 }
 
 export function sourceDir(root, version) {
-  return path.join(root, "runtime", "src", `opencode-${version}`)
+  return path.join(runtimeDir(root), "src", `opencode-${version}`)
 }
 
 export function cacheTarball(root, version) {
-  return path.join(root, "runtime", "cache", `opencode-v${version}.tar.gz`)
+  return path.join(runtimeDir(root), "cache", `opencode-v${version}.tar.gz`)
 }
 
 export function lockFile(root) {
-  return path.join(root, "runtime", "pipeline.lock")
+  return path.join(runtimeDir(root), "pipeline.lock")
 }
 
 export function patchMarkerFile(sourceRoot) {

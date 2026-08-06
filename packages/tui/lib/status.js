@@ -2,6 +2,7 @@ import { promises as fsPromises } from "node:fs"
 import * as fsSync from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { runtimeRootForPackage } from "../../shared/paths.js"
 
 export const customTools = [
   "alonix-edit-many",
@@ -43,7 +44,7 @@ export function rootFromModule(importMetaUrl) {
 }
 
 export function statePathForRoot(root) {
-  return path.join(root, "runtime", "selfpatch-state.json")
+  return path.join(runtimeRootForPackage(root), "selfpatch-state.json")
 }
 
 const WAITING_STATE = { status: "idle", stepLabel: "Waiting for the self-patch controller", progressPercent: 0, lastError: null, logTail: "" }

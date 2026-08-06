@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const userSecretsPath = resolve(homedir(), ".config", "opencode", "alonix", "secrets.json");
 const legacySecretsPath = resolve(repositoryRoot, "config", "secrets.local.json");
-const secretsPath = resolve(process.env.OPENCODE_TOOLINGS_SECRETS || (existsSync(userSecretsPath) ? userSecretsPath : legacySecretsPath));
+const configuredSecretsPath = process.env.OPENCODE_TOOLINGS_SECRETS;
+const secretsPath = resolve(configuredSecretsPath || (existsSync(userSecretsPath) ? userSecretsPath : legacySecretsPath));
 
 export function loadSecrets() {
   try { return JSON.parse(readFileSync(secretsPath, "utf8")); }

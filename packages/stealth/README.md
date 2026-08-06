@@ -1,7 +1,7 @@
 # Native stealth tooling
 
-This package exposes native OpenCode tools (`alonix-stealth-fetch-many`, `alonix-stealth-search-many`, `alonix-stealth-rotate-tor`, `alonix-stealth-status`) through a supervised Python JSON-lines worker. It is not an MCP server.
+This package exposes `alonix-stealth-fetch-many`, `alonix-stealth-search-many`, `alonix-stealth-rotate-tor`, and `alonix-stealth-status` through an in-process Node.js runtime. It is not an MCP server and has no Python environment or manually started service.
 
-The worker owns only the dedicated Tor process it starts, authenticates the control protocol with Tor's generated cookie, uses dedicated loopback ports from `config/secrets.local.json`, waits for bootstrap, bounds page concurrency and content, and closes browser/Tor resources when OpenCode disposes the plugin.
+Tor uses dedicated loopback SOCKS/control ports, cookie authentication, bounded bootstrap, and owned-process cleanup. A configured trusted Tor executable or PATH installation is used when available; otherwise the matching official Tor expert bundle is downloaded lazily into the user-owned Alonix runtime and accepted only after its pinned SHA-256 matches.
 
-Run the repository setup command to create `.venv`, install requirements, and install Patchright Chromium. Configure a Tor executable in ignored local secrets or place `tor` on `PATH`.
+Patchright HTTP is used for lightweight requests. Chromium is launched only for JavaScript-rendered requests and is installed lazily through Patchright when absent. Status checks never provision heavyweight assets.
