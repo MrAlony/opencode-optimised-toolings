@@ -27,7 +27,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           cache: npm
 
       - name: Use a trusted-publishing capable npm CLI
@@ -42,11 +41,15 @@ jobs:
       - name: Install package dependencies
         run: npm ci --ignore-scripts
 
+      - name: Build generated runtime assets
+        run: npm run build
+
       - name: Verify the runtime-only tarball
         shell: bash
         run: |
           npm pack --dry-run
-          test "$(git status --porcelain)" = ""
+          test -f packages/cbm/dist/index.js
+          test "$(git status --porcelain --untracked-files=no)" = ""
 
       - name: Publish through npm trusted publishing
         run: npm publish --access public
