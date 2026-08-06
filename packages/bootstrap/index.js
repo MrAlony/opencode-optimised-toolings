@@ -10,11 +10,19 @@ export const AGENTS_BLOCK_START = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: STAR
 export const AGENTS_BLOCK_END = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: END -->"
 
 export const ALONIX_TOOLS = [
-  "alonix-read-many", "alonix-edit-many", "alonix-search", "alonix-explore", "alonix-shell",
-  "alonix-background-process", "alonix-web-search", "alonix-web-fetch-many", "alonix-stealth-fetch-many",
-  "alonix-stealth-search-many", "alonix-stealth-rotate-tor", "alonix-stealth-status", "alonix-toolings",
+  "alonix-read", "alonix-edit", "alonix-search", "alonix-explore", "alonix-shell",
+  "alonix-background-process", "alonix-web-search", "alonix-web-fetch", "alonix-stealth-fetch",
+  "alonix-stealth-search", "alonix-stealth-rotate-tor", "alonix-stealth-status", "alonix-toolings",
   "alonix-index-project", "alonix-index-context", "alonix-index-investigate", "alonix-index-memory",
 ]
+
+export const LEGACY_TOOL_IDS = {
+  "alonix-read-many": "alonix-read",
+  "alonix-edit-many": "alonix-edit",
+  "alonix-web-fetch-many": "alonix-web-fetch",
+  "alonix-stealth-fetch-many": "alonix-stealth-fetch",
+  "alonix-stealth-search-many": "alonix-stealth-search",
+}
 
 function pluginSpec(entry) {
   return String(Array.isArray(entry) ? entry[0] : entry ?? "")
@@ -45,6 +53,10 @@ export function applyRuntimeDefaults(config, packageRoot) {
     : config.permission && typeof config.permission === "object" && !Array.isArray(config.permission)
       ? config.permission
       : {}
+  for (const [legacy, current] of Object.entries(LEGACY_TOOL_IDS)) {
+    if (permission[current] === undefined && permission[legacy] !== undefined) permission[current] = permission[legacy]
+    delete permission[legacy]
+  }
   for (const tool of ALONIX_TOOLS) {
     if (permission[tool] === undefined) permission[tool] = tool === "alonix-background-process" ? "deny" : "allow"
   }
@@ -114,10 +126,20 @@ export function migrateInstalledConfig(packageRoot, options = {}) {
   const skills = config.skills && typeof config.skills === "object" && !Array.isArray(config.skills) ? config.skills : {}
   const paths = Array.isArray(skills.paths) ? skills.paths.filter((entry) => !isLegacyCbmSkillPath(entry)) : []
   const instructions = Array.isArray(config.instructions) ? config.instructions.filter((entry) => !isLegacyInstructionPath(entry)) : []
+  const permission = typeof config.permission === "string"
+    ? { "*": config.permission }
+    : config.permission && typeof config.permission === "object" && !Array.isArray(config.permission)
+      ? { ...config.permission }
+      : {}
+  for (const [legacy, current] of Object.entries(LEGACY_TOOL_IDS)) {
+    if (permission[current] === undefined && permission[legacy] !== undefined) permission[current] = permission[legacy]
+    delete permission[legacy]
+  }
 
   let after = setJsonc(before, ["plugin"], nextPlugins)
   if (config.skills !== undefined || paths.length) after = setJsonc(after, ["skills", "paths"], paths)
   if (config.instructions !== undefined || instructions.length) after = setJsonc(after, ["instructions"], instructions)
+  if (config.permission !== undefined || Object.keys(permission).length) after = setJsonc(after, ["permission"], permission)
   parseDocument(after, basename(configPath))
 
   const alonixDir = join(configDir, "alonix")

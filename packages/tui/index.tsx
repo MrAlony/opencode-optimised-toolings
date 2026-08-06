@@ -14,8 +14,8 @@ import {
 } from "./lib/status.js"
 import { createTokens } from "./lib/design.js"
 import { BackgroundView } from "./components/background.jsx"
-import { EditManyView } from "./components/edit-many.jsx"
-import { ReadManyView } from "./components/read-many.jsx"
+import { EditView } from "./components/edit.jsx"
+import { ReadView } from "./components/read.jsx"
 import { ReportView } from "./components/report.jsx"
 import { ShellView } from "./components/shell.jsx"
 import { DiscoveryView } from "./components/discovery.jsx"
@@ -59,12 +59,12 @@ type RenderProps = {
 type RendererView = (props: RenderProps & { skin: Tokens }) => JSX.Element
 
 function rendererFor(tool: string): RendererView {
-  if (tool === "alonix-read-many") return ReadManyView
-  if (tool === "alonix-edit-many") return EditManyView
+  if (tool === "alonix-read") return ReadView
+  if (tool === "alonix-edit") return EditView
   if (tool === "alonix-shell") return ShellView
   if (tool === "alonix-background-process") return BackgroundView
   if (tool === "alonix-search" || tool === "alonix-explore") return DiscoveryView
-  if (tool === "alonix-web-search" || tool === "alonix-web-fetch-many") return WebView
+  if (tool === "alonix-web-search" || tool === "alonix-web-fetch") return WebView
   if (tool.startsWith("alonix-stealth-")) return StealthView
   if (tool.startsWith("alonix-index-")) return CbmView
   return ReportView

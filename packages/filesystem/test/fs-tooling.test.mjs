@@ -41,7 +41,7 @@ async function getTools(directory, options = {}) {
 test("tool surface exposes the merged edit tool", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    assert.deepEqual(Object.keys(tools).sort(), ["alonix-edit-many", "alonix-explore", "alonix-read-many", "alonix-search"]);
+    assert.deepEqual(Object.keys(tools).sort(), ["alonix-edit", "alonix-explore", "alonix-read", "alonix-search"]);
     assert.equal(tools.fs_write_many, undefined);
     assert.equal(tools.fs_patch_many, undefined);
   });
@@ -51,14 +51,14 @@ test("filesystem usage advisories preserve established read, repeated-tool, and 
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
     const readSession = context(directory, "usage-read-session");
-    const read1 = await tools["alonix-read-many"].execute({ paths: ["one.txt"], base_dir: directory }, readSession);
-    const read2 = await tools["alonix-read-many"].execute({ paths: ["two.txt"], base_dir: directory }, readSession);
-    const read3 = await tools["alonix-read-many"].execute({ paths: ["README.md"], base_dir: directory }, readSession);
+    const read1 = await tools["alonix-read"].execute({ paths: ["one.txt"], base_dir: directory }, readSession);
+    const read2 = await tools["alonix-read"].execute({ paths: ["two.txt"], base_dir: directory }, readSession);
+    const read3 = await tools["alonix-read"].execute({ paths: ["README.md"], base_dir: directory }, readSession);
     assert.match(read1, /\[READ BATCH SIGNAL\] Only one unique file was requested\. Related source, tests, configuration, and callers can often fit in the same read\./);
     assert.match(read2, /\[READ BATCH SIGNAL\] This is another one-file read in the session; a broader related-file batch may provide more complete edit context\./);
-    assert.match(read2, /\[NOTICE REPEATED-TOOL ADVICE\] Consecutive alonix-read-many call #2\. If more paths are already known, combine them now instead of continuing serial reads\./);
+    assert.match(read2, /\[NOTICE REPEATED-TOOL ADVICE\] Consecutive alonix-read call #2\. If more paths are already known, combine them now instead of continuing serial reads\./);
     assert.match(read3, /\[READ BATCH SIGNAL\] This is one-file read #3 in the session; repeated narrow reads may indicate that related context is being discovered serially\./);
-    assert.match(read3, /\[STRONG REPEATED-TOOL ADVICE\] Consecutive alonix-read-many call #3\. If more paths are already known, combine them now instead of continuing serial reads\./);
+    assert.match(read3, /\[STRONG REPEATED-TOOL ADVICE\] Consecutive alonix-read call #3\. If more paths are already known, combine them now instead of continuing serial reads\./);
     assert.match(read3, /Each tool invocation has per-call monetary cost\./);
     assert.match(read3, /Maximize completed work by putting all already-known independent work into the fewest safe calls/);
     assert.match(read3, /never reduce task scope, implementation quality, or verification to save a call/);
@@ -78,20 +78,20 @@ test("repeated-tool advisories retain exact tool-specific guidance and NOTICE-to
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
     const editSession = context(directory, "usage-edit-session");
-    await tools["alonix-edit-many"].execute({ actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "one", replace: "ONE" }] }], base_dir: directory }, editSession);
-    const edit2 = await tools["alonix-edit-many"].execute({ actions: [{ path: "two.txt", operation: "patch", replacements: [{ search: "two", replace: "TWO" }] }], base_dir: directory }, editSession);
-    const edit3 = await tools["alonix-edit-many"].execute({ actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "ONE", replace: "one" }] }], base_dir: directory }, editSession);
-    assert.match(edit2, /\[NOTICE REPEATED-TOOL ADVICE\] Consecutive alonix-edit-many call #2\. Combine independent files and repeated same-file actions into one ordered edit call when they are already known\./);
-    assert.match(edit3, /\[STRONG REPEATED-TOOL ADVICE\] Consecutive alonix-edit-many call #3\./);
+    await tools["alonix-edit"].execute({ actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "one", replace: "ONE" }] }], base_dir: directory }, editSession);
+    const edit2 = await tools["alonix-edit"].execute({ actions: [{ path: "two.txt", operation: "patch", replacements: [{ search: "two", replace: "TWO" }] }], base_dir: directory }, editSession);
+    const edit3 = await tools["alonix-edit"].execute({ actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "ONE", replace: "one" }] }], base_dir: directory }, editSession);
+    assert.match(edit2, /\[NOTICE REPEATED-TOOL ADVICE\] Consecutive alonix-edit call #2\. Combine independent files and repeated same-file actions into one ordered edit call when they are already known\./);
+    assert.match(edit3, /\[STRONG REPEATED-TOOL ADVICE\] Consecutive alonix-edit call #3\./);
     assert.match(edit3, /Each tool invocation has per-call monetary cost/);
     assert.match(edit3, /never reduce task scope, implementation quality, or verification/);
   });
 });
 
-test("alonix-edit-many action schema accepts valid chains and rejects malformed operation fields", async () => {
+test("alonix-edit action schema accepts valid chains and rejects malformed operation fields", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const schema = tools["alonix-edit-many"].args.actions;
+    const schema = tools["alonix-edit"].args.actions;
     assert.equal(schema.safeParse([
       { path: "new.txt", operation: "create", content: "alpha" },
       { path: "new.txt", operation: "patch", replacements: [{ search: "alpha", replace: "ALPHA", expected_count: 1 }] },
@@ -102,10 +102,10 @@ test("alonix-edit-many action schema accepts valid chains and rejects malformed 
   });
 });
 
-test("alonix-edit-many creates then patches the same new file in one atomic chain", async () => {
+test("alonix-edit creates then patches the same new file in one atomic chain", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [
         { path: "new.txt", operation: "create", content: "alpha\nshared\n" },
@@ -122,10 +122,10 @@ test("alonix-edit-many creates then patches the same new file in one atomic chai
   });
 });
 
-test("alonix-edit-many supports overwrite then patch on an existing file", async () => {
+test("alonix-edit supports overwrite then patch on an existing file", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [
         { path: "one.txt", operation: "overwrite", content: "fresh\nblock\n" },
@@ -138,10 +138,10 @@ test("alonix-edit-many supports overwrite then patch on an existing file", async
   });
 });
 
-test("alonix-edit-many rolls back a failed same-file transaction and applies independent files", async () => {
+test("alonix-edit rolls back a failed same-file transaction and applies independent files", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [
         { path: "one.txt", operation: "patch", replacements: [{ search: "one", replace: "ONE", expected_count: 1 }] },
@@ -162,10 +162,10 @@ test("alonix-edit-many rolls back a failed same-file transaction and applies ind
   });
 });
 
-test("alonix-edit-many rejects create-on-existing and overwrite-on-missing without wasting independent work", async () => {
+test("alonix-edit rejects create-on-existing and overwrite-on-missing without wasting independent work", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [
         { path: "one.txt", operation: "create", content: "wrong" },
@@ -180,10 +180,10 @@ test("alonix-edit-many rejects create-on-existing and overwrite-on-missing witho
   });
 });
 
-test("alonix-edit-many uses optional fingerprints as information-backed concurrency assertions", async () => {
+test("alonix-edit uses optional fingerprints as information-backed concurrency assertions", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [{
         path: "one.txt",
@@ -197,7 +197,7 @@ test("alonix-edit-many uses optional fingerprints as information-backed concurre
   });
 });
 
-test("alonix-edit-many rejects a conflicting exact patch rebase and preserves concurrent content", async () => {
+test("alonix-edit rejects a conflicting exact patch rebase and preserves concurrent content", async () => {
   await withFixture(async (directory) => {
     const target = join(directory, "one.txt");
     const tools = await getTools(directory, {
@@ -205,7 +205,7 @@ test("alonix-edit-many rejects a conflicting exact patch rebase and preserves co
         if (group.targetPath === target) writeFileSync(target, "concurrent user edit\n", "utf8");
       },
     });
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [
         { path: "one.txt", operation: "patch", replacements: [{ search: "one", replace: "ONE", expected_count: 1 }] },
@@ -220,7 +220,7 @@ test("alonix-edit-many rejects a conflicting exact patch rebase and preserves co
   });
 });
 
-test("alonix-edit-many safely rebases a patch-only transaction over an unrelated concurrent edit", async () => {
+test("alonix-edit safely rebases a patch-only transaction over an unrelated concurrent edit", async () => {
   await withFixture(async (directory) => {
     const target = join(directory, "one.txt");
     const tools = await getTools(directory, {
@@ -228,7 +228,7 @@ test("alonix-edit-many safely rebases a patch-only transaction over an unrelated
         if (group.targetPath === target) writeFileSync(target, "concurrent heading\none\nshared\n", "utf8");
       },
     });
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "one", replace: "ONE", expected_count: 1 }] }],
     }, context(directory));
@@ -238,7 +238,7 @@ test("alonix-edit-many safely rebases a patch-only transaction over an unrelated
   });
 });
 
-test("alonix-edit-many rejects a raced create with different content and preserves the appeared file", async () => {
+test("alonix-edit rejects a raced create with different content and preserves the appeared file", async () => {
   await withFixture(async (directory) => {
     const target = join(directory, "new.txt");
     const tools = await getTools(directory, {
@@ -246,7 +246,7 @@ test("alonix-edit-many rejects a raced create with different content and preserv
         if (group.targetPath === target) writeFileSync(target, "other creator\n", "utf8");
       },
     });
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [{ path: "new.txt", operation: "create", content: "ours\n" }],
     }, context(directory));
@@ -255,7 +255,7 @@ test("alonix-edit-many rejects a raced create with different content and preserv
   });
 });
 
-test("alonix-edit-many classifies an identical raced create as unchanged", async () => {
+test("alonix-edit classifies an identical raced create as unchanged", async () => {
   await withFixture(async (directory) => {
     const target = join(directory, "new.txt");
     const tools = await getTools(directory, {
@@ -263,7 +263,7 @@ test("alonix-edit-many classifies an identical raced create as unchanged", async
         if (group.targetPath === target) writeFileSync(target, "ours\n", "utf8");
       },
     });
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [{ path: "new.txt", operation: "create", content: "ours\n" }],
     }, context(directory));
@@ -274,11 +274,11 @@ test("alonix-edit-many classifies an identical raced create as unchanged", async
   });
 });
 
-test("alonix-edit-many recognizes exact no-op assertions and explicit already-applied replacements", async () => {
+test("alonix-edit recognizes exact no-op assertions and explicit already-applied replacements", async () => {
   await withFixture(async (directory) => {
     await writeFile(join(directory, "one.txt"), "status=new\n", "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [{ path: "one.txt", operation: "patch", replacements: [
         { search: "status=new", replace: "status=new", expected_count: 1 },
@@ -292,7 +292,7 @@ test("alonix-edit-many recognizes exact no-op assertions and explicit already-ap
   });
 });
 
-test("alonix-edit-many retries a transient atomic write failure with bounded recovery", async () => {
+test("alonix-edit retries a transient atomic write failure with bounded recovery", async () => {
   await withFixture(async (directory) => {
     let attempts = 0;
     const tools = await getTools(directory, {
@@ -302,7 +302,7 @@ test("alonix-edit-many retries a transient atomic write failure with bounded rec
         atomicReplaceText(path, content, mode);
       },
     });
-    const output = await tools["alonix-edit-many"].execute({
+    const output = await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "one", replace: "ONE", expected_count: 1 }] }],
     }, context(directory));
@@ -312,12 +312,12 @@ test("alonix-edit-many retries a transient atomic write failure with bounded rec
   });
 });
 
-test("alonix-edit-many preserves permissions when replacing an existing file", async () => {
+test("alonix-edit preserves permissions when replacing an existing file", async () => {
   await withFixture(async (directory) => {
     const target = join(directory, "one.txt");
     const before = (await stat(target)).mode & 0o777;
     const tools = await getTools(directory);
-    await tools["alonix-edit-many"].execute({
+    await tools["alonix-edit"].execute({
       base_dir: directory,
       actions: [{ path: "one.txt", operation: "patch", replacements: [{ search: "one", replace: "ONE", expected_count: 1 }] }],
     }, context(directory));
@@ -325,10 +325,10 @@ test("alonix-edit-many preserves permissions when replacing an existing file", a
   });
 });
 
-test("alonix-read-many consolidates duplicate complete reads and lets complete reads supersede ranges", async () => {
+test("alonix-read consolidates duplicate complete reads and lets complete reads supersede ranges", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({
+    const output = await tools["alonix-read"].execute({
       base_dir: directory,
       paths: ["one.txt", ".\\one.txt"],
       requests: [{ path: "one.txt", ranges: [{ start_line: 1, end_line: 1 }] }],
@@ -340,11 +340,11 @@ test("alonix-read-many consolidates duplicate complete reads and lets complete r
   });
 });
 
-test("alonix-read-many accepts distinct partial ranges and consolidates identical normalized ranges", async () => {
+test("alonix-read accepts distinct partial ranges and consolidates identical normalized ranges", async () => {
   await withFixture(async (directory) => {
     await writeFile(join(directory, "ranges.txt"), Array.from({ length: 20 }, (_, index) => `line-${index + 1}`).join("\n"), "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({
+    const output = await tools["alonix-read"].execute({
       base_dir: directory,
       requests: [
         { path: "ranges.txt", ranges: [{ start_line: 3, end_line: 5 }, { start_line: 5, end_line: 3 }] },
@@ -357,11 +357,11 @@ test("alonix-read-many accepts distinct partial ranges and consolidates identica
   });
 });
 
-test("alonix-read-many normalizes reversed ranges and shifts overflowing windows to the nearest edge", async () => {
+test("alonix-read normalizes reversed ranges and shifts overflowing windows to the nearest edge", async () => {
   await withFixture(async (directory) => {
     await writeFile(join(directory, "ranges.txt"), Array.from({ length: 30 }, (_, index) => `line-${index + 1}`).join("\n"), "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({
+    const output = await tools["alonix-read"].execute({
       base_dir: directory,
       requests: [{ path: "ranges.txt", ranges: [
         { start_line: 10, end_line: 1 },
@@ -375,10 +375,10 @@ test("alonix-read-many normalizes reversed ranges and shifts overflowing windows
   });
 });
 
-test("alonix-read-many returns partial success summary for mixed readable and unavailable files", async () => {
+test("alonix-read returns partial success summary for mixed readable and unavailable files", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({ paths: ["one.txt", "missing.txt"], base_dir: directory }, context(directory));
+    const output = await tools["alonix-read"].execute({ paths: ["one.txt", "missing.txt"], base_dir: directory }, context(directory));
     assert.match(output, /READ RESULT: PARTIAL SUCCESS/);
     assert.match(output, /UNAVAILABLE TARGETS \(1\):/);
     assert.match(output, /missing\.txt/);
@@ -445,14 +445,14 @@ test("adaptive waterfill distributes every demanded budget byte without exceedin
   assert.equal(mixed.get("large"), 8);
 });
 
-test("alonix-read-many adaptively returns a single file larger than the former per-file cap without truncation", async () => {
+test("alonix-read adaptively returns a single file larger than the former per-file cap without truncation", async () => {
   await withFixture(async (directory) => {
     const content = Array.from({ length: 3000 }, (_, index) => `adaptive-${index + 1}-${"x".repeat(10)}`).join("\n");
     assert.ok(Buffer.byteLength(content) > 48 * 1024);
     assert.ok(Buffer.byteLength(content) < 150 * 1024);
     await writeFile(join(directory, "adaptive.txt"), content, "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({ paths: ["adaptive.txt"], base_dir: directory }, context(directory));
+    const output = await tools["alonix-read"].execute({ paths: ["adaptive.txt"], base_dir: directory }, context(directory));
     assert.match(output, /READ RESULT: SUCCESS/);
     assert.match(output, /adaptive-3000/);
     assert.match(output, /BOUNDED OR OMITTED EVIDENCE \(0\)/);
@@ -460,14 +460,14 @@ test("alonix-read-many adaptively returns a single file larger than the former p
   });
 });
 
-test("alonix-read-many satisfies small files first and redistributes the remaining shared budget to larger files", async () => {
+test("alonix-read satisfies small files first and redistributes the remaining shared budget to larger files", async () => {
   await withFixture(async (directory) => {
     const small = Array.from({ length: 100 }, (_, index) => `small-${index + 1}`).join("\n");
     const large = Array.from({ length: 5000 }, (_, index) => `redistributed-${index + 1}-${"r".repeat(8)}`).join("\n");
     await writeFile(join(directory, "small-budget.txt"), small, "utf8");
     await writeFile(join(directory, "large-budget.txt"), large, "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({ paths: ["small-budget.txt", "large-budget.txt"], base_dir: directory }, context(directory));
+    const output = await tools["alonix-read"].execute({ paths: ["small-budget.txt", "large-budget.txt"], base_dir: directory }, context(directory));
     assert.match(output, /READ RESULT: SUCCESS/);
     assert.match(output, /100: small-100/);
     assert.match(output, /5000: redistributed-5000/);
@@ -476,12 +476,12 @@ test("alonix-read-many satisfies small files first and redistributes the remaini
   });
 });
 
-test("alonix-read-many returns separated head and tail evidence with exact omitted bounds", async () => {
+test("alonix-read returns separated head and tail evidence with exact omitted bounds", async () => {
   await withFixture(async (directory) => {
     const content = Array.from({ length: 12000 }, (_, index) => `large-${index + 1}-${"y".repeat(20)}`).join("\n");
     await writeFile(join(directory, "large.txt"), content, "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({ paths: ["large.txt"], base_dir: directory }, context(directory));
+    const output = await tools["alonix-read"].execute({ paths: ["large.txt"], base_dir: directory }, context(directory));
     assert.match(output, /READ RESULT: PARTIAL SUCCESS/);
     assert.match(output, /1: large-1/);
     assert.match(output, /12000: large-12000/);
@@ -493,12 +493,12 @@ test("alonix-read-many returns separated head and tail evidence with exact omitt
   });
 });
 
-test("alonix-read-many retains explicit ranges not covered by truncated complete evidence", async () => {
+test("alonix-read retains explicit ranges not covered by truncated complete evidence", async () => {
   await withFixture(async (directory) => {
     const content = Array.from({ length: 12000 }, (_, index) => `retain-${index + 1}-${"z".repeat(20)}`).join("\n");
     await writeFile(join(directory, "large.txt"), content, "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({
+    const output = await tools["alonix-read"].execute({
       paths: ["large.txt"],
       requests: [{ path: "large.txt", ranges: [{ start_line: 6000, end_line: 6010 }] }],
       base_dir: directory,
@@ -509,7 +509,7 @@ test("alonix-read-many retains explicit ranges not covered by truncated complete
   });
 });
 
-test("alonix-read-many decodes UTF-8 BOM and UTF-16 LE and BE text", async () => {
+test("alonix-read decodes UTF-8 BOM and UTF-16 LE and BE text", async () => {
   await withFixture(async (directory) => {
     await writeFile(join(directory, "utf8bom.txt"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("hello utf8\n")]));
     await writeFile(join(directory, "utf16le.txt"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("hello le\n", "utf16le")]));
@@ -518,7 +518,7 @@ test("alonix-read-many decodes UTF-8 BOM and UTF-16 LE and BE text", async () =>
     for (let index = 0; index < beSource.length; index += 2) { beBody[index] = beSource[index + 1]; beBody[index + 1] = beSource[index]; }
     await writeFile(join(directory, "utf16be.txt"), Buffer.concat([Buffer.from([0xfe, 0xff]), beBody]));
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({ paths: ["utf8bom.txt", "utf16le.txt", "utf16be.txt"], base_dir: directory }, context(directory));
+    const output = await tools["alonix-read"].execute({ paths: ["utf8bom.txt", "utf16le.txt", "utf16be.txt"], base_dir: directory }, context(directory));
     assert.match(output, /hello utf8/);
     assert.match(output, /encoding=utf-8-bom/);
     assert.match(output, /hello le/);
@@ -529,12 +529,12 @@ test("alonix-read-many decodes UTF-8 BOM and UTF-16 LE and BE text", async () =>
   });
 });
 
-test("alonix-read-many reports bounded missing-path candidates without substituting content", async () => {
+test("alonix-read reports bounded missing-path candidates without substituting content", async () => {
   await withFixture(async (directory) => {
     await mkdir(join(directory, "config"));
     await writeFile(join(directory, "config", "user-config.ts"), "export const config = true;\n", "utf8");
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({ paths: ["user-config.ts"], base_dir: directory }, context(directory));
+    const output = await tools["alonix-read"].execute({ paths: ["user-config.ts"], base_dir: directory }, context(directory));
     assert.match(output, /READ RESULT: FAILED/);
     assert.match(output, /POSSIBLE PATHS FOR MISSING TARGETS \(1\)/);
     assert.match(output, /config\/user-config\.ts \(same basename\)/);
@@ -542,11 +542,11 @@ test("alonix-read-many reports bounded missing-path candidates without substitut
   });
 });
 
-test("alonix-read-many returns fingerprints and detects binary content", async () => {
+test("alonix-read returns fingerprints and detects binary content", async () => {
   await withFixture(async (directory) => {
     await writeFile(join(directory, "binary.bin"), Buffer.from([0, 1, 2, 3, 255, 0]));
     const tools = await getTools(directory);
-    const output = await tools["alonix-read-many"].execute({ paths: ["one.txt", "binary.bin"], base_dir: directory }, context(directory));
+    const output = await tools["alonix-read"].execute({ paths: ["one.txt", "binary.bin"], base_dir: directory }, context(directory));
     assert.match(output, /sha256 [a-f0-9]{64}/);
     assert.match(output, /BINARY FILE/);
     assert.match(output, /READ RESULT: PARTIAL SUCCESS/);

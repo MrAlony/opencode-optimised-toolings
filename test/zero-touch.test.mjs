@@ -17,11 +17,11 @@ test("root aggregator preserves config hooks and registers every tool family", a
     assert.equal(typeof hooks.config, "function")
     const config = {}
     await hooks.config(config)
-    assert.equal(config.permission["alonix-read-many"], "allow")
+    assert.equal(config.permission["alonix-read"], "allow")
     assert.equal(config.permission["alonix-background-process"], "deny")
     assert.equal(config.instructions, undefined)
     assert.ok(config.skills.paths.some((value) => /packages[\\/]cbm$/.test(value)))
-    for (const tool of ["alonix-read-many", "alonix-shell", "alonix-index-context", "alonix-web-search", "alonix-stealth-status", "alonix-toolings"]) {
+    for (const tool of ["alonix-read", "alonix-shell", "alonix-index-context", "alonix-web-search", "alonix-stealth-status", "alonix-toolings"]) {
       assert.ok(hooks.tool[tool], `missing ${tool}`)
     }
     await hooks.dispose?.()
@@ -98,9 +98,26 @@ test("installed mutable runtime never lives under node_modules", () => {
 })
 
 test("runtime defaults never overwrite explicit user permission choices", () => {
-  const config = { permission: { "alonix-read-many": "deny" }, instructions: ["personal.md"], skills: { paths: ["personal-skill"] } }
+  const config = { permission: { "alonix-read": "deny" }, instructions: ["personal.md"], skills: { paths: ["personal-skill"] } }
   applyRuntimeDefaults(config, "C:/installed/package")
-  assert.equal(config.permission["alonix-read-many"], "deny")
+  assert.equal(config.permission["alonix-read"], "deny")
   assert.ok(config.instructions.includes("personal.md"))
   assert.ok(config.skills.paths.includes("personal-skill"))
+})
+
+test("legacy many permission IDs migrate once without changing their policy", () => {
+  const config = { permission: {
+    "alonix-read-many": "deny",
+    "alonix-edit-many": "ask",
+    "alonix-web-fetch-many": "allow",
+    "alonix-stealth-fetch-many": "deny",
+    "alonix-stealth-search-many": "ask",
+  } }
+  applyRuntimeDefaults(config, "C:/installed/package")
+  assert.equal(config.permission["alonix-read"], "deny")
+  assert.equal(config.permission["alonix-edit"], "ask")
+  assert.equal(config.permission["alonix-web-fetch"], "allow")
+  assert.equal(config.permission["alonix-stealth-fetch"], "deny")
+  assert.equal(config.permission["alonix-stealth-search"], "ask")
+  for (const legacy of ["alonix-read-many", "alonix-edit-many", "alonix-web-fetch-many", "alonix-stealth-fetch-many", "alonix-stealth-search-many"]) assert.equal(config.permission[legacy], undefined)
 })

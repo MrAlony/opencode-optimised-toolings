@@ -109,7 +109,7 @@ test("shell flags filesystem read and search substitutions even in a batch", asy
     mode: "parallel",
   }, { ...context, sessionID: "filesystem-substitution-test" });
   assert.match(output, /DEDICATED FILESYSTEM TOOL ADVISORY/);
-  assert.match(output, /alonix-read-many/);
+  assert.match(output, /alonix-read/);
   assert.match(output, /alonix-search/);
 });
 
@@ -177,7 +177,7 @@ test("another tool invocation resets the background polling advisory streak", as
   const resetContext = { ...context, sessionID: "cross-tool-reset-test" };
   const poll = { operations: [{ action: "status", id: "missing" }] };
   await plugin.tool["alonix-background-process"].execute(poll, resetContext);
-  await plugin["tool.execute.before"]({ tool: "alonix-read-many", sessionID: resetContext.sessionID });
+  await plugin["tool.execute.before"]({ tool: "alonix-read", sessionID: resetContext.sessionID });
   const nextPoll = await plugin.tool["alonix-background-process"].execute(poll, resetContext);
   assert.doesNotMatch(nextPoll, /POLLING ADVICE|CRITICAL POLLING ADVICE/);
 });

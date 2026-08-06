@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url"
 import { runtimeRootForPackage } from "../../shared/paths.js"
 
 export const customTools = [
-  "alonix-edit-many",
-  "alonix-read-many",
+  "alonix-edit",
+  "alonix-read",
   "alonix-search",
   "alonix-explore",
   "alonix-shell",
@@ -16,9 +16,9 @@ export const customTools = [
   "alonix-index-investigate",
   "alonix-index-memory",
   "alonix-web-search",
-  "alonix-web-fetch-many",
-  "alonix-stealth-fetch-many",
-  "alonix-stealth-search-many",
+  "alonix-web-fetch",
+  "alonix-stealth-fetch",
+  "alonix-stealth-search",
   "alonix-stealth-rotate-tor",
   "alonix-stealth-status",
 ]

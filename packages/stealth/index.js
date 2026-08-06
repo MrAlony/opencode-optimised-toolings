@@ -7,12 +7,12 @@ const requestSchema = tool.schema.object({ url: tool.schema.string().min(1), wai
 
 export const StealthToolingPlugin = async () => ({
   tool: {
-    "alonix-stealth-fetch-many": tool({
+    "alonix-stealth-fetch": tool({
       description: "Fetch 1-8 pages through a managed Tor circuit using Patchright Chromium for JavaScript rendering or a lighter Tor HTTP client. Uses dedicated authenticated Tor ports, bounded concurrency/timeouts/output, private-network blocking by default, browser self-healing, and exact per-item diagnostics.",
       args: { requests: tool.schema.array(requestSchema).min(1).max(8), max_concurrency: tool.schema.number().optional(), output_budget_bytes: tool.schema.number().optional() },
       async execute(args) { try { return formatStealth("fetch", await client.request("fetch_many", { requests: args.requests, max_concurrency: args.max_concurrency }, 180_000), args.output_budget_bytes); } catch (error) { return `STEALTH FETCH RESULT: FAILED\nWHAT HAPPENED: ${error.message}`; } },
     }),
-    "alonix-stealth-search-many": tool({
+    "alonix-stealth-search": tool({
       description: "Search 1-8 independent DuckDuckGo queries through Tor in one call. Uses bounded HTML, Lite, and onion fallbacks, filters ads, and returns Tor readiness evidence. Use when normal search is blocked, privacy-sensitive, or needs independent Tor egress.",
       args: { queries: tool.schema.array(tool.schema.object({ query: tool.schema.string().min(1), max_results: tool.schema.number().optional() })).min(1).max(8), max_concurrency: tool.schema.number().optional(), output_budget_bytes: tool.schema.number().optional() },
       async execute(args) { try { return formatStealth("search", await client.request("search_many", { queries: args.queries, max_concurrency: args.max_concurrency }, 180_000), args.output_budget_bytes); } catch (error) { return `STEALTH SEARCH RESULT: FAILED\nWHAT HAPPENED: ${error.message}`; } },

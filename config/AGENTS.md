@@ -71,9 +71,9 @@ Use this default hierarchy unless the task gives a concrete reason not to:
 
 1. **Indexed repository:** `alonix-index-context` for the fixed architecture/schema/change baseline, then `alonix-index-investigate` for a full feature, bug, behavior, or symbol investigation.
 2. **Unindexed repository exploration:** use one `alonix-explore` call to obtain project metadata, a bounded structure tree, important instructions/manifests, entry-point candidates, and optional search results together.
-3. **Multiple known filesystem targets:** `alonix-read-many`, `alonix-search`, or `alonix-edit-many`.
+3. **Multiple known filesystem targets:** `alonix-read`, `alonix-search`, or `alonix-edit`.
 4. **Independent calls:** issue them together through the available parallel/multi-tool mechanism.
-5. **Single precise target or uncovered gap:** use `alonix-read-many` with one path when exactly one file is genuinely needed; otherwise use `alonix-search` for a precise filename/content query.
+5. **Single precise target or uncovered gap:** use `alonix-read` with one path when exactly one file is genuinely needed; otherwise use `alonix-search` for a precise filename/content query.
 
 ### Prohibited wasteful patterns
 
@@ -93,13 +93,13 @@ The filesystem tools track usage per session and may append escalating advisorie
 - `alonix-explore` and `alonix-search` share one filesystem-discovery counter. Any mixture counts: explore→search, search→explore, repeated search, or repeated explore.
 - On the **second** filesystem-discovery call, stop before making another broad discovery call and run `alonix-index-project(action="list")`. If the repository is indexed, switch to `alonix-index-context` or one complete `alonix-index-investigate` call.
 - On the **third or later** filesystem-discovery call, broad filesystem exploration must stop unless the repository is demonstrably unindexed/unindexable or a precise remaining gap cannot be represented by CBM. Do not ignore a `[CRITICAL CBM ESCALATION]` notice.
-- One-path `alonix-read-many` calls emit a `[READ BATCH SIGNAL]` with session-aware wording. Treat repeated signals as evidence of serial discovery: gather every already-known related source file, test, config, caller, and dependency into the next batch unless the next path genuinely depends on the current file's contents.
+- One-path `alonix-read` calls emit a `[READ BATCH SIGNAL]` with session-aware wording. Treat repeated signals as evidence of serial discovery: gather every already-known related source file, test, config, caller, and dependency into the next batch unless the next path genuinely depends on the current file's contents.
 - Consecutive calls to the same filesystem tool emit `[NOTICE REPEATED-TOOL ADVICE]` on call 2 and `[STRONG REPEATED-TOOL ADVICE]` on call 3 and later, with tool-specific consolidation guidance. Correct the call pattern unless dependency ordering prevents batching.
 - Advisories do not change `SUCCESS`, `PARTIAL SUCCESS`, or `FAILED` result status. Never respond by doing less work, omitting verification, or stopping early; correct the call pattern and continue completing the full task.
 
 ## Read side: adaptive evidence and efficient batching
 
-`alonix-read-many` accepts up to 10 complete-file paths and up to 20 ranged requests. It uses one adaptive call-level output budget rather than a rigid per-file cap: smaller evidence needs are satisfied first, every remaining demanded budget byte is redistributed across larger needs, and a file may use the remaining pool when peers do not need it.
+`alonix-read` accepts up to 10 complete-file paths and up to 20 ranged requests. It uses one adaptive call-level output budget rather than a rigid per-file cap: smaller evidence needs are satisfied first, every remaining demanded budget byte is redistributed across larger needs, and a file may use the remaining pool when peers do not need it.
 
 - Batch every already-known related file or range that can be read independently. A single-target call remains appropriate when only one target is known or its contents determine the next request.
 - Canonical duplicate complete reads and identical normalized ranges are consolidated. A complete read supersedes only requested ranges actually covered by the evidence returned; ranges outside a truncated complete read are retained separately.
@@ -112,9 +112,9 @@ The filesystem tools track usage per session and may append escalating advisorie
 
 ## Write side: batch, but respect the 128k output cap
 
-**128k output tokens is a LOT — treat it as a large budget, not a tight one.** For scale, 128k tokens is roughly 90k–100k words, i.e. hundreds of pages of code. A typical source file is a few hundred to a couple thousand tokens, so one `alonix-edit-many` call can comfortably carry **many complete files and targeted patches together** (often 10–30+ real-world files) before approaching the cap. Do not be timid: combine coherent ready file transactions by default.
+**128k output tokens is a LOT — treat it as a large budget, not a tight one.** For scale, 128k tokens is roughly 90k–100k words, i.e. hundreds of pages of code. A typical source file is a few hundred to a couple thousand tokens, so one `alonix-edit` call can comfortably carry **many complete files and targeted patches together** (often 10–30+ real-world files) before approaching the cap. Do not be timid: combine coherent ready file transactions by default.
 
-- Use `alonix-edit-many` for text-file creation and modification. Its globally ordered actions are `create` (establish missing staged content), `overwrite` (replace existing staged content), and `patch` (apply ordered exact replacements). Canonical path aliases and repeated same-file actions form one in-memory transaction that is written at most once.
+- Use `alonix-edit` for text-file creation and modification. Its globally ordered actions are `create` (establish missing staged content), `overwrite` (replace existing staged content), and `patch` (apply ordered exact replacements). Canonical path aliases and repeated same-file actions form one in-memory transaction that is written at most once.
 - Failure is isolated per canonical file transaction: any failed action rejects that file's complete chain, while independent valid files may still be applied. Inspect `EDIT RESULT`, `APPLIED`, `UNCHANGED`, `REJECTED`, and `RECOVERY SIGNALS` before deciding what remains.
 - `patch` is strict: every replacement must satisfy `expected_count`. The tool never chooses among ambiguous matches, performs fuzzy mutation, reinterprets create as overwrite (or vice versa), or bypasses `expected_sha256`.
 - A patch-only transaction may be rebased over unrelated concurrent changes only by re-running the same exact replacements against the latest stable content. If exact counts no longer hold, the transaction remains rejected. Create/overwrite transactions are not rebased.
@@ -171,12 +171,12 @@ For a project that is already indexed in the CBM knowledge graph, **CBM is your 
 
 ## Search / web — batched, evidence-first, and available when useful
 
-- Use native `alonix-web-search`, `alonix-web-fetch-many`, and—when normal retrieval is unsuitable—Alonix stealth tools.
+- Use native `alonix-web-search`, `alonix-web-fetch`, and—when normal retrieval is unsuitable—Alonix stealth tools.
 - Use `alonix-web-search` for 1–10 independent research questions. Prefer `strategy: "fallback"`; local SearXNG and DuckDuckGo are tried before optional paid backends. Use `aggregate` when breadth or corroboration genuinely warrants parallel engines.
-- Use `alonix-web-fetch-many` for 1–10 known URLs. It validates DNS and every redirect, blocks private/reserved destinations by default, bounds time/source/output, extracts HTML/JSON/XML/PDF/text, caches exact requests, and adaptively shares output capacity. Set `allow_private=true` only for deliberate local-service access.
+- Use `alonix-web-fetch` for 1–10 known URLs. It validates DNS and every redirect, blocks private/reserved destinations by default, bounds time/source/output, extracts HTML/JSON/XML/PDF/text, caches exact requests, and adaptively shares output capacity. Set `allow_private=true` only for deliberate local-service access.
 - Prefer primary and official sources for behavioral contracts. Fetch several known official URLs in one call when independent; dependent follow-up fetches should wait for the first evidence.
 - Frequent web research is appropriate when it improves correctness or resolves uncertainty. Additional calls are expected for new questions, dependent discoveries, current facts, or source corroboration. Avoid only unchanged consecutive duplicate batches and serial rephrasings that add no information.
-- Use `alonix-stealth-fetch-many` or `alonix-stealth-search-many` when normal retrieval is blocked, JavaScript rendering is required, or Tor/privacy is a concrete requirement—not as a slower default. `alonix-stealth-rotate-tor` changes circuit and rebuilds browser context; `alonix-stealth-status` reports readiness.
+- Use `alonix-stealth-fetch` or `alonix-stealth-search` when normal retrieval is blocked, JavaScript rendering is required, or Tor/privacy is a concrete requirement—not as a slower default. `alonix-stealth-rotate-tor` changes circuit and rebuilds browser context; `alonix-stealth-status` reports readiness.
 
 ## Planning to minimize calls
 

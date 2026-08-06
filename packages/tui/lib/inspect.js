@@ -94,12 +94,12 @@ export function parseCbm(text) {
 }
 
 export function inputItems(tool, input) {
-  if (tool === "alonix-web-fetch-many" || tool === "alonix-stealth-fetch-many") return (input?.requests ?? []).map((item) => ({ status: "PENDING", label: item.url, meta: item.format ?? "" }))
-  if (tool === "alonix-web-search" || tool === "alonix-stealth-search-many") return (input?.queries ?? []).map((item) => ({ status: "PENDING", label: item.query, meta: item.backend ?? "" }))
+  if (tool === "alonix-web-fetch" || tool === "alonix-stealth-fetch") return (input?.requests ?? []).map((item) => ({ status: "PENDING", label: item.url, meta: item.format ?? "" }))
+  if (tool === "alonix-web-search" || tool === "alonix-stealth-search") return (input?.queries ?? []).map((item) => ({ status: "PENDING", label: item.query, meta: item.backend ?? "" }))
   if (tool === "alonix-shell") return (input?.commands ?? []).map((item) => ({ status: "PENDING", label: item.label || item.command, meta: "queued" }))
   if (tool === "alonix-background-process") return (input?.operations ?? []).map((item, index) => ({ status: "PENDING", label: item.label || item.action || `operation ${index + 1}`, meta: item.action ?? "" }))
-  if (tool === "alonix-read-many") return [...new Set([...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)])].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
-  if (tool === "alonix-edit-many") {
+  if (tool === "alonix-read") return [...new Set([...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)])].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
+  if (tool === "alonix-edit") {
     const transactions = new Map()
     for (const item of input?.actions ?? []) {
       const current = transactions.get(item.path) ?? []

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeEditMany } from "../../filesystem/lib/edit-engine.js";
-import { parseEditResult } from "../lib/edit-many.js";
+import { parseEditResult } from "../lib/edit.js";
 
 test("parseEditResult handles a real created file report", () => {
   const dir = mkdtempSync(join(tmpdir(), "tui-edit-"));

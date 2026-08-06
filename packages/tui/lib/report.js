@@ -1,10 +1,10 @@
 const STATUS_RE = {
   "alonix-search": /^SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
   "alonix-explore": /^EXPLORE RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  "alonix-web-fetch-many": /^WEB FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-web-fetch": /^WEB FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
   "alonix-web-search": /^WEB SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  "alonix-stealth-fetch-many": /^STEALTH FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
-  "alonix-stealth-search-many": /^STEALTH SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-stealth-fetch": /^STEALTH FETCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
+  "alonix-stealth-search": /^STEALTH SEARCH RESULT: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
   "alonix-stealth-rotate-tor": /^STEALTH TOR ROTATION: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m,
   "alonix-stealth-status": /^STEALTH STATUS: (READY|[\w ]+)$/m,
 }

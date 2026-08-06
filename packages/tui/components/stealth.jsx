@@ -9,7 +9,7 @@ function statusResult(text, tool) {
   if (tool === "alonix-stealth-rotate-tor") { const value = text.match(/^STEALTH TOR ROTATION: (SUCCESS|PARTIAL SUCCESS|FAILED)$/m)?.[1]; return { status: value ?? (/FAILED|Error/i.test(text) ? "FAILED" : "PARTIAL SUCCESS"), summary: value === "SUCCESS" ? "Circuit rotated" : value === "FAILED" ? "Rotation failed" : "Partial rotation result", lines: String(text).split(/\r?\n/).filter(Boolean) } }
   return null
 }
-function labelFor(tool) { if (tool === "alonix-stealth-fetch-many") return "Stealth fetch"; if (tool === "alonix-stealth-search-many") return "Stealth search"; if (tool === "alonix-stealth-rotate-tor") return "Tor rotate"; return "Stealth status" }
+function labelFor(tool) { if (tool === "alonix-stealth-fetch") return "Stealth fetch"; if (tool === "alonix-stealth-search") return "Stealth search"; if (tool === "alonix-stealth-rotate-tor") return "Tor rotate"; return "Stealth status" }
 export function StealthView(props) {
   const parsed = createMemo(() => parseStealth(props.output ?? ""))
   const simple = createMemo(() => statusResult(props.output ?? "", props.tool))

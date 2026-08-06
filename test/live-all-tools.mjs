@@ -27,7 +27,7 @@ async function check(name, execute, accept) {
 }
 
 try {
-  const editOutput = await check("alonix-edit-many", () => plugin.tool["alonix-edit-many"].execute({
+  const editOutput = await check("alonix-edit", () => plugin.tool["alonix-edit"].execute({
     base_dir: fixture,
     actions: [
       { path: "alpha.txt", operation: "create", content: "alpha one\n" },
@@ -38,7 +38,7 @@ try {
   }, context("live-fs-edit")), (output) => /EDIT RESULT: SUCCESS/.test(output) && /APPLIED \(3\)/.test(output));
   if (!editOutput) throw new Error("filesystem fixture creation failed");
 
-  await check("alonix-read-many", () => plugin.tool["alonix-read-many"].execute({
+  await check("alonix-read", () => plugin.tool["alonix-read"].execute({
     base_dir: fixture,
     paths: ["alpha.txt", "nested/beta.txt"],
     requests: [{ path: "alpha.txt", ranges: [{ start_line: 1, end_line: 1 }] }],
@@ -97,7 +97,7 @@ try {
     action: "adr_list", project: cbmProject, id: "", title: "", status: "proposed", context: "", decision: "", consequences: "", traces: [],
   }, context("live-cbm-memory")), (output) => /INDEX READINESS/.test(output) && /ADR RESULT/.test(output) && !/^CBM MEMORY OPERATION FAILED/m.test(output));
 
-  await check("alonix-web-fetch-many", () => plugin.tool["alonix-web-fetch-many"].execute({
+  await check("alonix-web-fetch", () => plugin.tool["alonix-web-fetch"].execute({
     requests: [{ url: "https://example.com", format: "markdown", extract: "main", timeout_ms: 15_000, retries: 1, allow_private: false }],
     max_concurrency: 1, cache_ttl_seconds: 0, output_budget_bytes: 16_384,
   }, context("live-web-fetch")), (output) => /WEB FETCH RESULT: SUCCESS/.test(output) && /Example Domain/.test(output));
@@ -107,10 +107,10 @@ try {
   }, context("live-web-search")), (output) => /WEB SEARCH RESULT: SUCCESS/.test(output) && /opencode\.ai/.test(output));
 
   await check("alonix-stealth-status", () => plugin.tool["alonix-stealth-status"].execute({}, context("live-stealth-status")), (output) => /STEALTH STATUS: READY/.test(output) && /Python worker: running/.test(output));
-  await check("alonix-stealth-fetch-many", () => plugin.tool["alonix-stealth-fetch-many"].execute({
+  await check("alonix-stealth-fetch", () => plugin.tool["alonix-stealth-fetch"].execute({
     requests: [{ url: "https://example.com", render_js: true, format: "markdown", timeout_ms: 30_000, allow_private: false }], max_concurrency: 1, output_budget_bytes: 8192,
   }, context("live-stealth-fetch")), (output) => /STEALTH FETCH RESULT: SUCCESS/.test(output) && /control authentication=cookie/.test(output) && /Example Domain/.test(output));
-  await check("alonix-stealth-search-many", () => plugin.tool["alonix-stealth-search-many"].execute({
+  await check("alonix-stealth-search", () => plugin.tool["alonix-stealth-search"].execute({
     queries: [{ query: "OpenCode official documentation", max_results: 3 }], max_concurrency: 1, output_budget_bytes: 16_384,
   }, context("live-stealth-search")), (output) => /STEALTH SEARCH RESULT: SUCCESS/.test(output) && /https?:\/\//.test(output));
   await check("alonix-stealth-rotate-tor", () => plugin.tool["alonix-stealth-rotate-tor"].execute({}, context("live-stealth-rotate")), (output) => /STEALTH TOR ROTATION: SUCCESS/.test(output) && /250 OK/.test(output) && /Browser context rebuilt: yes/.test(output));

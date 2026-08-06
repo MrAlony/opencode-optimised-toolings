@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
-import { parseReadResult } from "../lib/read-many.js"
+import { parseReadResult } from "../lib/read.js"
 import { inputPlanAvailable, pendingPlanSummary, reconcileBatch } from "../lib/batch.js"
 import { inputItems } from "../lib/inspect.js"
 import { Activity, ContentPane, displayPath, InspectorCard, InspectorDegraded, InspectorUnavailable, lifecycleOf, MetaGrid, OutcomeOverview, PreviewList, resolvedStatus, Section, statusLabel, statusPending } from "./kit.jsx"
@@ -25,12 +25,12 @@ function FileEvidenceCard({ file, parsed, skin }) {
   </InspectorCard>
 }
 
-export function ReadManyView(props) {
+export function ReadView(props) {
   const parsed = createMemo(() => parseReadResult(String(props.output ?? "")))
   const lifecycle = createMemo(() => lifecycleOf(props.part))
   const status = createMemo(() => resolvedStatus(props.part, parsed()?.status))
-  const plan = createMemo(() => inputItems("alonix-read-many", props.input))
-  const planReady = createMemo(() => inputPlanAvailable("alonix-read-many", props.input))
+  const plan = createMemo(() => inputItems("alonix-read", props.input))
+  const planReady = createMemo(() => inputPlanAvailable("alonix-read", props.input))
   const observed = createMemo(() => parsed() ? [...parsed().files.map((file) => ({ status: fileStatus(file, parsed()), label: file.path, meta: file.bounded ? "partial" : file.kind })), ...parsed().unavailable.map((item) => ({ status: "FAILED", label: item.path, meta: "unavailable" }))] : [])
   const batch = createMemo(() => reconcileBatch(plan(), observed()))
   const items = createMemo(() => batch().records.map((item) => ({ ...item, label: displayPath(item.label, 84) })))

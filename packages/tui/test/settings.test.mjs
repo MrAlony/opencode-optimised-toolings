@@ -28,7 +28,7 @@ test("settings round-trip preserves unrelated config and owns only explicit valu
   assert.equal(before.tools.bash, "ask")
   const result = applyManagedSettings({
     ...before,
-    tools: { ...before.tools, bash: "deny", "alonix-read-many": "allow" },
+    tools: { ...before.tools, bash: "deny", "alonix-read": "allow" },
     instructions: { enabled: true },
     dcp: { ...before.dcp, installed: true, minContextLimit: 60000, maxContextLimit: 120000 },
     web: { serper_api_key: "secret-value" },
@@ -39,7 +39,7 @@ test("settings round-trip preserves unrelated config and owns only explicit valu
   assert.match(config, /"apiKey": "keep-me"/)
   assert.match(config, /"custom-tool"\s*:\s*\{[\s\S]*?"\*"\s*:\s*"deny"[\s\S]*?\}/)
   assert.match(config, /"bash": "deny"/)
-  assert.match(config, /"alonix-read-many": "allow"/)
+  assert.match(config, /"alonix-read": "allow"/)
   assert.match(config, /"personal.md"/)
   assert.doesNotMatch(config, /"alonix\/AGENTS.md"/, "the superseded instruction reference must be removed")
   assert.match(config, /@tarquinen\/opencode-dcp@latest/)
@@ -61,6 +61,28 @@ test("settings round-trip preserves unrelated config and owns only explicit valu
   assert.equal(repeated.changed, false, "an identical duplicate save must be a strict no-op")
   assert.equal(repeated.restartRequired, false)
   assert.deepEqual(repeated.backups, [])
+})
+
+test("settings migrates legacy many permission IDs without changing their values", async () => {
+  const { paths, options } = await fixture()
+  await writeFile(paths.configPath, JSON.stringify({ permission: {
+    "alonix-read-many": "deny",
+    "alonix-edit-many": "ask",
+    "alonix-web-fetch-many": "allow",
+    "alonix-stealth-fetch-many": "deny",
+    "alonix-stealth-search-many": "ask",
+  } }, null, 2))
+  const before = readManagedSettings(options)
+  assert.equal(before.tools["alonix-read"], "deny")
+  assert.equal(before.tools["alonix-edit"], "ask")
+  applyManagedSettings({ ...before, web: {} }, options)
+  const config = JSON.parse(await readFile(paths.configPath, "utf8"))
+  assert.equal(config.permission["alonix-read"], "deny")
+  assert.equal(config.permission["alonix-edit"], "ask")
+  assert.equal(config.permission["alonix-web-fetch"], "allow")
+  assert.equal(config.permission["alonix-stealth-fetch"], "deny")
+  assert.equal(config.permission["alonix-stealth-search"], "ask")
+  for (const legacy of ["alonix-read-many", "alonix-edit-many", "alonix-web-fetch-many", "alonix-stealth-fetch-many", "alonix-stealth-search-many"]) assert.equal(config.permission[legacy], undefined)
 })
 
 test("disabling owned integrations removes only owned artifacts", async () => {

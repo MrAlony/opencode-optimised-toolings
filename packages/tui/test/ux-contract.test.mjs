@@ -31,8 +31,8 @@ test("structured result status wins over stale running lifecycle while execution
 
 test("all tool families have dedicated inspectors and compact item previews", async () => {
   const index = await source("index.tsx")
-  for (const view of ["ReadManyView", "EditManyView", "ShellView", "BackgroundView", "DiscoveryView", "WebView", "StealthView", "CbmView"]) assert.match(index, new RegExp(view))
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx"]) {
+  for (const view of ["ReadView", "EditView", "ShellView", "BackgroundView", "DiscoveryView", "WebView", "StealthView", "CbmView"]) assert.match(index, new RegExp(view))
+  for (const file of ["read.jsx", "edit.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx"]) {
     const body = await source(`components/${file}`)
     assert.match(body, /<Activity/)
     assert.match(body, /preview=/)
@@ -45,11 +45,11 @@ test("expanded inspectors lead with understandable outcomes before technical pro
   const kit = await source("components/kit.jsx")
   assert.match(kit, /export function OutcomeOverview/)
   assert.match(kit, /What this means/)
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx", "report.jsx"]) {
+  for (const file of ["read.jsx", "edit.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx", "report.jsx"]) {
     const body = await source(`components/${file}`)
     assert.match(body, /<OutcomeOverview/)
   }
-  const read = await source("components/read-many.jsx")
+  const read = await source("components/read.jsx")
   assert.match(read, /Returned targets/)
   assert.match(read, /Unavailable targets/)
   assert.match(read, /Not returned/)
@@ -69,7 +69,7 @@ test("expanded inspectors use separated status-aware cards and bounded content p
   assert.match(kit, /export function InspectorUnavailable/)
   assert.match(kit, /export function RawEvidence/)
   assert.match(kit, /props\.limit \?\? 12/)
-  const edit = await source("components/edit-many.jsx")
+  const edit = await source("components/edit.jsx")
   assert.match(edit, /Intended transaction/)
   assert.match(edit, /Rejected safely/)
   assert.match(edit, /Transaction safety/)
@@ -78,9 +78,9 @@ test("expanded inspectors use separated status-aware cards and bounded content p
   assert.match(web, /Extracted content/)
   assert.match(web, /<InspectorCard/)
   assert.match(web, /nested>/)
-  const editNested = await source("components/edit-many.jsx")
+  const editNested = await source("components/edit.jsx")
   assert.match(editNested, /Exact replacement.*nested>/s)
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx"]) {
+  for (const file of ["read.jsx", "edit.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx"]) {
     const body = await source(`components/${file}`)
     assert.match(body, /<InspectorCard/)
   }
@@ -91,7 +91,7 @@ test("pending batch inspectors never present an unhydrated input frame as a real
   assert.match(batch, /export function inputPlanAvailable/)
   assert.match(batch, /export function pendingPlanSummary/)
   assert.match(batch, /return `\$\{singular\} input pending`/)
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx", "discovery.jsx", "cbm.jsx"]) {
+  for (const file of ["read.jsx", "edit.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx", "discovery.jsx", "cbm.jsx"]) {
     const body = await source(`components/${file}`)
     assert.match(body, /planReady/)
     assert.match(body, /input pending/)
@@ -106,7 +106,7 @@ test("pending batch inspectors never present an unhydrated input frame as a real
 })
 
 test("known tool families preserve plans and degrade bounded completed output without false renderer defects", async () => {
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx", "discovery.jsx", "cbm.jsx"]) {
+  for (const file of ["read.jsx", "edit.jsx", "shell.jsx", "background.jsx", "web.jsx", "stealth.jsx", "discovery.jsx", "cbm.jsx"]) {
     const body = await source(`components/${file}`)
     assert.match(body, /InspectorDegraded/)
     assert.match(body, /lifecycle\(\)\.phase === "error"/)
@@ -119,7 +119,7 @@ test("known tool families preserve plans and degrade bounded completed output wi
   assert.match(evidence, /export function diagnosticEvidenceLines/)
   for (const signal of ["ADVISORY", "ESCALATION", "RECOVERY", "TECHNICAL STATUS", "OUTPUT BUDGET", "EDIT CONTEXT"]) assert.match(evidence, new RegExp(signal))
   assert.match(kit, /import \{ diagnosticEvidenceLines \}/)
-  for (const file of ["read-many.jsx", "edit-many.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx", "report.jsx"]) {
+  for (const file of ["read.jsx", "edit.jsx", "shell.jsx", "background.jsx", "discovery.jsx", "web.jsx", "stealth.jsx", "cbm.jsx", "report.jsx"]) {
     const body = await source(`components/${file}`)
     assert.match(body, /evidence=\{props\.output\}/, `${file} must preserve the original tool output`)
   }
@@ -127,10 +127,10 @@ test("known tool families preserve plans and degrade bounded completed output wi
   assert.match(batch, /export function reconcileBatch/)
   assert.match(batch, /detailAvailable: false/)
   assert.match(batch, /plannedCount: requested\.length/)
-  const read = await source("components/read-many.jsx")
+  const read = await source("components/read.jsx")
   assert.match(read, /label="Read"/)
   assert.doesNotMatch(read, /Read \$\{items\(\)\.length\} targets/)
-  const editParser = await source("lib/edit-many.js")
+  const editParser = await source("lib/edit.js")
   assert.match(editParser, /declared.*consistency/s)
 })
 

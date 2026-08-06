@@ -30,7 +30,12 @@ jobs:
           cache: npm
 
       - name: Use a trusted-publishing capable npm CLI
-        run: npm install --global npm@latest
+        run: |
+          npm install --global npm@11.12.1
+          node --version
+          npm --version
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
 
       - name: Verify tag and package versions agree
         if: startsWith(github.ref, 'refs/tags/v')
@@ -52,4 +57,7 @@ jobs:
           test "$(git status --porcelain --untracked-files=no)" = ""
 
       - name: Publish through npm trusted publishing
+        env:
+          NODE_AUTH_TOKEN: ""
+          NPM_TOKEN: ""
         run: npm publish --access public

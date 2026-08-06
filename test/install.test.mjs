@@ -15,7 +15,17 @@ test("migration preserves provider, model, DCP, unrelated plugins, and unrelated
     provider: { private: { options: { apiKey: "local-secret-preserved" } } },
     plugin: ["@tarquinen/opencode-dcp@latest", "file:///old/oc-cbm/dist/index.js", ["unrelated-plugin", { option: true }]],
     mcp: { stealth: { type: "local" }, other: { type: "remote", url: "https://example.com" } },
-    permission: { "*": "allow", bash: "deny", fs_read_many: "allow", background_process: "allow", web_search: "allow" },
+    permission: {
+      "*": "allow",
+      bash: "deny",
+      fs_read_many: "allow",
+      background_process: "allow",
+      web_search: "allow",
+      "alonix-read-many": "deny",
+      "alonix-web-fetch-many": "ask",
+      "alonix-edit": "ask",
+      "alonix-edit-many": "deny",
+    },
     tools: { custom_existing: true },
     skills: { paths: ["C:/old/oc-cbm/SKILL.md", "C:/other/skills"] },
     tui: { scroll_speed: 5 },
@@ -34,12 +44,16 @@ test("migration preserves provider, model, DCP, unrelated plugins, and unrelated
   assert.equal(output.tools.webfetch, false);
   assert.equal(output.permission.bash, "deny");
   assert.equal(output.permission.webfetch, "deny");
-  assert.equal(output.permission["alonix-web-fetch-many"], "allow");
-  assert.equal(output.permission["alonix-read-many"], "allow");
+  assert.equal(output.permission["alonix-web-fetch"], "ask");
+  assert.equal(output.permission["alonix-read"], "deny");
+  assert.equal(output.permission["alonix-edit"], "ask", "an explicit new permission must outrank its legacy key");
   assert.equal(output.permission["alonix-background-process"], "deny");
   assert.equal(output.permission.fs_read_many, undefined);
   assert.equal(output.permission.background_process, undefined);
   assert.equal(output.permission.web_search, undefined);
+  assert.equal(output.permission["alonix-read-many"], undefined);
+  assert.equal(output.permission["alonix-edit-many"], undefined);
+  assert.equal(output.permission["alonix-web-fetch-many"], undefined);
   assert.deepEqual(output.skills.paths, ["C:/other/skills", options.cbmSkillPath]);
   assert.notEqual(output, input);
 });

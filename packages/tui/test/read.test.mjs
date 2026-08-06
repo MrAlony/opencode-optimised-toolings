@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeReadMany } from "../../filesystem/lib/read-engine.js";
-import { parseReadResult } from "../lib/read-many.js";
+import { parseReadResult } from "../lib/read.js";
 
 test("parseReadResult handles a real complete read report", () => {
   const dir = mkdtempSync(join(tmpdir(), "tui-read-"));

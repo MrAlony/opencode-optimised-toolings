@@ -24,7 +24,7 @@ export const WebToolingPlugin = async () => ({
         } catch (error) { return `WEB SEARCH FAILED\nWhat happened: ${error instanceof Error ? error.message : String(error)}`; }
       },
     }),
-    "alonix-web-fetch-many": tool({
+    "alonix-web-fetch": tool({
       description: "Fetch and extract 1-10 URLs concurrently with per-hop DNS/redirect safety, private-network blocking by default, bounded retries/timeouts/body sizes, HTML readability or CSS extraction, Markdown/text/HTML/JSON/PDF support, exact metadata/fingerprints, caching, and one adaptive shared output budget. Set allow_private only for deliberate local service access.",
       args: {
         requests: tool.schema.array(tool.schema.object({

@@ -12,7 +12,7 @@ function SearchDetails(props) {
 }
 
 export function WebView(props) {
-  const isFetch = createMemo(() => props.tool === "alonix-web-fetch-many")
+  const isFetch = createMemo(() => props.tool === "alonix-web-fetch")
   const parsed = createMemo(() => isFetch() ? parseWebFetch(props.output ?? "") : parseWebSearch(props.output ?? ""))
   const lifecycle = createMemo(() => lifecycleOf(props.part))
   const status = createMemo(() => resolvedStatus(props.part, parsed()?.status))

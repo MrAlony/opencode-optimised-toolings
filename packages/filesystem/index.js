@@ -23,7 +23,7 @@ function usageSignals(context, toolName, { oneFile = false } = {}) {
   state.streak = state.lastTool === toolName ? state.streak + 1 : 1;
   state.lastTool = toolName;
   state.calls[toolName] = (state.calls[toolName] || 0) + 1;
-  if (toolName === "alonix-read-many" && oneFile) state.inefficientReads += 1;
+  if (toolName === "alonix-read" && oneFile) state.inefficientReads += 1;
   if (toolName === "alonix-search" || toolName === "alonix-explore") state.discoveryCalls += 1;
   const signals = [];
 
@@ -39,10 +39,10 @@ function usageSignals(context, toolName, { oneFile = false } = {}) {
 
   if (state.streak >= 2) {
     const guidance = {
-      "alonix-read-many": "If more paths are already known, combine them now instead of continuing serial reads.",
+      "alonix-read": "If more paths are already known, combine them now instead of continuing serial reads.",
       "alonix-search": "Combine filename and content discovery into this one call; use alonix-explore once for broad repository context, then act on the returned results.",
       "alonix-explore": "Do not repeatedly re-explore the same project. Use the structure, manifests, entry candidates, and search results already returned; switch to precise batched reads or implementation.",
-      "alonix-edit-many": "Combine independent files and repeated same-file actions into one ordered edit call when they are already known.",
+      "alonix-edit": "Combine independent files and repeated same-file actions into one ordered edit call when they are already known.",
     };
     const label = state.streak === 2 ? "NOTICE REPEATED-TOOL ADVICE" : "STRONG REPEATED-TOOL ADVICE";
     signals.push(`[${label}] Consecutive ${toolName} call #${state.streak}. ${guidance[toolName] ?? "Consolidate already-known independent work when the tool supports it."} ${TOOL_CALL_EFFICIENCY_PRINCIPLE}`);
@@ -85,7 +85,7 @@ export const FsToolingPlugin = async ({
       },
     }),
 
-    "alonix-read-many": tool({
+    "alonix-read": tool({
       description: "Read complete files and/or exact ranges with adaptive output allocation, encoding detection, stable-read recovery, head/tail truncation bounds, missing-path candidates, and canonical duplicate consolidation. Complete reads supersede only ranges actually covered by returned complete evidence.",
       args: {
         paths: tool.schema.array(tool.schema.string()).min(1).max(MAX_BATCH_PATHS).optional().describe("1-10 complete-file paths"),
@@ -101,11 +101,11 @@ export const FsToolingPlugin = async ({
       async execute(args, context) {
         const output = executeReadMany(args, context, { directory });
         const uniqueRequested = new Set([...(args.paths ?? []), ...(args.requests ?? []).map((request) => request.path)]).size;
-        return [...usageSignals(context, "alonix-read-many", { oneFile: uniqueRequested === 1 }), output].join("\n\n");
+        return [...usageSignals(context, "alonix-read", { oneFile: uniqueRequested === 1 }), output].join("\n\n");
       },
     }),
 
-    "alonix-edit-many": tool({
+    "alonix-edit": tool({
       description: "Create new files, overwrite existing files, and apply strict exact patches through ordered per-file transactions. Safe recovery includes exact patch-only rebasing, identical create-race recognition, transient atomic-write retries, exact no-op assertions, optional already-applied recognition, and neutral near-match evidence for rejected patches.",
       args: {
         actions: tool.schema.array(tool.schema.discriminatedUnion("operation", [
@@ -132,7 +132,7 @@ export const FsToolingPlugin = async ({
       },
       async execute(args, context) {
         const output = executeEditMany(args, context, { directory, replaceWriter, createWriter, beforeEditApply });
-        return [...usageSignals(context, "alonix-edit-many"), output].join("\n\n");
+        return [...usageSignals(context, "alonix-edit"), output].join("\n\n");
       },
     }),
 

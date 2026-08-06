@@ -44,7 +44,7 @@ test("reportStatus maps explore and web headers", () => {
   assert.equal(reportStatus(`EXPLORE RESULT: SUCCESS\nWHAT HAPPENED: baseline complete`, "alonix-explore"), "SUCCESS")
   assert.equal(reportStatus(`WEB SEARCH RESULT: SUCCESS\nWHAT HAPPENED: ok`, "alonix-web-search"), "SUCCESS")
   assert.equal(reportStatus(`STEALTH STATUS: READY\nTor bootstrapped: no`, "alonix-stealth-status"), "SUCCESS")
-  assert.equal(reportStatus(`STEALTH FETCH RESULT: SUCCESS\nOutcome: SUCCESS`, "alonix-stealth-fetch-many"), "SUCCESS")
+  assert.equal(reportStatus(`STEALTH FETCH RESULT: SUCCESS\nOutcome: SUCCESS`, "alonix-stealth-fetch"), "SUCCESS")
 })
 
 test("reportStatus detects failure and CBM outcomes", () => {

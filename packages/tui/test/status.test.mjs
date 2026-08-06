@@ -20,11 +20,12 @@ test("custom tool registry has 16 unique names covering every family", () => {
   assert.equal(customTools.length, 16)
   assert.equal(new Set(customTools).size, 16)
   assert.ok(customTools.every((name) => name.startsWith("alonix-")))
-  for (const family of ["alonix-read-", "alonix-edit-", "alonix-index-", "alonix-web-", "alonix-stealth-"]) {
+  for (const tool of ["alonix-read", "alonix-edit", "alonix-shell", "alonix-background-process"]) {
+    assert.ok(customTools.includes(tool), `missing ${tool} tool`)
+  }
+  for (const family of ["alonix-index-", "alonix-web-", "alonix-stealth-"]) {
     assert.ok(customTools.some((name) => name.startsWith(family)), `missing ${family} tool`)
   }
-  assert.ok(customTools.includes("alonix-shell"))
-  assert.ok(customTools.includes("alonix-background-process"))
 })
 
 test("indicatorFor maps statuses to visible levels", () => {

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
-import { parseEditResult } from "../lib/edit-many.js"
+import { parseEditResult } from "../lib/edit.js"
 import { inputPlanAvailable, pendingPlanSummary, reconcileBatch } from "../lib/batch.js"
 import { inputItems } from "../lib/inspect.js"
 import { Activity, ContentPane, displayPath, InspectorCard, InspectorDegraded, InspectorUnavailable, lifecycleOf, MetaGrid, OutcomeOverview, PreviewList, resolvedStatus, Section, statusLabel, statusPending } from "./kit.jsx"
@@ -13,12 +13,12 @@ function IntendedDetails({ input, path, skin }) {
   return <>{actions.map((action, actionIndex) => <InspectorCard title={`${action.operation} ${actionIndex + 1}`} skin={skin} status="PARTIAL SUCCESS" meta={action.operation === "patch" ? `${action.replacements?.length ?? 0} replacements` : `${String(action.content ?? "").split(/\r?\n/).length} lines`} nested>{action.operation === "patch" ? (action.replacements ?? []).slice(0, 6).map((replacement, index) => <InspectorCard title={`Exact replacement ${index + 1}`} skin={skin} status="PARTIAL SUCCESS" meta={`expected ${replacement.expected_count ?? 1}`} nested><ContentPane title="Before" skin={skin} lines={String(replacement.search ?? "").split(/\r?\n/).map((line) => `- ${line}`)} limit={8} color={skin.error} tail={false} /><ContentPane title="After" skin={skin} lines={String(replacement.replace ?? "").split(/\r?\n/).map((line) => `+ ${line}`)} limit={8} color={skin.success} tail={false} /></InspectorCard>) : <ContentPane title={action.operation === "create" ? "New content" : "Replacement content"} skin={skin} lines={String(action.content ?? "").split(/\r?\n/)} limit={12} tail={false} />}</InspectorCard>)}</>
 }
 
-export function EditManyView(props) {
+export function EditView(props) {
   const parsed = createMemo(() => parseEditResult(String(props.output ?? "")))
   const lifecycle = createMemo(() => lifecycleOf(props.part))
   const status = createMemo(() => resolvedStatus(props.part, parsed()?.status))
-  const plan = createMemo(() => inputItems("alonix-edit-many", props.input))
-  const planReady = createMemo(() => inputPlanAvailable("alonix-edit-many", props.input))
+  const plan = createMemo(() => inputItems("alonix-edit", props.input))
+  const planReady = createMemo(() => inputPlanAvailable("alonix-edit", props.input))
   const observed = createMemo(() => parsed() ? [...parsed().applied.map((file) => ({ status: "SUCCESS", label: file.path, meta: operationFor(props.input, file.path, file.kind) })), ...parsed().unchanged.map((file) => ({ status: "SUCCESS", label: file.path, meta: "unchanged" })), ...parsed().rejected.map((file) => ({ status: "FAILED", label: file.path, meta: "rejected" }))] : [])
   const batch = createMemo(() => reconcileBatch(plan(), observed()))
   const items = createMemo(() => batch().records.map((item) => ({ ...item, label: displayPath(item.label, 84) })))

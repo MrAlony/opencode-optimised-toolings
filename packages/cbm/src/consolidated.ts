@@ -707,7 +707,7 @@ export const investigate = tool({
       const validation = validateReadOnlyCypher(args.cypher);
       outputSections.push(section("OPTIONAL CYPHER", validation || await safeInvoke("query_graph", { project: args.project, query: args.cypher }, context), 4 * 1024));
     }
-    outputSections.push("=== EXECUTION DIRECTIVE ===\nUse the priority call chain and source first. Treat omitted weak semantic matches as non-evidence. If a precise source gap remains, use alonix-read-many range requests rather than shell-based Get-Content/rg discovery. Do not restart broad exploration.");
+    outputSections.push("=== EXECUTION DIRECTIVE ===\nUse the priority call chain and source first. Treat omitted weak semantic matches as non-evidence. If a precise source gap remains, use alonix-read range requests rather than shell-based Get-Content/rg discovery. Do not restart broad exploration.");
     return joinBudgeted(outputSections);
   },
 });

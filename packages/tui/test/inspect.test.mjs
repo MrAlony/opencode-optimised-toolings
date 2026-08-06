@@ -37,5 +37,5 @@ test("discovery and pending previews remain informative with zero matches", () =
   const search = parseDiscovery(`SEARCH RESULT: SUCCESS\n\nWHAT HAPPENED: Search completed. 0 content match(es) were found.\n\nCONTENT SCAN:\n  Complete: yes\n  Files scanned: 7\n  Matches found: 0\n\n=== CONTENT MATCHES: x ===\nNo matches found.`, "alonix-search")
   assert.equal(search.items.length, 2)
   assert.match(search.items[0].label, /0 content matches/)
-  assert.deepEqual(inputItems("alonix-web-fetch-many", { requests: [{ url: "https://one.test" }, { url: "https://two.test" }] }).map((item) => item.status), ["PENDING", "PENDING"])
+  assert.deepEqual(inputItems("alonix-web-fetch", { requests: [{ url: "https://one.test" }, { url: "https://two.test" }] }).map((item) => item.status), ["PENDING", "PENDING"])
 })

@@ -17,9 +17,9 @@ export const TOOL_GROUPS = [
     title: "Alonix tools",
     description: "High-information filesystem, terminal, web, privacy, tooling, and codebase-memory tools.",
     tools: [
-      "alonix-read-many", "alonix-edit-many", "alonix-search", "alonix-explore", "alonix-shell",
-      "alonix-background-process", "alonix-web-search", "alonix-web-fetch-many", "alonix-stealth-fetch-many",
-      "alonix-stealth-search-many", "alonix-stealth-rotate-tor", "alonix-stealth-status", "alonix-toolings",
+      "alonix-read", "alonix-edit", "alonix-search", "alonix-explore", "alonix-shell",
+      "alonix-background-process", "alonix-web-search", "alonix-web-fetch", "alonix-stealth-fetch",
+      "alonix-stealth-search", "alonix-stealth-rotate-tor", "alonix-stealth-status", "alonix-toolings",
       "alonix-index-project", "alonix-index-context", "alonix-index-investigate", "alonix-index-memory",
     ],
   },
@@ -30,6 +30,14 @@ export const TOOL_GROUPS = [
     tools: ["read", "edit", "glob", "grep", "list", "bash", "task", "webfetch", "websearch", "question", "skill", "lsp", "todowrite"],
   },
 ]
+
+export const LEGACY_TOOL_IDS = {
+  "alonix-read-many": "alonix-read",
+  "alonix-edit-many": "alonix-edit",
+  "alonix-web-fetch-many": "alonix-web-fetch",
+  "alonix-stealth-fetch-many": "alonix-stealth-fetch",
+  "alonix-stealth-search-many": "alonix-stealth-search",
+}
 
 export const WEB_PROVIDERS = [
   { id: "serper_api_key", label: "Serper", env: "SERPER_API_KEY" },
@@ -100,7 +108,8 @@ export function settingsPaths(options = {}) {
 }
 
 function permissionValue(permission, tool) {
-  const value = permission?.[tool]
+  const legacy = Object.entries(LEGACY_TOOL_IDS).find(([, current]) => current === tool)?.[0]
+  const value = permission?.[tool] ?? (legacy ? permission?.[legacy] : undefined)
   return value === "allow" || value === "ask" || value === "deny" ? value : value === undefined ? "inherit" : "custom"
 }
 
@@ -257,6 +266,10 @@ export function applyManagedSettings(input, options = {}) {
     : typeof config.permission === "string"
       ? { "*": config.permission }
       : {}
+  for (const [legacy, current] of Object.entries(LEGACY_TOOL_IDS)) {
+    if (permission[current] === undefined && permission[legacy] !== undefined) permission[current] = permission[legacy]
+    delete permission[legacy]
+  }
   for (const [tool, value] of Object.entries(input?.tools ?? {})) {
     if (!TOOL_GROUPS.some((group) => group.tools.includes(tool))) continue
     if (value === "inherit") delete permission[tool]
