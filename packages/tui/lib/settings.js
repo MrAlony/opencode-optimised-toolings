@@ -8,6 +8,8 @@ import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser"
 export const ALONIX_PLUGIN_SPEC = "opencode-optimised-toolings@latest"
 export const DCP_PLUGIN_SPEC = "@tarquinen/opencode-dcp@latest"
 export const INSTRUCTION_REFERENCE = "alonix/AGENTS.md"
+export const AGENTS_BLOCK_START = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: START -->"
+export const AGENTS_BLOCK_END = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: END -->"
 
 export const TOOL_GROUPS = [
   {
@@ -89,6 +91,7 @@ export function settingsPaths(options = {}) {
     dcpPath: resolve(options.dcpPath ?? join(configDir, "dcp.jsonc")),
     alonixDir,
     instructionPath: resolve(options.instructionPath ?? join(alonixDir, "AGENTS.md")),
+    agentsPath: resolve(options.agentsPath ?? join(configDir, "AGENTS.md")),
     secretsPath: resolve(options.secretsPath ?? join(alonixDir, "secrets.json")),
     backupsDir: resolve(options.backupsDir ?? join(alonixDir, "backups")),
     instructionSource: resolve(options.instructionSource ?? join(packageRoot, "config", "AGENTS.md")),
@@ -98,6 +101,42 @@ export function settingsPaths(options = {}) {
 function permissionValue(permission, tool) {
   const value = permission?.[tool]
   return value === "allow" || value === "ask" || value === "deny" ? value : value === undefined ? "inherit" : "custom"
+}
+
+function agentsBlockRange(text) {
+  const start = text.indexOf(AGENTS_BLOCK_START)
+  const end = text.indexOf(AGENTS_BLOCK_END)
+  if (start < 0 && end < 0) return null
+  if (start < 0 || end < 0 || end < start || text.indexOf(AGENTS_BLOCK_START, start + 1) >= 0 || text.indexOf(AGENTS_BLOCK_END, end + 1) >= 0) {
+    throw new Error("AGENTS.md contains an incomplete or duplicate Alonix instruction block")
+  }
+  return { start, end: end + AGENTS_BLOCK_END.length }
+}
+
+function stripAgentsBlock(text) {
+  const range = agentsBlockRange(text)
+  if (!range) return text
+  const before = text.slice(0, range.start).replace(/[ \t]+$/gm, "").replace(/\s*$/, "")
+  const after = text.slice(range.end).replace(/^\s*/, "")
+  if (!before) return after
+  if (!after) return `${before}\n`
+  return `${before}\n\n${after}`
+}
+
+function normalizeMarkdown(text) {
+  return String(text ?? "").replaceAll("\r\n", "\n").trim()
+}
+
+function managedAgentsText(current, source, enabled) {
+  const withoutBlock = stripAgentsBlock(current)
+  if (!enabled) return withoutBlock
+  const eol = current.includes("\r\n") ? "\r\n" : "\n"
+  const body = source.replaceAll("\r\n", "\n").trim().replaceAll("\n", eol)
+  const block = `${AGENTS_BLOCK_START}${eol}${body}${eol}${AGENTS_BLOCK_END}`
+  // Migrate the original all-Alonix file without duplicating its contents.
+  if (normalizeMarkdown(withoutBlock) === normalizeMarkdown(source)) return `${block}${eol}`
+  const prefix = withoutBlock.replace(/\s*$/, "")
+  return prefix ? `${prefix}${eol}${eol}${block}${eol}` : `${block}${eol}`
 }
 
 function dcpSettings(data) {
@@ -123,15 +162,16 @@ export function readManagedSettings(options = {}) {
   const permission = config.permission && typeof config.permission === "object" ? config.permission : {}
   const instructions = Array.isArray(config.instructions) ? config.instructions : []
   const plugins = Array.isArray(config.plugin) ? config.plugin : []
-  const instructionEnabled = instructions.some((item) => {
+  const legacyInstructionEnabled = instructions.some((item) => {
     const value = normalizedPath(item)
     return value === normalizedPath(INSTRUCTION_REFERENCE) || value === normalizedPath(paths.instructionPath)
   })
+  const agentsText = readText(paths.agentsPath)
   const web = secrets["alonix-web-search"] ?? {}
   return {
     paths,
     tools: Object.fromEntries(TOOL_GROUPS.flatMap((group) => group.tools).map((tool) => [tool, permissionValue(permission, tool)])),
-    instructions: { enabled: instructionEnabled, installed: existsFile(paths.instructionPath) },
+    instructions: { enabled: Boolean(agentsBlockRange(agentsText) || legacyInstructionEnabled), installed: Boolean(agentsBlockRange(agentsText)) },
     dcp: { installed: plugins.some((entry) => pluginName(entry) === pluginName(DCP_PLUGIN_SPEC)), ...dcpSettings(dcp) },
     web: Object.fromEntries(WEB_PROVIDERS.map((provider) => [provider.id, Boolean(process.env[provider.env] || web[provider.id])])),
     plugin: {
@@ -193,8 +233,18 @@ function atomicTransaction(changes) {
 }
 
 function validLimit(value, fallback) {
+  if (typeof value === "string" && /^\s*(?:100|\d{1,2})(?:\.\d+)?%\s*$/.test(value)) return value.trim()
   const number = Number(value)
   return Number.isFinite(number) ? Math.max(10_000, Math.round(number)) : fallback
+}
+
+function orderedLimits(minimum, maximum) {
+  if (typeof minimum === "number" && typeof maximum === "number") return [minimum, Math.max(minimum, maximum)]
+  const percent = (value) => typeof value === "string" && value.endsWith("%") ? Number(value.slice(0, -1)) : null
+  const minPercent = percent(minimum)
+  const maxPercent = percent(maximum)
+  if (minPercent !== null && maxPercent !== null && maxPercent < minPercent) return [minimum, minimum]
+  return [minimum, maximum]
 }
 
 export function applyManagedSettings(input, options = {}) {
@@ -214,11 +264,12 @@ export function applyManagedSettings(input, options = {}) {
   configText = setJsonc(configText, ["permission"], permission)
 
   const instructions = Array.isArray(config.instructions) ? [...config.instructions] : []
+  // Remove the legacy separate-file reference. The managed profile now lives in
+  // a clearly marked block inside the user's real global AGENTS.md.
   const withoutOwned = instructions.filter((item) => {
     const value = normalizedPath(item)
     return value !== normalizedPath(INSTRUCTION_REFERENCE) && value !== normalizedPath(paths.instructionPath)
   })
-  if (input?.instructions?.enabled) withoutOwned.push(INSTRUCTION_REFERENCE)
   configText = setJsonc(configText, ["instructions"], withoutOwned)
 
   const plugins = Array.isArray(config.plugin) ? [...config.plugin] : []
@@ -229,8 +280,10 @@ export function applyManagedSettings(input, options = {}) {
 
   let dcpText = readText(paths.dcpPath, "{}")
   parseDocument(dcpText, basename(paths.dcpPath))
-  const minimum = validLimit(input?.dcp?.minContextLimit, 50_000)
-  const maximum = Math.max(minimum, validLimit(input?.dcp?.maxContextLimit, 100_000))
+  const [minimum, maximum] = orderedLimits(
+    validLimit(input?.dcp?.minContextLimit, dcpSettings(parseDocument(dcpText, basename(paths.dcpPath))).minContextLimit),
+    validLimit(input?.dcp?.maxContextLimit, dcpSettings(parseDocument(dcpText, basename(paths.dcpPath))).maxContextLimit),
+  )
   dcpText = setJsonc(dcpText, ["compress", "minContextLimit"], minimum)
   dcpText = setJsonc(dcpText, ["compress", "maxContextLimit"], maximum)
   // DCP's schema uses an enum for notifications and an object for turn
@@ -260,14 +313,18 @@ export function applyManagedSettings(input, options = {}) {
 
   const instructionText = readText(paths.instructionSource)
   if (input?.instructions?.enabled && !instructionText) throw new Error("The packaged Alonix instruction profile is missing")
+  const agentsText = managedAgentsText(readText(paths.agentsPath), instructionText, input?.instructions?.enabled === true)
 
   const intended = [
     { path: paths.configPath, content: configText },
     { path: paths.dcpPath, content: dcpText },
     { path: paths.secretsPath, content: secretsText, mode: 0o600 },
-    input?.instructions?.enabled
-      ? { path: paths.instructionPath, content: instructionText }
-      : { path: paths.instructionPath, delete: true },
+    input?.instructions?.enabled || existsFile(paths.agentsPath)
+      ? { path: paths.agentsPath, content: agentsText }
+      : { path: paths.agentsPath, delete: true },
+    // Clean up the superseded owned file after migrating its content into the
+    // user's marked AGENTS.md block.
+    { path: paths.instructionPath, delete: true },
   ]
   // UI frameworks may occasionally deliver duplicate activation events. Make
   // the persistence boundary idempotent: byte-identical saves perform no write,

@@ -18,6 +18,7 @@ async function fixture() {
   "instructions": ["personal.md"]
 }\n`)
   await writeFile(paths.instructionSource, "# Managed instructions\n")
+  await writeFile(paths.agentsPath, "# Personal instructions\n\nKeep this exact text.\n")
   return { home, paths, options }
 }
 
@@ -40,13 +41,16 @@ test("settings round-trip preserves unrelated config and owns only explicit valu
   assert.match(config, /"bash": "deny"/)
   assert.match(config, /"alonix-read-many": "allow"/)
   assert.match(config, /"personal.md"/)
-  assert.match(config, /"alonix\/AGENTS.md"/)
+  assert.doesNotMatch(config, /"alonix\/AGENTS.md"/, "the superseded instruction reference must be removed")
   assert.match(config, /@tarquinen\/opencode-dcp@latest/)
   const dcp = await readFile(paths.dcpPath, "utf8")
   assert.match(dcp, /"pruneNotification": "detailed"/)
   assert.match(dcp, /"turnProtection": \{[\s\S]*?"enabled": false[\s\S]*?"turns": 4/)
   assert.doesNotMatch(dcp, /"notifications"/, "Settings must never emit unsupported DCP keys")
-  assert.equal(await readFile(paths.instructionPath, "utf8"), "# Managed instructions\n")
+  const agents = await readFile(paths.agentsPath, "utf8")
+  assert.match(agents, /^# Personal instructions\n\nKeep this exact text\./)
+  assert.match(agents, /<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: START -->\n# Managed instructions\n<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: END -->/)
+  await assert.rejects(readFile(paths.instructionPath, "utf8"), /ENOENT/)
   const secrets = JSON.parse(await readFile(paths.secretsPath, "utf8"))
   assert.equal(secrets["alonix-web-search"].serper_api_key, "secret-value")
   assert.ok(result.backups.length >= 1)
@@ -70,7 +74,57 @@ test("disabling owned integrations removes only owned artifacts", async () => {
   assert.match(config, /personal\.md/)
   assert.doesNotMatch(config, /alonix\/AGENTS\.md/)
   assert.doesNotMatch(config, /@tarquinen\/opencode-dcp/)
+  assert.equal(await readFile(paths.agentsPath, "utf8"), "# Personal instructions\n\nKeep this exact text.\n")
   await assert.rejects(readFile(paths.instructionPath, "utf8"), /ENOENT/)
+})
+
+test("an existing full Alonix AGENTS file migrates to one removable block without duplication", async () => {
+  const { paths, options } = await fixture()
+  const managed = await readFile(paths.instructionSource, "utf8")
+  await writeFile(paths.agentsPath, managed)
+  const current = readManagedSettings(options)
+  applyManagedSettings({ ...current, instructions: { enabled: true }, web: {} }, options)
+  const enabled = await readFile(paths.agentsPath, "utf8")
+  assert.equal(enabled.match(/ALONIX OPTIMIZED TOOL INSTRUCTIONS: START/g)?.length, 1)
+  assert.equal(enabled.match(/# Managed instructions/g)?.length, 1)
+  applyManagedSettings({ ...readManagedSettings(options), instructions: { enabled: false }, web: {} }, options)
+  assert.equal(await readFile(paths.agentsPath, "utf8"), "", "disabling the migrated all-Alonix profile removes only its owned block")
+})
+
+test("DCP percentage thresholds and unrelated settings round-trip without conversion", async () => {
+  const { paths, options } = await fixture()
+  await writeFile(paths.dcpPath, `{
+  "compress": { "minContextLimit": "50%", "maxContextLimit": "60%", "nudgeFrequency": 5 },
+  "turnProtection": { "enabled": false, "turns": 4 },
+  "customUnmanaged": { "keep": true }
+}\n`)
+  const before = readManagedSettings(options)
+  assert.equal(before.dcp.minContextLimit, "50%")
+  assert.equal(before.dcp.maxContextLimit, "60%")
+  applyManagedSettings({ ...before, web: {} }, options)
+  const text = await readFile(paths.dcpPath, "utf8")
+  assert.match(text, /"minContextLimit": "50%"/)
+  assert.match(text, /"maxContextLimit": "60%"/)
+  assert.match(text, /"nudgeFrequency": 5/)
+  assert.match(text, /"customUnmanaged"[\s\S]*?"keep": true/)
+  assert.match(text, /"enabled": false/)
+  assert.match(text, /"turns": 4/)
+})
+
+test("incomplete or duplicate AGENTS ownership markers fail closed", async () => {
+  const { paths, options } = await fixture()
+  await writeFile(paths.agentsPath, "personal\n<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: START -->\nbroken\n")
+  assert.throws(() => readManagedSettings(options), /incomplete or duplicate/)
+  assert.match(await readFile(paths.agentsPath, "utf8"), /broken/)
+})
+
+test("disabling instructions does not create a missing AGENTS file", async () => {
+  const { paths, options } = await fixture()
+  const { rm } = await import("node:fs/promises")
+  await rm(paths.agentsPath)
+  const current = readManagedSettings(options)
+  applyManagedSettings({ ...current, instructions: { enabled: false }, web: {} }, options)
+  await assert.rejects(readFile(paths.agentsPath, "utf8"), /ENOENT/)
 })
 
 test("secrets are reported as presence only and never returned", async () => {

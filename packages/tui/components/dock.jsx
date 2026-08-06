@@ -230,11 +230,11 @@ export function Dock(props) {
             <Button tokens={tokens()} variant="primary" size="lg" glyph={GLYPH.pointer} description="Pick where the new chat belongs" onPress={props.onChooseProject}>
               Choose a folder
             </Button>
-            <box flexDirection="row" gap={1}>
-              <Button tokens={tokens()} variant="secondary" glyph={GLYPH.square} onPress={props.onAddProject}>Add folder</Button>
-              <Button tokens={tokens()} variant="secondary" glyph={GLYPH.diamond} onPress={props.onWorkbench}>Dashboard</Button>
-              <Button tokens={tokens()} variant="secondary" onPress={props.onSettings}>Settings</Button>
+            <box flexDirection="row" gap={1} width="100%">
+              <Button tokens={tokens()} width="50%" variant="secondary" glyph={GLYPH.square} onPress={props.onAddProject}>Add folder</Button>
+              <Button tokens={tokens()} width="50%" variant="secondary" glyph={GLYPH.diamond} onPress={props.onWorkbench}>Dashboard</Button>
             </box>
+            <Button tokens={tokens()} width="100%" variant="secondary" onPress={props.onSettings}>Settings</Button>
           </box>
 
           <scrollbox flexGrow={1} stickyScroll={false} paddingTop={1}>

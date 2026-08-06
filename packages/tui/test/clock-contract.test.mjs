@@ -293,12 +293,30 @@ test("settings is a first-class mouse-accessible route", async () => {
   assert.match(settingsLib, /if \(!changes\.length\) return \{[\s\S]*changed: false/, "duplicate saves must be strict no-ops")
 })
 
-test("settings owns instruction references and never edits personal models or providers", async () => {
+test("settings owns one marked AGENTS block and never edits personal models or providers", async () => {
   const sourceText = await source("lib/settings.js")
-  assert.match(sourceText, /INSTRUCTION_REFERENCE = "alonix\/AGENTS.md"/)
+  assert.match(sourceText, /ALONIX OPTIMIZED TOOL INSTRUCTIONS: START/)
+  assert.match(sourceText, /ALONIX OPTIMIZED TOOL INSTRUCTIONS: END/)
+  assert.match(sourceText, /agentsPath: resolve\(options\.agentsPath \?\? join\(configDir, "AGENTS\.md"\)\)/)
+  assert.match(sourceText, /incomplete or duplicate Alonix instruction block/)
   assert.match(sourceText, /backupExisting/)
   assert.match(sourceText, /atomicTransaction/)
   assert.doesNotMatch(sourceText, /\["model"\]|\["provider"\]/)
+})
+
+test("dock actions are bounded to the expanded sidebar width", async () => {
+  const dock = await source("components/dock.jsx")
+  assert.match(dock, /<box flexDirection="row" gap=\{1\} width="100%">[\s\S]*width="50%"[\s\S]*width="50%"/)
+  assert.match(dock, /<Button tokens=\{tokens\(\)\} width="100%" variant="secondary" onPress=\{props\.onSettings\}>Settings<\/Button>/)
+})
+
+test("presence reconciliation is bounded and debounced to protect pointer responsiveness", async () => {
+  const store = await source("components/project-store.jsx")
+  assert.match(store, /SDK_CONCURRENCY = 4/)
+  assert.match(store, /PRESENCE_EVENT_DEBOUNCE_MS = 250/)
+  assert.match(store, /mapSettledBounded/)
+  assert.match(store, /api\?\.event\?\.on\?\.\(event, schedulePresence\)/)
+  assert.doesNotMatch(store, /api\?\.event\?\.on\?\.\(event, refreshPresence\)/)
 })
 
 test("the universal finder exposes plain-language mouse filters", async () => {

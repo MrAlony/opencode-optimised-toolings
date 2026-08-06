@@ -231,9 +231,31 @@ test("presence events use lightweight reconciliation instead of listing every se
     const handler = api.listeners.get("session.status")
     assert.ok(handler)
     handler()
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    handler()
+    handler()
+    await new Promise((resolve) => setTimeout(resolve, 320))
     assert.equal(api.calls.projectList, beforeProjects, "presence changes must not reload project/session structure")
     assert.ok(api.calls.statusList > beforeStatuses)
+  })
+})
+
+test("presence refresh bounds SDK fan-out and queues follow-up work through a debounce", async () => {
+  const api = createApi({
+    projects: Array.from({ length: 18 }, (_, index) => ({ id: `p${index}`, worktree: `C:/work/p${index}`, name: `P${index}` })),
+    sessions: Array.from({ length: 100 }, (_, index) => ({ id: `s${index}`, projectID: `p${index % 18}`, directory: `C:/work/p${index % 18}`, time: { updated: Date.now() - index } })),
+  })
+  let active = 0
+  let peak = 0
+  api.client.session.status = async () => {
+    active += 1
+    peak = Math.max(peak, active)
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    active -= 1
+    return { data: {} }
+  }
+  await withStore(api, async (store) => {
+    await store.refreshPresence()
+    assert.ok(peak <= 4, `presence SDK concurrency must be bounded, saw ${peak}`)
   })
 })
 

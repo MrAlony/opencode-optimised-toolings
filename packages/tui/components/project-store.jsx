@@ -45,9 +45,11 @@ const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
 const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
 const REFRESH_DEBOUNCE_MS = 250
 const STRUCTURAL_RECONCILE_INTERVAL_MS = 30_000
-const PRESENCE_RECONCILE_INTERVAL_MS = 5_000
-const PRESENCE_RECENT_LIMIT = 32
-const PRESENCE_ROTATING_LIMIT = 32
+const PRESENCE_RECONCILE_INTERVAL_MS = 8_000
+const PRESENCE_EVENT_DEBOUNCE_MS = 250
+const SDK_CONCURRENCY = 4
+const PRESENCE_RECENT_LIMIT = 12
+const PRESENCE_ROTATING_LIMIT = 8
 const SESSION_LIMIT = 400
 
 function readKv(api, key, fallback) {
@@ -99,6 +101,24 @@ function normalizeDirectories(value, limit = 200) {
   return out
 }
 
+async function mapSettledBounded(items, worker, concurrency = SDK_CONCURRENCY) {
+  const rows = Array.from(items ?? [])
+  const results = new Array(rows.length)
+  let cursor = 0
+  const run = async () => {
+    while (cursor < rows.length) {
+      const index = cursor++
+      try {
+        results[index] = { status: "fulfilled", value: await worker(rows[index], index) }
+      } catch (reason) {
+        results[index] = { status: "rejected", reason }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, run))
+  return results
+}
+
 function mergeProjects(serverProjects, registeredDirectories) {
   const rows = Array.from(serverProjects ?? [])
   const known = new Set(rows.map((project) => directoryKey(project?.worktree)).filter(Boolean))
@@ -140,8 +160,8 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
 
   const targets = [...directories]
   const [settled, statusSettled] = await Promise.all([
-    Promise.allSettled(targets.map((directory) => listFor(directory))),
-    Promise.allSettled(targets.map((directory) => listStatuses(client, directory))),
+    mapSettledBounded(targets, (directory) => listFor(directory)),
+    mapSettledBounded(targets, (directory) => listStatuses(client, directory)),
   ])
 
   // Merge and de-duplicate: a session reachable from two directories is one
@@ -177,7 +197,7 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
       seen.add(session.id)
       if (candidates.length >= PRESENCE_RECENT_LIMIT) break
     }
-    const messageResults = await Promise.allSettled(candidates.map((session) => listMessages(client, session, 1)))
+    const messageResults = await mapSettledBounded(candidates, (session) => listMessages(client, session, 1))
     messageResults.forEach((result, index) => {
       if (result.status !== "fulfilled") return
       const session = candidates[index]
@@ -208,7 +228,7 @@ async function loadPresence(api, projects, sessions, activeSessionID = null, rot
     if (worktree) directories.add(worktree)
   }
 
-  const statusResults = await Promise.allSettled([...directories].map((directory) => listStatuses(client, directory)))
+  const statusResults = await mapSettledBounded([...directories], (directory) => listStatuses(client, directory))
   const live = {}
   for (const result of statusResults) {
     if (result.status === "fulfilled") Object.assign(live, result.value ?? {})
@@ -237,7 +257,7 @@ async function loadPresence(api, projects, sessions, activeSessionID = null, rot
   }
 
   const durable = {}
-  const messageResults = await Promise.allSettled(candidates.map((session) => listMessages(client, session, 1)))
+  const messageResults = await mapSettledBounded(candidates, (session) => listMessages(client, session, 1))
   messageResults.forEach((result, index) => {
     if (result.status !== "fulfilled") return
     const session = candidates[index]
@@ -281,6 +301,7 @@ export function createProjectStore(api) {
   let debounce = null
   let presenceInFlight = false
   let presenceQueued = false
+  let presenceDebounce = null
   let presenceRotation = 0
   let disposed = false
 
@@ -328,6 +349,15 @@ export function createProjectStore(api) {
     }, REFRESH_DEBOUNCE_MS)
   }
 
+  function schedulePresence() {
+    if (disposed) return
+    if (presenceDebounce) clearTimeout(presenceDebounce)
+    presenceDebounce = setTimeout(() => {
+      presenceDebounce = null
+      void refreshPresence()
+    }, PRESENCE_EVENT_DEBOUNCE_MS)
+  }
+
   async function refreshPresence() {
     if (disposed || !store.sessions.length) return
     if (presenceInFlight) {
@@ -346,7 +376,7 @@ export function createProjectStore(api) {
       presenceInFlight = false
       if (presenceQueued && !disposed) {
         presenceQueued = false
-        void refreshPresence()
+        schedulePresence()
       }
     }
   }
@@ -375,7 +405,7 @@ export function createProjectStore(api) {
   }
   for (const event of PRESENCE_EVENTS) {
     try {
-      const off = api?.event?.on?.(event, refreshPresence)
+      const off = api?.event?.on?.(event, schedulePresence)
       if (typeof off === "function") offs.push(off)
     } catch {
       // Local reactive state remains available even without this event.
@@ -397,6 +427,7 @@ export function createProjectStore(api) {
     clearInterval(structuralTimer)
     clearInterval(presenceTimer)
     if (debounce) clearTimeout(debounce)
+    if (presenceDebounce) clearTimeout(presenceDebounce)
     for (const off of offs) {
       try {
         off()

@@ -129,8 +129,8 @@ export function SettingsView(props) {
             <box flexDirection="column" gap={1}>
               <SectionLabel tokens={tokens()} title="OPTIMIZED INSTRUCTIONS" meta="owned and reversible" />
               <ToggleRow tokens={tokens()} label="Use Alonix operating instructions" value={draft().instructions.enabled} onChange={(value) => update(["instructions", "enabled"], value)} />
-              <text fg={tokens().muted} wrapMode="wrap">Alonix writes its exact instruction profile to <b>~/.config/opencode/alonix/AGENTS.md</b> and manages one reference in <b>opencode.json.instructions</b>. Your existing AGENTS.md text is never overwritten or marker-edited.</text>
-              <text fg={tokens().faint} wrapMode="wrap">Turning this off removes only the owned reference and owned file.</text>
+              <text fg={tokens().muted} wrapMode="wrap">Alonix places its exact optimized-tool profile between clearly named START / END markers inside <b>~/.config/opencode/AGENTS.md</b>. Every byte outside that owned block remains yours.</text>
+              <text fg={tokens().faint} wrapMode="wrap">Turning this off removes only the marked Alonix block. Turning it back on restores the block without duplicating it.</text>
             </box>
           </Show>
 
@@ -142,8 +142,8 @@ export function SettingsView(props) {
               <ToggleRow tokens={tokens()} label="Protect recent turns" value={draft().dcp.turnProtection} onChange={(value) => update(["dcp", "turnProtection"], value)} />
               <ToggleRow tokens={tokens()} label="Deduplicate context" value={draft().dcp.deduplication} onChange={(value) => update(["dcp", "deduplication"], value)} />
               <ToggleRow tokens={tokens()} label="Purge old errors" value={draft().dcp.purgeErrors} onChange={(value) => update(["dcp", "purgeErrors"], value)} />
-              <TextInput tokens={tokens()} label="Minimum context limit" value={String(draft().dcp.minContextLimit)} onInput={(value) => update(["dcp", "minContextLimit"], value)} />
-              <TextInput tokens={tokens()} label="Maximum context limit" value={String(draft().dcp.maxContextLimit)} onInput={(value) => update(["dcp", "maxContextLimit"], value)} />
+              <TextInput tokens={tokens()} label="Minimum context limit" value={String(draft().dcp.minContextLimit)} hint="Keep percentages such as 50%, or use an absolute token count." onInput={(value) => update(["dcp", "minContextLimit"], value)} />
+              <TextInput tokens={tokens()} label="Maximum context limit" value={String(draft().dcp.maxContextLimit)} hint="Keep percentages such as 60%, or use an absolute token count." onInput={(value) => update(["dcp", "maxContextLimit"], value)} />
               <text fg={tokens().faint} wrapMode="wrap">No model or provider preference is managed here. DCP remains optional and uses its own dcp.jsonc file.</text>
             </box>
           </Show>
