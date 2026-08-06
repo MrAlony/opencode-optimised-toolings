@@ -27,5 +27,7 @@ test("local release enforces immutable tags, complete tests, hidden OTP, and reg
   assert.match(source, /--provenance=false/);
   assert.match(source, /registry\.integrity !== packed\.integrity/);
   assert.match(source, /expectedTools = 17/);
+  assert.match(source, /npmCli = process\.env\.npm_execpath/);
+  assert.match(source, /process\.execPath/);
   assert.doesNotMatch(source, /actions\/checkout|runs-on|workflow_dispatch/);
 });

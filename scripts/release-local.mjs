@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const packageName = "opencode-optimised-toolings";
 const expectedTools = 17;
+const npmCli = process.env.npm_execpath;
 const forbiddenEntry = /(^|\/)(test|runtime|\.venv|venv|backups?)(\/|$)|secrets\.local|worker\.py|requirements\.txt/i;
 
 function fail(message) {
@@ -18,7 +19,9 @@ function fail(message) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const executable = command === "npm" && npmCli ? process.execPath : command;
+  const executableArgs = command === "npm" && npmCli ? [npmCli, ...args] : args;
+  const result = spawnSync(executable, executableArgs, {
     cwd: options.cwd ?? root,
     env: options.env ?? process.env,
     encoding: options.capture ? "utf8" : undefined,
