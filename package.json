@@ -32,7 +32,7 @@
   ],
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "provenance": false
   },
   "workspaces": [
     "packages/filesystem",
@@ -87,7 +87,8 @@
     "doctor": "node scripts/doctor.mjs",
     "verify:shareable": "node scripts/verify-shareable.mjs",
     "services": "node scripts/services.mjs",
-    "setup": "node scripts/setup.mjs"
+    "setup": "node scripts/setup.mjs",
+    "release:local": "node scripts/release-local.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

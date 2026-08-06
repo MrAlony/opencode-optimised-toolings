@@ -23,3 +23,5 @@ packages/web/config.local.json
 .DS_Store
 Thumbs.db
 runtime/
+.release/
+*.tgz.sha512

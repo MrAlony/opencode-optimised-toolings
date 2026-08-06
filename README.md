@@ -67,9 +67,9 @@ Development mode keeps mutable runtime state inside the checkout and keeps file-
 
 ## Publishing and security
 
-The npm tarball uses a runtime-only allowlist. Tests, virtual environments, generated runtime state, local secrets, service source trees, and repository metadata are excluded. Publishing is intentionally separate from implementation because npm authentication, provenance, and one-time-password approval are security-sensitive actions.
+Releases are built and published locally from exact annotated Git tags. This repository does not use GitHub-hosted runners, self-hosted runners, or CI runners for npm publication. `npm run release:local -- --tag vX.Y.Z --publish` runs the complete tests, builds generated assets, audits the runtime-only tarball, verifies a clean consumer, prompts invisibly for npm 2FA, publishes the exact tarball, and checks registry integrity. See `docs/RELEASE_RECOVERY.md`.
 
-Tor downloads use official Tor Project archives with pinned platform-specific checksums. Private/local destinations remain blocked by default in web and stealth fetchers unless `allow_private=true` is deliberately set.
+The npm tarball uses a runtime-only allowlist. Tests, virtual environments, generated runtime state, local secrets, service source trees, and repository metadata are excluded. Tor downloads use official Tor Project archives with pinned platform-specific checksums. Private/local destinations remain blocked by default in web and stealth fetchers unless `allow_private=true` is deliberately set.
 
 ## License
 
