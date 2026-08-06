@@ -7,7 +7,8 @@
 // the project only after the first message creates the session, so this validates
 // the directory and hands it to the caller without creating an empty chat.
 
-import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
+import { createDeferred, createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
 import { classifyKey, moveIndex } from "../lib/keys.js"
 import { fit, fitLeft } from "../lib/layout.js"
@@ -16,6 +17,7 @@ import {
   breadcrumbs,
   browseModel,
   commonRoots,
+  folderWindow,
   homeOf,
   joinPath,
   normalizePath,
@@ -91,8 +93,21 @@ export function ProjectAdd(props) {
   const [index, setIndex] = createSignal(0)
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal("")
+  const dimensions = useTerminalDimensions()
+  const deferredTyped = createDeferred(typed, { timeoutMs: 60 })
+  const listingCache = new Map()
 
-  const [listing] = createResource(directory, (dir) => listDirectory(props.api, dir))
+  const cachedListing = (dir) => {
+    const key = normalizePath(dir)
+    const cached = listingCache.get(key)
+    if (cached) return cached
+    const request = listDirectory(props.api, key)
+    listingCache.set(key, request)
+    if (listingCache.size > 48) listingCache.delete(listingCache.keys().next().value)
+    return request
+  }
+
+  const [listing] = createResource(directory, cachedListing)
 
   const known = createMemo(() => (props.projects?.() ?? []).map((project) => project.worktree))
 
@@ -102,7 +117,7 @@ export function ProjectAdd(props) {
       entries: listing()?.entries ?? [],
       knownProjects: known(),
       isProject: listing()?.isProject === true,
-      query: typed(),
+      query: deferredTyped(),
     }),
   )
 
@@ -112,6 +127,13 @@ export function ProjectAdd(props) {
   })
 
   const width = () => Math.max(30, Number(props.width) || 90)
+  // The host dialog starts one quarter down the terminal, leaving roughly 75%
+  // of its rows. Budget every fixed control explicitly so the folder viewport
+  // can never make the dialog taller than the remaining screen.
+  const panelHeight = createMemo(() => Math.max(12, Math.floor(dimensions().height * 0.75) - 2))
+  const compact = createMemo(() => panelHeight() < 30)
+  const listHeight = createMemo(() => Math.max(3, Math.min(14, panelHeight() - (compact() ? 9 : 27))))
+  const visible = createMemo(() => folderWindow(model().entries, index(), listHeight()))
 
   // Offer a shortcut only when the listing proves the folder exists, so the
   // picker never advertises a dead end.
@@ -175,7 +197,7 @@ export function ProjectAdd(props) {
       return
     }
     if (["up", "down", "page-up", "page-down", "first", "last"].includes(action)) {
-      setIndex((current) => moveIndex(current, model().entries.length, action, 10))
+      setIndex((current) => moveIndex(current, model().entries.length, action, listHeight()))
       return
     }
   }
@@ -187,6 +209,9 @@ export function ProjectAdd(props) {
       paddingRight={2}
       paddingBottom={1}
       gap={1}
+      height={panelHeight()}
+      maxHeight={panelHeight()}
+      overflow="hidden"
     >
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
         <text fg={tokens().accent} wrapMode="none" selectable={false}>
@@ -208,13 +233,13 @@ export function ProjectAdd(props) {
         Typing a path from memory is the worst way to choose a folder, so the
         usual destinations are one click away before any browsing starts.
       */}
-      <Show when={shortcuts().length}>
-        <box flexDirection="column" flexShrink={0} gap={1}>
+      <Show when={!compact() && shortcuts().length}>
+        <box flexDirection="column" flexShrink={0} height={3} gap={1} overflow="hidden">
           <text fg={tokens().faint} wrapMode="none" selectable={false}>
             JUMP TO
           </text>
           <box flexDirection="row" flexShrink={0} gap={1} flexWrap="wrap">
-            <For each={shortcuts()}>
+            <For each={shortcuts().slice(0, 5)}>
               {(root) => (
                 <Button
                   tokens={tokens()}
@@ -230,6 +255,7 @@ export function ProjectAdd(props) {
         </box>
       </Show>
 
+      <Show when={!compact()}>
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
         <Button
           tokens={tokens()}
@@ -256,18 +282,21 @@ export function ProjectAdd(props) {
           )}
         </For>
       </box>
+      </Show>
 
-      <TextInput
-        tokens={tokens()}
-        label="Folder path"
-        glyph={GLYPH.square}
-        value={pathDraft()}
-        placeholder="Paste or type a folder path"
-        autoFocus
-        onInput={setPathDraft}
-        onSubmit={(value) => enter(value)}
-        hint="Press Enter to open this path"
-      />
+      <Show when={!compact()}>
+        <TextInput
+          tokens={tokens()}
+          label="Folder path"
+          glyph={GLYPH.square}
+          value={pathDraft()}
+          placeholder="Paste or type a folder path"
+          autoFocus
+          onInput={setPathDraft}
+          onSubmit={(value) => enter(value)}
+          hint="Press Enter to open this path"
+        />
+      </Show>
 
       <TextInput
         tokens={tokens()}
@@ -275,6 +304,7 @@ export function ProjectAdd(props) {
         glyph={GLYPH.pointer}
         value={typed()}
         placeholder="Type part of a folder name"
+        autoFocus={compact()}
         onInput={(value) => {
           setTyped(value)
           setIndex(0)
@@ -293,8 +323,11 @@ export function ProjectAdd(props) {
         </text>
       </Show>
 
-      <box flexDirection="column" flexGrow={1} minHeight={8}>
-        <SectionLabel tokens={tokens()} meta={`${model().entries.length} folders · scroll to browse`}>
+      <box flexDirection="column" flexShrink={0} height={listHeight() + 1} minHeight={6} overflow="hidden">
+        <SectionLabel
+          tokens={tokens()}
+          meta={model().entries.length ? `${visible().start + 1}-${visible().end} of ${model().entries.length} · wheel or ↑↓` : "wheel or ↑↓"}
+        >
           Folders
         </SectionLabel>
         <Show
@@ -307,46 +340,69 @@ export function ProjectAdd(props) {
             />
           }
         >
-          <scrollbox flexGrow={1} minHeight={8} stickyScroll={false}>
-          <For each={model().entries}>
-            {(entry, position) => (
-              <box
-                flexDirection="row"
-                flexShrink={0}
-                height={1}
-                gap={1}
-                paddingLeft={1}
-                backgroundColor={position() === index() ? tokens().selectionStrong : undefined}
-                onMouseUp={() => enter(entry.path)}
-                onMouseMove={() => setIndex(position())}
-                onMouseDown={() => setIndex(position())}
-              >
-                <text fg={entry.added ? tokens().success : tokens().faint} wrapMode="none" selectable={false}>
-                  {entry.added ? GLYPH.ok : GLYPH.caretRight}
-                </text>
-                <text fg={tokens().text} wrapMode="none" selectable={false}>
-                  {fit(entry.name, width() - 22)}
-                </text>
-                <box flexGrow={1} />
-                <Show when={entry.added}>
-                  <text fg={tokens().faint} wrapMode="none" selectable={false}>
-                    already added
-                  </text>
-                </Show>
-              </box>
-            )}
-          </For>
-          </scrollbox>
+          <box
+            flexDirection="column"
+            flexShrink={0}
+            height={listHeight()}
+            overflow="hidden"
+            focusable
+            onKeyDown={handleKey}
+            onMouseScroll={(event) => {
+              event?.preventDefault?.()
+              event?.stopPropagation?.()
+              const direction = event?.scroll?.direction
+              if (direction !== "up" && direction !== "down") return
+              const step = Math.max(1, Math.min(4, Math.round(Number(event?.scroll?.delta) || 3)))
+              setIndex((current) => {
+                const last = Math.max(0, model().entries.length - 1)
+                return direction === "down" ? Math.min(last, current + step) : Math.max(0, current - step)
+              })
+            }}
+          >
+            <For each={visible().entries}>
+              {(entry, position) => {
+                const absolute = () => visible().start + position()
+                return (
+                  <box
+                    flexDirection="row"
+                    flexShrink={0}
+                    height={1}
+                    width="100%"
+                    gap={1}
+                    paddingLeft={1}
+                    backgroundColor={absolute() === index() ? tokens().selectionStrong : undefined}
+                    onMouseUp={() => enter(entry.path)}
+                    onMouseMove={() => setIndex(absolute())}
+                  >
+                    <text fg={entry.added ? tokens().success : tokens().faint} wrapMode="none" selectable={false}>
+                      {entry.added ? GLYPH.ok : GLYPH.caretRight}
+                    </text>
+                    <text fg={tokens().text} wrapMode="none" selectable={false}>
+                      {fit(entry.name, width() - 22)}
+                    </text>
+                    <box flexGrow={1} />
+                    <Show when={entry.added}>
+                      <text fg={tokens().faint} wrapMode="none" selectable={false}>
+                        already added
+                      </text>
+                    </Show>
+                  </box>
+                )
+              }}
+            </For>
+          </box>
         </Show>
       </box>
 
-      <Rule tokens={tokens()} />
+      <Show when={!compact()}>
+        <Rule tokens={tokens()} />
+      </Show>
 
-      <box flexDirection="row" flexShrink={0} height={3} gap={2} alignItems="center">
+      <box flexDirection="row" flexShrink={0} height={compact() ? 1 : 3} gap={compact() ? 1 : 2} alignItems="center">
         <Button
           tokens={tokens()}
           variant="primary"
-          size="lg"
+          size={compact() ? "sm" : "lg"}
           glyph={GLYPH.plus}
           description={model().alreadyAdded ? "This folder is already in your list" : "Adds it to your folders"}
           disabled={!model().canAdd || busy()}
@@ -354,6 +410,7 @@ export function ProjectAdd(props) {
         >
           {model().alreadyAdded ? "Already added" : `Use ${fit(baseName(directory()) || "this folder", 20)}`}
         </Button>
+        <Show when={!compact()}>
         <box flexDirection="column" flexGrow={1} minWidth={0}>
           <text fg={model().isProject ? tokens().success : tokens().muted} wrapMode="none" selectable={false}>
             {model().isProject ? `${GLYPH.ok} Project files detected` : "Any folder can be added"}
@@ -362,12 +419,15 @@ export function ProjectAdd(props) {
             The folder appears immediately; the chat is created after your first message.
           </text>
         </box>
-        <Button tokens={tokens()} variant="ghost" onPress={() => props.onClose?.()}>
+        </Show>
+        <Button tokens={tokens()} variant="ghost" size={compact() ? "sm" : "md"} onPress={() => props.onClose?.()}>
           Cancel
         </Button>
       </box>
 
-      <KeyHints tokens={tokens()} hints={HINTS} />
+      <Show when={!compact()}>
+        <KeyHints tokens={tokens()} hints={HINTS} />
+      </Show>
     </box>
   )
 }

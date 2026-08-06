@@ -207,8 +207,33 @@ test("session events trigger a debounced refresh", async () => {
     handler()
     handler()
     handler()
-    await new Promise((resolve) => setTimeout(resolve, 220))
+    await new Promise((resolve) => setTimeout(resolve, 320))
     assert.equal(api.calls.projectList, before + 1, "a burst of events collapses into one reload")
+  })
+})
+
+test("streaming token events never trigger a portfolio-wide reload", async () => {
+  const api = createApi()
+  await withStore(api, async () => {
+    const before = api.calls.projectList
+    assert.equal(api.listeners.has("message.part.updated"), false, "token events must stay on the host's local reactive path")
+    assert.equal(api.listeners.has("message.updated"), false)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(api.calls.projectList, before)
+  })
+})
+
+test("presence events use lightweight reconciliation instead of listing every session", async () => {
+  const api = createApi()
+  await withStore(api, async () => {
+    const beforeProjects = api.calls.projectList
+    const beforeStatuses = api.calls.statusList
+    const handler = api.listeners.get("session.status")
+    assert.ok(handler)
+    handler()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(api.calls.projectList, beforeProjects, "presence changes must not reload project/session structure")
+    assert.ok(api.calls.statusList > beforeStatuses)
   })
 })
 

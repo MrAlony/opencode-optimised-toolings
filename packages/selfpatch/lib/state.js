@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 
 export const STATUS_ORDER = [
   "idle",
@@ -52,11 +52,32 @@ export function patchedBinaryPath(root, version) {
   return path.join(runtimeDir(root), "patched", base)
 }
 
+export const STATE_STALE_AFTER_MS = 10 * 60 * 1000
+
+export function sanitizeStoredState(state, now = Date.now()) {
+  const merged = { ...defaultState(), ...(state && typeof state === "object" ? state : {}) }
+  const timestamp = typeof merged.updatedAt === "number" ? merged.updatedAt : Date.parse(String(merged.updatedAt ?? ""))
+  const stale = Number.isFinite(timestamp) && now - timestamp > STATE_STALE_AFTER_MS
+  const legacyRelativePathFailure =
+    merged.status === "error" &&
+    !merged.binaryPath &&
+    !merged.version &&
+    /ENOENT[\s\S]*open ['"]opencode['"]/.test(String(merged.lastError ?? ""))
+  if (legacyRelativePathFailure || (stale && ["idle", "dev-mode", "no-opencode", "error"].includes(merged.status))) {
+    return {
+      ...defaultState(),
+      status: "idle",
+      stepLabel: "Refreshing OpenCode enhancement status",
+      updatedAt: merged.updatedAt,
+    }
+  }
+  return merged
+}
+
 export async function readState(root) {
   try {
     const text = await fs.readFile(stateFile(root), "utf8")
-    const parsed = JSON.parse(text)
-    return { ...defaultState(), ...parsed }
+    return sanitizeStoredState(JSON.parse(text))
   } catch {
     return defaultState()
   }
@@ -94,7 +115,7 @@ export async function writeState(root, state) {
 
     // A unique suffix keeps concurrent writers, and stale temp files from a
     // previous crash, from colliding.
-    const tmp = path.join(dir, `.selfpatch-state-${process.pid}-${Date.now()}-${attempt}.tmp`)
+    const tmp = path.join(dir, `.selfpatch-state-${process.pid}-${randomUUID()}-${attempt}.tmp`)
     try {
       await fs.writeFile(tmp, body, { encoding: "utf8", mode: 0o600 })
       await fs.rename(tmp, file)

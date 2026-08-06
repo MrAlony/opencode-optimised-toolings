@@ -303,6 +303,7 @@ const tui: TuiPlugin = async (api, options) => {
     api.ui.dialog.replace(() => (
       <ClockProvider clock={clock}>
         <ProjectAdd
+          width={84}
           api={api}
           tokens={tokens}
           initialDirectory={(() => {

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { defaultState, readState, sha256File, stateSummary, writeState } from "../lib/state.js"
+import { defaultState, readState, sanitizeStoredState, sha256File, stateSummary, writeState } from "../lib/state.js"
 import {
   applyManifest,
   manifestCompatible,
@@ -73,6 +73,19 @@ test("dev-runtime classification covers node, bun, and deno hosts", () => {
   for (const real of ["opencode", "opencode.exe", "/usr/local/bin/opencode"]) {
     assert.equal(isDevRuntime(real), false, `${real} must not be a dev runtime`)
   }
+})
+
+test("stale detector errors expire instead of surviving across launches", () => {
+  const stale = sanitizeStoredState({
+    status: "error",
+    binaryPath: null,
+    lastError: "ENOENT: no such file or directory, open 'opencode'",
+    updatedAt: new Date().toISOString(),
+  })
+  assert.equal(stale.status, "idle")
+  assert.equal(stale.lastError, null)
+  assert.equal(stale.binaryPath, null)
+  assert.match(stale.stepLabel, /Refreshing/)
 })
 
 test("state defaults merge and atomic persistence", async () => {
@@ -304,7 +317,6 @@ test("an existing but partial source cache is not considered ready", async () =>
       "packages/plugin/src/tui.ts",
       "packages/tui/src/app.tsx",
       "packages/tui/src/plugin/adapters.tsx",
-      "packages/tui/src/context/sync.tsx",
       "packages/tui/src/routes/session/index.tsx",
     ]) {
       const target = join(root, file)
@@ -353,7 +365,7 @@ test("v1.18.13 patch exposes a native deferred session draft without creating se
   }
 })
 
-test("v1.18.13 patch is limited to renderer plumbing, transcript reconciliation, deferred drafts, tool recovery, and one layout slot", () => {
+test("v1.18.13 patch is limited to renderer plumbing, deferred drafts, tool recovery, and one layout slot", () => {
   // Every host file patched here is a maintenance cost on each OpenCode
   // upgrade, so the set stays explicit and small.
   const paths = patchManifest.files.map((file) => file.path)
@@ -366,7 +378,6 @@ test("v1.18.13 patch is limited to renderer plumbing, transcript reconciliation,
     // panel is the only alternative and it covers the transcript instead of
     // sitting beside it.
     "packages/tui/src/app.tsx",
-    "packages/tui/src/context/sync.tsx",
     "packages/tui/src/plugin/adapters.tsx",
     "packages/tui/src/routes/home/session-destination.tsx",
     "packages/tui/src/routes/session/index.tsx",
@@ -411,27 +422,11 @@ test("the app_left slot is declared in the public plugin types", () => {
   assert.match(replaced, /app_left: \{\}/, "plugins must be able to target the new slot in a typed way")
 })
 
-test("v1.18.13 patch reconciles the visible transcript across processes without clobbering live deltas", () => {
-  const files = new Map(patchManifest.files.map((file) => [file.path, file]))
-  const sync = files.get("packages/tui/src/context/sync.tsx")
-  const session = files.get("packages/tui/src/routes/session/index.tsx")
-  assert.ok(sync, "host sync ownership must support authoritative refresh")
-  assert.ok(session, "the visible chat route must schedule reconciliation")
-
-  const syncSource = sync.replacements.map((item) => item.replace).join("\n")
-  assert.match(syncSource, /options: \{ force\?: boolean; transcriptOnly\?: boolean \} = \{\}/)
-  assert.match(syncSource, /fullSyncedSessions\.has\(sessionID\) && !options\.force/)
-  assert.match(syncSource, /hydratingSessions\.set\(sessionID, tracker\)/)
-  assert.match(syncSource, /options\.transcriptOnly/)
-  assert.match(syncSource, /sdk\.client\.session\.messages\(\{ sessionID, limit: 100 \}\)/)
-  assert.match(syncSource, /!visibleIDs\.has\(message\.id\) && !tracker\.messages\.has\(message\.id\)/, "persisted deletions must remove stale local part records")
-
-  const routeSource = session.replacements.map((item) => item.replace).join("\n")
-  assert.match(routeSource, /sync\.session\.sync\(sessionID, \{ force: true \}\)/)
-  assert.match(routeSource, /sync\.session\.sync\(sessionID, \{ force: true, transcriptOnly: true \}\)/)
-  assert.match(routeSource, /=== "working" \? 1250 : 5000/)
-  assert.match(routeSource, /onCleanup\(\(\) =>/)
-  assert.doesNotMatch(routeSource, /setInterval/, "adaptive recursive timeout avoids overlapping fixed polling")
+test("v1.18.13 patch leaves native transcript synchronization untouched", () => {
+  const source = JSON.stringify(patchManifest)
+  assert.equal(patchManifest.files.some((file) => file.path === "packages/tui/src/context/sync.tsx"), false)
+  assert.doesNotMatch(source, /transcriptOnly|active transcript cross-process reconciliation|adaptive visible transcript refresh loop/)
+  assert.doesNotMatch(source, /sync\.session\.sync\(sessionID, \{ force: true/)
 })
 
 test("v1.18.13 patch terminalizes only unfinished tools at a newly owned loop boundary", () => {

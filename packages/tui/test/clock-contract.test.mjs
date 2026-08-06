@@ -160,11 +160,20 @@ test("the sidebar exposes a bounded full-width recent chats section", async () =
   assert.match(dock, /if \(row\.projectID\) store\.selectProject\?\.\(row\.projectID\)/)
 })
 
-test("folder picker lists every folder inside a scrollbox", async () => {
+test("folder picker is height-bounded, wheel-scrollable, and virtualized", async () => {
   const picker = await source("components/project-add.jsx")
-  assert.match(picker, /<scrollbox flexGrow=\{1\} minHeight=\{8\}/)
-  assert.match(picker, /<For each=\{model\(\)\.entries\}>/)
-  assert.doesNotMatch(picker, /entries\.slice\(0, 12\)/)
+  assert.match(picker, /height=\{panelHeight\(\)\}/)
+  assert.match(picker, /panelHeight\(\) - \(compact\(\) \? 9 : 27\)/, "fixed dialog chrome must be deducted from the list viewport")
+  assert.match(picker, /height=\{compact\(\) \? 1 : 3\}/, "compact actions must consume one row, not overflow with large buttons")
+  assert.match(picker, /autoFocus=\{compact\(\)\}/, "compact mode must focus the visible filter instead of a hidden path field")
+  assert.match(picker, /<Show when=\{!compact\(\)\}>[\s\S]*label="Folder path"/, "short terminals must remove optional rows rather than overflow")
+  assert.match(picker, /maxHeight=\{panelHeight\(\)\}/)
+  assert.match(picker, /overflow="hidden"/)
+  assert.match(picker, /onMouseScroll=/)
+  assert.match(picker, /<For each=\{visible\(\)\.entries\}>/)
+  assert.doesNotMatch(picker, /<For each=\{model\(\)\.entries\}>/, "large directories must not mount every row")
+  assert.match(picker, /createDeferred\(typed, \{ timeoutMs: 60 \}\)/, "filtering must yield to pointer and paint work")
+  assert.match(picker, /listingCache\.size > 48/, "backtracking must reuse bounded directory results")
 })
 
 test("no control acts on mouse-down", async () => {

@@ -75,9 +75,10 @@ test("a stale temp file from a previous crash does not block a write", async () 
 test("concurrent writers do not corrupt the document", async () => {
   const root = await tempRoot()
   try {
-    await Promise.all(
-      Array.from({ length: 12 }, (_, index) => writeState(root, { status: "building", progressPercent: index })),
+    const writes = await Promise.all(
+      Array.from({ length: 64 }, (_, index) => writeState(root, { status: "building", progressPercent: index })),
     )
+    assert.ok(writes.every(Boolean), "every concurrent atomic write must complete")
     // Whichever write landed last, the file must still be valid JSON.
     const state = await readState(root)
     assert.equal(state.status, "building")

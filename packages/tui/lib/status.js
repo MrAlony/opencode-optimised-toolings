@@ -46,23 +46,46 @@ export function statePathForRoot(root) {
   return path.join(root, "runtime", "selfpatch-state.json")
 }
 
+const WAITING_STATE = { status: "idle", stepLabel: "Waiting for the self-patch controller", progressPercent: 0, lastError: null, logTail: "" }
+
+export const STALE_AFTER_MS = 2 * 60 * 1000
+
+export function sanitizeToolingState(state, now = Date.now()) {
+  if (!state || typeof state !== "object") return { ...WAITING_STATE }
+  const value = state.updatedAt
+  const timestamp = typeof value === "number" ? value : Date.parse(String(value ?? ""))
+  const stale = Number.isFinite(timestamp) && now - timestamp > STALE_AFTER_MS
+  const legacyRelativePathFailure =
+    state.status === "error" &&
+    !state.binaryPath &&
+    !state.version &&
+    /ENOENT[\s\S]*open ['"]opencode['"]/.test(String(state.lastError ?? ""))
+  if (legacyRelativePathFailure || (stale && ["idle", "dev-mode", "no-opencode", "error"].includes(state.status))) {
+    return {
+      ...WAITING_STATE,
+      status: "idle",
+      stepLabel: "Refreshing OpenCode enhancement status",
+      updatedAt: state.updatedAt,
+    }
+  }
+  return state
+}
+
 export function readStateSync(file) {
   try {
-    return JSON.parse(fsSync.readFileSync(file, "utf8"))
+    return sanitizeToolingState(JSON.parse(fsSync.readFileSync(file, "utf8")))
   } catch {
-    return { status: "idle", stepLabel: "Waiting for the self-patch controller", progressPercent: 0, lastError: null, logTail: "" }
+    return { ...WAITING_STATE }
   }
 }
 
 export async function readStateFile(file) {
   try {
-    return JSON.parse(await fsPromises.readFile(file, "utf8"))
+    return sanitizeToolingState(JSON.parse(await fsPromises.readFile(file, "utf8")))
   } catch {
-    return { status: "idle", stepLabel: "Waiting for the self-patch controller", progressPercent: 0, lastError: null, logTail: "" }
+    return { ...WAITING_STATE }
   }
 }
-
-export const STALE_AFTER_MS = 2 * 60 * 1000
 
 export function isStale(state, now = Date.now()) {
   const value = state?.updatedAt
@@ -88,7 +111,7 @@ export function indicatorFor(state, evidence = {}) {
       ? { level: "warn", text: "Patched binary active", detail: "Rich renderers are active; a later background maintenance check failed" }
       : { level: "ok", text: "Patched binary active", detail: "Rich tool renderers active" }
   }
-  if (isStale(state) && ["idle", "dev-mode", "no-opencode"].includes(state?.status)) {
+  if (isStale(state) && ["idle", "dev-mode", "no-opencode", "error"].includes(state?.status)) {
     return { level: "info", text: "Tooling self-patch: checking…", detail: "No fresh status record from the running OpenCode process yet" }
   }
   switch (state?.status) {

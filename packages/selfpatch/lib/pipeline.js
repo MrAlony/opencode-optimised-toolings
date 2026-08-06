@@ -271,7 +271,6 @@ const SOURCE_SENTINELS = [
   "packages/plugin/src/tui.ts",
   "packages/tui/src/app.tsx",
   "packages/tui/src/plugin/adapters.tsx",
-  "packages/tui/src/context/sync.tsx",
   "packages/tui/src/routes/session/index.tsx",
 ]
 

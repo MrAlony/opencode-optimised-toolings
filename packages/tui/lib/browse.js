@@ -93,6 +93,27 @@ export function looksLikeProject(entryNames) {
  * dotfiles are hidden by default but reachable, and known-project directories
  * are flagged so the obvious choice is visually obvious.
  */
+export function folderWindow(entries, selected = 0, height = 10) {
+  const rows = Array.from(entries ?? [])
+  const size = rows.length
+  const viewport = Math.max(1, Math.floor(Number(height) || 10))
+  if (!size) return { entries: [], start: 0, end: 0, selected: 0, height: viewport, before: 0, after: 0 }
+
+  const active = Math.max(0, Math.min(size - 1, Math.floor(Number(selected) || 0)))
+  const maxStart = Math.max(0, size - viewport)
+  const start = Math.max(0, Math.min(maxStart, active - Math.floor(viewport / 2)))
+  const end = Math.min(size, start + viewport)
+  return {
+    entries: rows.slice(start, end),
+    start,
+    end,
+    selected: active,
+    height: viewport,
+    before: start,
+    after: size - end,
+  }
+}
+
 export function browseModel(input = {}) {
   const directory = normalizePath(input.directory)
   const query = String(input.query ?? "").trim().toLowerCase()

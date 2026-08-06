@@ -43,8 +43,9 @@ const PANES_KEY = "alonix_monitor_panes"
 const WORKBENCH_KEY = "alonix_workbench_state"
 const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
 const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
-const REFRESH_DEBOUNCE_MS = 150
-const RECONCILE_INTERVAL_MS = 5_000
+const REFRESH_DEBOUNCE_MS = 250
+const STRUCTURAL_RECONCILE_INTERVAL_MS = 30_000
+const PRESENCE_RECONCILE_INTERVAL_MS = 5_000
 const PRESENCE_LIMIT = 16
 const SESSION_LIMIT = 400
 
@@ -195,6 +196,50 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   }
 }
 
+async function loadPresence(api, projects, sessions, activeSessionID = null) {
+  const client = api?.client
+  if (!client || !sessions?.length) return {}
+
+  const directories = new Set([""])
+  for (const project of projects ?? []) {
+    const worktree = String(project?.worktree ?? "").trim()
+    if (worktree) directories.add(worktree)
+  }
+
+  const statusResults = await Promise.allSettled([...directories].map((directory) => listStatuses(client, directory)))
+  const live = {}
+  for (const result of statusResults) {
+    if (result.status === "fulfilled") Object.assign(live, result.value ?? {})
+  }
+
+  const candidates = []
+  const seen = new Set()
+  const active = sessions.find((session) => session.id === activeSessionID)
+  if (active) { candidates.push(active); seen.add(active.id) }
+  for (const session of sessions.toSorted((a, b) => Number(b?.time?.updated ?? 0) - Number(a?.time?.updated ?? 0))) {
+    if (!session?.id || seen.has(session.id)) continue
+    candidates.push(session)
+    seen.add(session.id)
+    if (candidates.length >= PRESENCE_LIMIT) break
+  }
+
+  const durable = {}
+  const messageResults = await Promise.allSettled(candidates.map((session) => listMessages(client, session, 1)))
+  messageResults.forEach((result, index) => {
+    if (result.status !== "fulfilled") return
+    const inferred = durableStatus(result.value)
+    if (inferred) durable[candidates[index].id] = inferred
+  })
+
+  const statuses = {}
+  for (const session of sessions) {
+    if (!session?.id) continue
+    const merged = mergeStatus(live[session.id], durable[session.id])
+    if (merged) statuses[session.id] = merged
+  }
+  return statuses
+}
+
 function errorText(error) {
   if (error instanceof Error) return error.message
   return String(error)
@@ -220,6 +265,8 @@ export function createProjectStore(api) {
   let inFlight = false
   let queued = false
   let debounce = null
+  let presenceInFlight = false
+  let presenceQueued = false
   let disposed = false
 
   async function load() {
@@ -266,41 +313,73 @@ export function createProjectStore(api) {
     }, REFRESH_DEBOUNCE_MS)
   }
 
+  async function refreshPresence() {
+    if (disposed || !store.sessions.length) return
+    if (presenceInFlight) {
+      presenceQueued = true
+      return
+    }
+    presenceInFlight = true
+    try {
+      const next = await loadPresence(api, store.projects, store.sessions, activeSessionID())
+      if (disposed || !Object.keys(next).length) return
+      setStore("statuses", reconcile({ ...store.statuses, ...next }))
+    } catch {
+      // Presence is advisory. Keep the last known state on a transient failure.
+    } finally {
+      presenceInFlight = false
+      if (presenceQueued && !disposed) {
+        presenceQueued = false
+        void refreshPresence()
+      }
+    }
+  }
+
   // Subscribing to only `session.updated` left the sidebar stale: a new session
   // never appeared, and a session that started working kept showing as idle.
   // These are the events that actually change what the sidebar displays.
-  const WATCHED_EVENTS = [
+  const STRUCTURAL_EVENTS = [
     "session.created",
     "session.updated",
     "session.deleted",
-    "session.idle",
-    "session.status",
-    "session.error",
-    "session.diff",
     "session.compacted",
-    "message.updated",
-    "message.part.updated",
     "project.updated",
     "project.directories.updated",
   ]
+  const PRESENCE_EVENTS = ["session.idle", "session.status", "session.error", "session.diff"]
 
   const offs = []
-  for (const event of WATCHED_EVENTS) {
+  for (const event of STRUCTURAL_EVENTS) {
     try {
       const off = api?.event?.on?.(event, refresh)
       if (typeof off === "function") offs.push(off)
     } catch {
-      // Unknown event names are ignored; the initial load still populates.
+      // Unknown event names are ignored; periodic reconciliation still covers them.
     }
   }
+  for (const event of PRESENCE_EVENTS) {
+    try {
+      const off = api?.event?.on?.(event, refreshPresence)
+      if (typeof off === "function") offs.push(off)
+    } catch {
+      // Local reactive state remains available even without this event.
+    }
+  }
+  // Streaming message events are intentionally not subscribed here. The host's
+  // reactive session state updates this process immediately; reloading every
+  // project on every token caused the entire IDE to stutter.
 
-  const reconcileTimer = setInterval(() => {
+  const structuralTimer = setInterval(() => {
     if (!disposed) void load()
-  }, RECONCILE_INTERVAL_MS)
+  }, STRUCTURAL_RECONCILE_INTERVAL_MS)
+  const presenceTimer = setInterval(() => {
+    if (!disposed) void refreshPresence()
+  }, PRESENCE_RECONCILE_INTERVAL_MS)
 
   onCleanup(() => {
     disposed = true
-    clearInterval(reconcileTimer)
+    clearInterval(structuralTimer)
+    clearInterval(presenceTimer)
     if (debounce) clearTimeout(debounce)
     for (const off of offs) {
       try {
@@ -425,6 +504,7 @@ export function createProjectStore(api) {
     summary,
     activeSessionID,
     refresh,
+    refreshPresence,
     reload: load,
 
     selectProject(project) {

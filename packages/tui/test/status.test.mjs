@@ -10,6 +10,7 @@ import {
   indicatorFor,
   isStale,
   readStateSync,
+  sanitizeToolingState,
   rootFromModule,
   statePathForRoot,
   toastForTransition,
@@ -109,6 +110,17 @@ test("root discovery climbs to the tooling package.json", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("stale path-resolution failures are suppressed until the controller refreshes", () => {
+  const state = sanitizeToolingState({
+    status: "error",
+    lastError: "ENOENT: no such file or directory, open 'opencode'",
+    updatedAt: new Date().toISOString(),
+  })
+  assert.equal(state.status, "idle")
+  assert.equal(state.lastError, null)
+  assert.match(state.stepLabel, /Refreshing/)
 })
 
 test("readStateSync falls back when the state file is missing", () => {

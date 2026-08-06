@@ -3,10 +3,9 @@
 // ToolPart before the GenericTool fallback, plus the public api.toolRenderers
 // registration surface. The registry is reactive: ToolPart display re-evaluates
 // whenever renderers register, so parts mounted during early/reconnected
-// render paths are not stuck as "generic". It also reconciles the actively viewed
-// transcript across OpenCode processes and recovers persisted pending or running
-// tool parts when a new session-loop generation proves their former in-memory
-// runner no longer exists.
+// render paths are not stuck as "generic". It also recovers persisted pending or
+// running tool parts when a new session-loop generation proves their former
+// in-memory runner no longer exists.
 export const manifest = {
   version: "1.18.13",
   create: [
@@ -149,107 +148,6 @@ function InlineTool(props: {`,
     void pluginToolRendererVersion()
     return toolDisplay(props.part.tool)
   })`,
-        },
-        {
-          name: "active transcript cross-process reconciliation",
-          search: `      editor.reconnect(result.data.directory)
-      await sync.session.sync(sessionID)
-      if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
-    })().catch((error) => {`,
-          replace: `      editor.reconnect(result.data.directory)
-      await sync.session.sync(sessionID, { force: true })
-      if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
-    })().catch((error) => {`,
-        },
-        {
-          name: "adaptive visible transcript refresh loop",
-          search: `  })
-
-  let lastSwitch: string | undefined = undefined
-  event.on("message.part.updated", (evt) => {`,
-          replace: `  })
-
-  // Events are process-local on some OpenCode deployments. Reconcile only the
-  // visible transcript from persisted session storage: fast while work is in
-  // progress, slow while idle. sync() preserves live deltas that race the fetch.
-  createEffect(() => {
-    const sessionID = route.sessionID
-    let disposed = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const schedule = (delay: number) => {
-      if (disposed) return
-      timer = setTimeout(async () => {
-        try {
-          await sync.session.sync(sessionID, { force: true, transcriptOnly: true })
-        } catch {
-          // Keep the current transcript and retry; transient remote failures must
-          // never throw the user out of an already-open chat.
-        }
-        if (disposed || route.sessionID !== sessionID) return
-        schedule(sync.session.status(sessionID) === "working" ? 1250 : 5000)
-      }, delay)
-    }
-    schedule(1250)
-    onCleanup(() => {
-      disposed = true
-      if (timer) clearTimeout(timer)
-    })
-  })
-
-  let lastSwitch: string | undefined = undefined
-  event.on("message.part.updated", (evt) => {`,
-        },
-      ],
-    },
-    {
-      path: "packages/tui/src/context/sync.tsx",
-      beforeSha256: "648147d2abee2e01a467eacaf3abf78018ef184e2902ecaa6e3f2242484a8431",
-      replacements: [
-        {
-          name: "forceable race-safe session reconciliation",
-          search: `        async sync(sessionID: string) {
-          if (fullSyncedSessions.has(sessionID)) return
-          const syncing = syncingSessions.get(sessionID)
-          if (syncing) return syncing
-          const tracker = { messages: new Set<string>(), parts: new Set<string>() }
-          hydratingSessions.set(sessionID, tracker)
-          const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
-              sdk.client.session.get({ sessionID }, { throwOnError: true }),
-              sdk.client.session.messages({ sessionID, limit: 100 }),
-              sdk.client.session.todo({ sessionID }),
-              sdk.client.session.diff({ sessionID }),
-            ])`,
-          replace: `        async sync(
-          sessionID: string,
-          options: { force?: boolean; transcriptOnly?: boolean } = {},
-        ) {
-          if (fullSyncedSessions.has(sessionID) && !options.force) return
-          const syncing = syncingSessions.get(sessionID)
-          if (syncing) return syncing
-          const tracker = { messages: new Set<string>(), parts: new Set<string>() }
-          hydratingSessions.set(sessionID, tracker)
-          const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
-              sdk.client.session.get({ sessionID }, { throwOnError: true }),
-              sdk.client.session.messages({ sessionID, limit: 100 }),
-              options.transcriptOnly
-                ? Promise.resolve({ data: store.todo[sessionID] ?? [] })
-                : sdk.client.session.todo({ sessionID }),
-              options.transcriptOnly
-                ? Promise.resolve({ data: store.session_diff[sessionID] ?? [] })
-                : sdk.client.session.diff({ sessionID }),
-            ])`,
-        },
-        {
-          name: "remove stale message part records during reconciliation",
-          search: `                for (const message of removed) delete draft.part[message.id]
-                draft.message[sessionID] = visible`,
-          replace: `                for (const message of removed) delete draft.part[message.id]
-                for (const message of currentMessages) {
-                  if (!visibleIDs.has(message.id) && !tracker.messages.has(message.id)) delete draft.part[message.id]
-                }
-                draft.message[sessionID] = visible`,
         },
       ],
     },

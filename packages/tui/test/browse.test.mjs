@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { commonRoots, homeOf, baseName, breadcrumbs, browseModel, joinPath, looksLikeProject, normalizePath, parentOf } from "../lib/browse.js"
+import { commonRoots, folderWindow, homeOf, baseName, breadcrumbs, browseModel, joinPath, looksLikeProject, normalizePath, parentOf } from "../lib/browse.js"
 
 function dir(name, project = false) {
   return { name, directory: true, project }
@@ -167,6 +167,24 @@ test("breadcrumbs cover the full path and collapse when deep", () => {
   assert.equal(deep[1].path, null, "the ellipsis is not navigable")
 
   assert.deepEqual(breadcrumbs(""), [])
+})
+
+test("large folder listings render through a bounded moving window", () => {
+  const entries = Array.from({ length: 10_000 }, (_, index) => ({ name: `folder-${index}` }))
+  const first = folderWindow(entries, 0, 12)
+  assert.equal(first.entries.length, 12)
+  assert.equal(first.start, 0)
+  assert.equal(first.after, 9_988)
+
+  const middle = folderWindow(entries, 5_000, 12)
+  assert.equal(middle.entries.length, 12)
+  assert.ok(middle.start <= 5_000 && middle.end > 5_000)
+  assert.equal(middle.entries[5_000 - middle.start].name, "folder-5000")
+
+  const last = folderWindow(entries, 9_999, 12)
+  assert.equal(last.start, 9_988)
+  assert.equal(last.end, 10_000)
+  assert.equal(last.after, 0)
 })
 
 test("malformed input never throws", () => {
