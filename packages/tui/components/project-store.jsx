@@ -46,7 +46,8 @@ const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
 const REFRESH_DEBOUNCE_MS = 250
 const STRUCTURAL_RECONCILE_INTERVAL_MS = 30_000
 const PRESENCE_RECONCILE_INTERVAL_MS = 5_000
-const PRESENCE_LIMIT = 16
+const PRESENCE_RECENT_LIMIT = 32
+const PRESENCE_ROTATING_LIMIT = 32
 const SESSION_LIMIT = 400
 
 function readKv(api, key, fallback) {
@@ -174,13 +175,14 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
       if (seen.has(session.id)) continue
       candidates.push(session)
       seen.add(session.id)
-      if (candidates.length >= PRESENCE_LIMIT) break
+      if (candidates.length >= PRESENCE_RECENT_LIMIT) break
     }
     const messageResults = await Promise.allSettled(candidates.map((session) => listMessages(client, session, 1)))
     messageResults.forEach((result, index) => {
       if (result.status !== "fulfilled") return
-      const inferred = durableStatus(result.value)
-      if (inferred) durableStatuses[candidates[index].id] = inferred
+      const session = candidates[index]
+      const inferred = durableStatus(result.value, { sessionUpdatedAt: session?.time?.updated })
+      if (inferred) durableStatuses[session.id] = inferred
     })
   }
 
@@ -196,7 +198,7 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   }
 }
 
-async function loadPresence(api, projects, sessions, activeSessionID = null) {
+async function loadPresence(api, projects, sessions, activeSessionID = null, rotationOffset = 0) {
   const client = api?.client
   if (!client || !sessions?.length) return {}
 
@@ -214,21 +216,33 @@ async function loadPresence(api, projects, sessions, activeSessionID = null) {
 
   const candidates = []
   const seen = new Set()
-  const active = sessions.find((session) => session.id === activeSessionID)
-  if (active) { candidates.push(active); seen.add(active.id) }
-  for (const session of sessions.toSorted((a, b) => Number(b?.time?.updated ?? 0) - Number(a?.time?.updated ?? 0))) {
-    if (!session?.id || seen.has(session.id)) continue
+  const addCandidate = (session) => {
+    if (!session?.id || seen.has(session.id)) return
     candidates.push(session)
     seen.add(session.id)
-    if (candidates.length >= PRESENCE_LIMIT) break
+  }
+  addCandidate(sessions.find((session) => session.id === activeSessionID))
+  for (const session of sessions) {
+    const type = live[session?.id]?.type
+    if (type === "busy" || type === "retry" || type === "compacting") addCandidate(session)
+  }
+  const recent = sessions.toSorted((a, b) => Number(b?.time?.updated ?? 0) - Number(a?.time?.updated ?? 0))
+  for (const session of recent.slice(0, PRESENCE_RECENT_LIMIT)) addCandidate(session)
+  const remaining = recent.filter((session) => session?.id && !seen.has(session.id))
+  if (remaining.length) {
+    const start = Math.abs(Number(rotationOffset) || 0) % remaining.length
+    for (let index = 0; index < Math.min(PRESENCE_ROTATING_LIMIT, remaining.length); index += 1) {
+      addCandidate(remaining[(start + index) % remaining.length])
+    }
   }
 
   const durable = {}
   const messageResults = await Promise.allSettled(candidates.map((session) => listMessages(client, session, 1)))
   messageResults.forEach((result, index) => {
     if (result.status !== "fulfilled") return
-    const inferred = durableStatus(result.value)
-    if (inferred) durable[candidates[index].id] = inferred
+    const session = candidates[index]
+    const inferred = durableStatus(result.value, { sessionUpdatedAt: session?.time?.updated })
+    if (inferred) durable[session.id] = inferred
   })
 
   const statuses = {}
@@ -267,6 +281,7 @@ export function createProjectStore(api) {
   let debounce = null
   let presenceInFlight = false
   let presenceQueued = false
+  let presenceRotation = 0
   let disposed = false
 
   async function load() {
@@ -321,7 +336,8 @@ export function createProjectStore(api) {
     }
     presenceInFlight = true
     try {
-      const next = await loadPresence(api, store.projects, store.sessions, activeSessionID())
+      const next = await loadPresence(api, store.projects, store.sessions, activeSessionID(), presenceRotation)
+      presenceRotation = (presenceRotation + PRESENCE_ROTATING_LIMIT) % Math.max(1, store.sessions.length)
       if (disposed || !Object.keys(next).length) return
       setStore("statuses", reconcile({ ...store.statuses, ...next }))
     } catch {

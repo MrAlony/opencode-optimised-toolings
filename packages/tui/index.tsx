@@ -30,11 +30,14 @@ import { Palette } from "./components/palette.jsx"
 import { Workbench } from "./components/workbench.jsx"
 import { ProjectAdd } from "./components/project-add.jsx"
 import { Dock } from "./components/dock.jsx"
+import { SettingsView } from "./components/settings.jsx"
+import { applyManagedSettings, readManagedSettings } from "./lib/settings.js"
 import { workbenchCommands } from "./lib/command-registry.js"
 
 type Tokens = ReturnType<typeof createTokens>
 
 const WORKBENCH_ROUTE = "alonix-workbench"
+const SETTINGS_ROUTE = "alonix-settings"
 const DOCK_KEY = "alonix_dock_open"
 
 function readDockPreference(api: TuiPluginApi): boolean {
@@ -190,6 +193,14 @@ const tui: TuiPlugin = async (api, options) => {
   }
 
   const openSwitcher = () => openPalette("")
+
+  const openSettings = () => {
+    try {
+      api.route.navigate(SETTINGS_ROUTE)
+    } catch {
+      api.ui.toast({ variant: "warning", title: "Settings unavailable", message: "This host cannot open plugin routes." })
+    }
+  }
 
   const openWorkbench = () => {
     try {
@@ -378,6 +389,20 @@ const tui: TuiPlugin = async (api, options) => {
   try {
     const disposeRoute = api.route.register([
       {
+        name: SETTINGS_ROUTE,
+        render: () => (
+          <ClockProvider clock={clock}>
+            <SettingsView
+              tokens={tokens}
+              dockOpen={dockOpen}
+              initial={readManagedSettings()}
+              onSave={(draft: unknown) => applyManagedSettings(draft)}
+              onClose={openWorkbench}
+            />
+          </ClockProvider>
+        ),
+      },
+      {
         name: WORKBENCH_ROUTE,
         render: () => (
           <ClockProvider clock={clock}>
@@ -393,6 +418,7 @@ const tui: TuiPlugin = async (api, options) => {
               mode={workbenchMode}
               onMode={setWorkbenchMode}
               onAddProject={openAddProject}
+              onSettings={openSettings}
               onPalette={() => openPalette()}
               onNewSession={() => openPalette("#")}
               onChooseProject={() => openPalette("#")}
@@ -491,6 +517,7 @@ const tui: TuiPlugin = async (api, options) => {
                 }}
                 onAddProject={openAddProject}
                 onWorkbench={openWorkbench}
+                onSettings={openSettings}
                 onChooseProject={() => openPalette("#")}
                 onNewSessionIn={(project: { worktree?: string }) => openSessionDraft(project?.worktree)}
               />
@@ -563,6 +590,14 @@ const tui: TuiPlugin = async (api, options) => {
         namespace: "palette",
         slashName: "alonix-sessions",
         run: openSwitcher,
+      },
+      {
+        name: "alonix-ide.settings",
+        title: "Open Alonix settings",
+        category: "Plugin",
+        namespace: "palette",
+        slashName: "alonix-settings",
+        run: openSettings,
       },
       {
         name: "alonix-toolings.status",

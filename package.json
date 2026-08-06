@@ -1,10 +1,37 @@
 {
   "name": "opencode-optimised-toolings",
-  "version": "3.2.0",
-  "private": true,
+  "version": "3.3.0",
+  "private": false,
   "type": "module",
-  "description": "Portable, production-grade OpenCode custom tooling distribution with filesystem, terminal, CBM, web, stealth, Tor, and SearXNG integration.",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "description": "A production-grade OpenCode IDE and optimized tooling plugin with filesystem, terminal, CBM, web, stealth, settings, and update-safe host enhancements.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MrAlony/opencode-optimised-toolings.git"
+  },
+  "homepage": "https://github.com/MrAlony/opencode-optimised-toolings#readme",
+  "bugs": {
+    "url": "https://github.com/MrAlony/opencode-optimised-toolings/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "ide",
+    "developer-tools",
+    "mcp"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "workspaces": [
     "packages/filesystem",
     "packages/terminal",
@@ -20,24 +47,30 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "config/AGENTS.md",
-    "config/agents",
-    "config/secrets.example.json",
-    "packages/filesystem",
-    "packages/terminal",
-    "packages/cbm/src",
+    "packages/filesystem/index.js",
+    "packages/filesystem/lib",
+    "packages/filesystem/package.json",
+    "packages/terminal/index.js",
+    "packages/terminal/package.json",
     "packages/cbm/dist",
     "packages/cbm/package.json",
-    "packages/cbm/tsconfig.json",
     "packages/cbm/README.md",
     "packages/cbm/SKILL.md",
-    "packages/web",
-    "packages/stealth",
-    "packages/selfpatch",
-    "packages/tui",
-    "scripts",
-    "services/searxng",
-    "services/tor/README.md",
-    "test"
+    "packages/web/index.js",
+    "packages/web/lib",
+    "packages/web/package.json",
+    "packages/stealth/index.js",
+    "packages/stealth/lib",
+    "packages/stealth/worker.py",
+    "packages/stealth/package.json",
+    "packages/selfpatch/index.js",
+    "packages/selfpatch/lib",
+    "packages/selfpatch/patches",
+    "packages/selfpatch/package.json",
+    "packages/tui/index.tsx",
+    "packages/tui/components",
+    "packages/tui/lib",
+    "packages/tui/package.json"
   ],
   "scripts": {
     "build": "npm run build -w packages/cbm",
@@ -56,15 +89,20 @@
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
     "@opencode-ai/plugin": "^1.17.20",
+    "@opentui/solid": "0.4.5",
+    "jsonc-parser": "^3.3.1",
     "linkedom": "^0.18.12",
     "pdf-parse": "^1.1.1",
-    "turndown": "^7.2.1",
-    "undici": "^7.13.0",
-    "@opentui/solid": "0.4.5",
     "solid-js": "1.9.12",
-    "tar": "^7.4.3"
+    "tar": "^7.4.3",
+    "turndown": "^7.2.1",
+    "undici": "^7.13.0"
   },
   "devDependencies": {
     "bun": "1.3.14"
-  }
+  },
+  "directories": {
+    "test": "test"
+  },
+  "author": ""
 }

@@ -255,6 +255,44 @@ test("cleanup unsubscribes so a disposed store stops refreshing", async () => {
   void store
 })
 
+test("presence reconciliation rotates through older chats instead of permanently hiding work", async () => {
+  const now = Date.now()
+  const sessions = Array.from({ length: 80 }, (_, index) => ({
+    id: `s${index}`,
+    title: `Chat ${index}`,
+    projectID: "p1",
+    directory: "C:/work/alpha",
+    time: { updated: now - index },
+  }))
+  sessions[79].time.updated = now
+  const api = createApi({ sessions })
+  api.client.session.messages = async ({ sessionID }) => {
+    api.calls.messageList += 1
+    return { data: sessionID === "s79" ? [{ info: { role: "user", time: { created: now } } }] : [{ info: { role: "assistant", time: { completed: now } } }] }
+  }
+  await withStore(api, async (store) => {
+    for (let index = 0; index < 3; index += 1) await store.refreshPresence()
+    assert.equal(store.sessionRows().find((row) => row.id === "s79")?.running, true)
+  })
+})
+
+test("historical unfinished transcripts stay idle when rotation eventually reaches them", async () => {
+  const old = Date.now() - 30 * 24 * 60 * 60 * 1000
+  const sessions = Array.from({ length: 80 }, (_, index) => ({
+    id: `old-${index}`,
+    title: `Old chat ${index}`,
+    projectID: "p1",
+    directory: "C:/work/alpha",
+    time: { updated: old - index },
+  }))
+  const api = createApi({ sessions })
+  api.client.session.messages = async () => ({ data: [{ info: { role: "user", time: { created: old } } }] })
+  await withStore(api, async (store) => {
+    for (let index = 0; index < 3; index += 1) await store.refreshPresence()
+    assert.equal(store.sessionRows().find((row) => row.id === "old-79")?.running, false)
+  })
+})
+
 test("durable transcript state repairs false idle status from another process", async () => {
   const api = createApi({
     statuses: { s1: { type: "idle" } },

@@ -50,6 +50,7 @@ export function Workbench(props) {
         <Button tokens={tokens()} variant="secondary" glyph={GLYPH.pointer} shortcut="^p" onPress={props.onPalette}>Search</Button>
         <Button tokens={tokens()} variant="primary" glyph={GLYPH.plus} shortcut="^n" onPress={props.onChooseProject}>New chat</Button>
         <Button tokens={tokens()} variant="secondary" glyph={GLYPH.square} onPress={props.onAddProject}>Add folder</Button>
+        <Button tokens={tokens()} variant="secondary" onPress={props.onSettings}>Settings</Button>
         <SegmentedControl
           tokens={tokens()}
           value={props.mode?.() ?? "work"}

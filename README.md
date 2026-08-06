@@ -1,5 +1,16 @@
 # OpenCode Optimised Toolings
 
+Install the normal updateable plugin globally:
+
+```bash
+opencode plugin opencode-optimised-toolings@latest --global
+```
+
+Then restart OpenCode. The package exposes a standard OpenCode plugin entry at `index.js`; no repository checkout is required. Optional verified host enhancements self-activate only when the installed OpenCode source is byte-compatible, while the portable tools and Settings UI remain available on future versions.
+
+Open **Alonix Settings** from the command palette, workbench, or left sidebar to configure tool permissions, the owned optimized-instruction profile, optional DCP integration, and private web-provider credentials. Settings preserve comments and unrelated values in `opencode.json`/`opencode.jsonc`, create backups, and never manage personal models or providers.
+
+
 A portable, shareable distribution of the custom OpenCode tools used in this environment:
 
 - **Filesystem:** adaptive batched reads, strict safe multi-file edits, structured search and exploration.

@@ -1,0 +1,27 @@
+# Development and verification artifacts are never part of the runtime plugin.
+**/test/**
+**/tests/**
+**/*.test.mjs
+**/*.test.js
+**/__pycache__/**
+**/*.pyc
+**/.venv/**
+**/.pytest_cache/**
+**/.mypy_cache/**
+**/node_modules/**
+**/package-lock.json
+runtime/**
+.opencode/**
+.github/**
+
+# Local/private configuration must never enter a published package.
+config/secrets.local.json
+config/secrets.json
+**/*.local.json
+
+# Repository-only service state and generated assets.
+services/searxng/data/**
+services/searxng/.venv/**
+services/tor/data/**
+coverage/**
+*.tgz

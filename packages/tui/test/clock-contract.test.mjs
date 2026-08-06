@@ -21,6 +21,7 @@ const COMPONENTS = [
   "components/controls.jsx",
   "components/ide-surfaces.jsx",
   "components/ide-kit.jsx",
+  "components/settings.jsx",
 ]
 
 // Regression: the workbench crashed with
@@ -273,6 +274,31 @@ test("large buttons render one line and never overprint descriptions", async () 
   const button = controls.slice(start, end)
   assert.doesNotMatch(button, /props\.description/, "multiple text rows overlap in fixed-height OpenTUI buttons")
   assert.match(button, /height=\{size\(\) === "lg" \? 3 : 1\}/, "large click targets keep their three-row hit area")
+})
+
+test("settings is a first-class mouse-accessible route", async () => {
+  const entry = await source("index.tsx")
+  const settings = await source("components/settings.jsx")
+  assert.match(entry, /SETTINGS_ROUTE = "alonix-settings"/)
+  assert.match(entry, /name: SETTINGS_ROUTE/)
+  assert.match(entry, /slashName: "alonix-settings"/)
+  assert.match(entry, /onSettings=\{openSettings\}/)
+  assert.match(settings, /Alonix Settings/)
+  for (const page of ["Tool access", "Instructions", "Context \/ DCP", "Web providers", "Plugin & safety"]) assert.match(settings, new RegExp(page))
+  assert.match(settings, /Save changes/)
+  assert.match(settings, /dockWidth\(props\.dockOpen\(\), dimensions\(\)\.width\)/, "settings must reserve the persistent sidebar column")
+  const saveBody = settings.match(/const save = async \(\) => \{([\s\S]*?)\n  \}\n\n  return/)?.[1] ?? ""
+  assert.doesNotMatch(saveBody, /session|prompt|route|navigate|dialog|openSession|sessionDraft/, "settings save must be config-only")
+  const settingsLib = await source("lib/settings.js")
+  assert.match(settingsLib, /if \(!changes\.length\) return \{[\s\S]*changed: false/, "duplicate saves must be strict no-ops")
+})
+
+test("settings owns instruction references and never edits personal models or providers", async () => {
+  const sourceText = await source("lib/settings.js")
+  assert.match(sourceText, /INSTRUCTION_REFERENCE = "alonix\/AGENTS.md"/)
+  assert.match(sourceText, /backupExisting/)
+  assert.match(sourceText, /atomicTransaction/)
+  assert.doesNotMatch(sourceText, /\["model"\]|\["provider"\]/)
 })
 
 test("the universal finder exposes plain-language mouse filters", async () => {

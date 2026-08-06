@@ -6,14 +6,26 @@ function message(role, completed, created = 1) {
   return { info: { role, time: { created, ...(completed === undefined ? {} : { completed }) } } }
 }
 
-test("unfinished durable transcripts expose work owned by another process", () => {
-  assert.deepEqual(durableStatus([message("user", undefined)]), { type: "busy", source: "transcript" })
-  assert.deepEqual(durableStatus([message("assistant", undefined)]), { type: "busy", source: "transcript" })
-  assert.deepEqual(durableStatus([message("assistant", 10)]), { type: "idle", source: "transcript" })
+test("unfinished recent durable transcripts expose work owned by another process", () => {
+  assert.deepEqual(durableStatus([message("user", undefined, 100)], { now: 200 }), { type: "busy", source: "transcript" })
+  assert.deepEqual(durableStatus([message("assistant", undefined, 100)], { now: 200 }), { type: "busy", source: "transcript" })
+  assert.deepEqual(durableStatus([message("assistant", 150, 100)], { now: 200 }), { type: "idle", source: "transcript" })
+})
+
+test("abandoned historical transcripts never resurrect as live work", () => {
+  assert.deepEqual(durableStatus([message("user", undefined, 100)], { now: 1_000, maxAgeMs: 100 }), {
+    type: "idle",
+    source: "transcript-expired",
+  })
+  assert.deepEqual(durableStatus([message("assistant", undefined, 100)], { now: 1_000, maxAgeMs: 100 }), {
+    type: "idle",
+    source: "transcript-expired",
+  })
+  assert.equal(durableStatus([message("user", undefined, 100)], { now: 1_000, maxAgeMs: 100, sessionUpdatedAt: 950 }).type, "busy")
 })
 
 test("the newest persisted message decides durable presence", () => {
-  const status = durableStatus([message("assistant", 10, 1), message("user", undefined, 2)])
+  const status = durableStatus([message("assistant", 10, 1), message("user", undefined, 2)], { now: 3 })
   assert.equal(status.type, "busy")
 })
 

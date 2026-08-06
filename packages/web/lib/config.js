@@ -1,9 +1,12 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
-const secretsPath = process.env.OPENCODE_TOOLINGS_SECRETS || resolve(repositoryRoot, "config", "secrets.local.json");
+const userSecretsPath = resolve(homedir(), ".config", "opencode", "alonix", "secrets.json");
+const legacySecretsPath = resolve(repositoryRoot, "config", "secrets.local.json");
+const secretsPath = resolve(process.env.OPENCODE_TOOLINGS_SECRETS || (existsSync(userSecretsPath) ? userSecretsPath : legacySecretsPath));
 
 export function loadSecrets() {
   try { return JSON.parse(readFileSync(secretsPath, "utf8")); }
@@ -21,4 +24,4 @@ export function webConfig() {
   };
 }
 
-export { repositoryRoot, secretsPath };
+export { legacySecretsPath, repositoryRoot, secretsPath, userSecretsPath };

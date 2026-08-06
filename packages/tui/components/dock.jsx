@@ -233,6 +233,7 @@ export function Dock(props) {
             <box flexDirection="row" gap={1}>
               <Button tokens={tokens()} variant="secondary" glyph={GLYPH.square} onPress={props.onAddProject}>Add folder</Button>
               <Button tokens={tokens()} variant="secondary" glyph={GLYPH.diamond} onPress={props.onWorkbench}>Dashboard</Button>
+              <Button tokens={tokens()} variant="secondary" onPress={props.onSettings}>Settings</Button>
             </box>
           </box>
 
