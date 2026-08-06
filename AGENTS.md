@@ -11,7 +11,7 @@ Mandatory rules for every human or AI agent:
 3. Never require an npm trusted-publisher/OIDC workflow as the only release path.
 4. Publish only from a clean local checkout using `npm run release:local -- --tag vX.Y.Z`.
 5. The release command must build from the exact annotated Git tag, not from mutable working-tree files.
-6. Keep npm account 2FA enabled. Enter the one-time code only into the local hidden prompt; never commit, log, echo, or store it.
+6. Keep npm account 2FA enabled. Let npm perform its native passkey/security-key challenge directly; never commit, log, echo, pass through AI chat, or store authentication material.
 7. Never publish an untagged version, move or delete an existing release tag, reuse an npm version, or bypass package-content/integrity checks.
 8. Preserve all prior tags and releases. Corrections require a new semantic version.
 9. Keep the package runtime-only allowlist and clean-consumer verification intact.

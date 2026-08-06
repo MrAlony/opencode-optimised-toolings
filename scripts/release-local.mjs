@@ -58,44 +58,6 @@ function parseArgs(argv) {
   return result;
 }
 
-async function readOtp() {
-  if (process.env.NPM_CONFIG_OTP) return process.env.NPM_CONFIG_OTP.trim();
-  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
-    fail("npm 2FA is required; run this command in an interactive local terminal");
-  }
-  process.stdout.write("npm one-time password (input hidden): ");
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  process.stdin.setEncoding("utf8");
-  return new Promise((resolveOtp, reject) => {
-    let value = "";
-    const finish = () => {
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      process.stdin.removeListener("data", onData);
-      process.stdout.write("\n");
-    };
-    const onData = (chunk) => {
-      for (const character of chunk) {
-        if (character === "\u0003") {
-          finish();
-          reject(new Error("release cancelled"));
-          return;
-        }
-        if (character === "\r" || character === "\n") {
-          finish();
-          if (!/^\d{6,10}$/.test(value)) reject(new Error("invalid npm one-time password format"));
-          else resolveOtp(value);
-          return;
-        }
-        if (character === "\u007f" || character === "\b") value = value.slice(0, -1);
-        else if (/\d/.test(character)) value += character;
-      }
-    };
-    process.stdin.on("data", onData);
-  });
-}
-
 function registryVersion(version) {
   const lookup = run("npm", ["view", `${packageName}@${version}`, "version", "--json"], {
     capture: true,
@@ -180,12 +142,12 @@ try {
     process.exit(0);
   }
 
-  const otp = await readOtp();
-  const publishEnv = { ...process.env, NPM_CONFIG_OTP: otp, NPM_CONFIG_PROVENANCE: "false" };
+  const publishEnv = { ...process.env, NPM_CONFIG_PROVENANCE: "false" };
   delete publishEnv.NODE_AUTH_TOKEN;
   delete publishEnv.NPM_TOKEN;
-  run("npm", ["publish", tarball, "--access", "public", "--provenance=false"], { cwd: buildRoot, env: publishEnv });
   delete publishEnv.NPM_CONFIG_OTP;
+  console.log("npm will now request your configured passkey/security key through its native authentication flow.");
+  run("npm", ["publish", tarball, "--access", "public", "--provenance=false"], { cwd: buildRoot, env: publishEnv });
 
   let published = "";
   for (let attempt = 0; attempt < 12 && !published; attempt += 1) {

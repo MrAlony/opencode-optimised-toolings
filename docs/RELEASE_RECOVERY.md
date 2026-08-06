@@ -32,7 +32,7 @@ The command:
 - rejects tests, runtime state, virtual environments, backups, secrets, and obsolete Python worker files;
 - installs the tarball into a clean temporary consumer;
 - verifies exactly 17 current public tools and rejects legacy `many` IDs;
-- prompts for the npm one-time password without echoing or storing it;
+- delegates authentication to npm's native passkey/security-key flow without handling credentials itself;
 - publishes the exact verified tarball with public access;
 - verifies npm registry integrity and shasum against the local artifact.
 
@@ -40,11 +40,11 @@ Use `--verify-only` instead of `--publish` to execute every pre-publication chec
 
 ## Security properties
 
-- npm account 2FA remains mandatory. OTPs are entered only into the local hidden prompt and are never logged or persisted.
+- npm account 2FA remains mandatory. npm performs the native passkey/security-key challenge directly; the release script never receives, logs, or persists authentication material.
 - npm's registry integrity and shasum are compared with the exact locally verified tarball after publication.
 - The annotated Git tag is the immutable source checkpoint and cannot be moved or reused.
 - Package contents are controlled by the runtime-only `files` allowlist and tested from a clean consumer.
-- Local secrets, npm credentials, OTPs, recovery codes, generated runtime state, and private user configuration are never included.
+- Local secrets, npm credentials, passkeys, OTPs, recovery codes, generated runtime state, and private user configuration are never included.
 - Existing npm versions are immutable; fixes always receive a new semantic version and tag.
 
 Local publication does not produce GitHub OIDC provenance because that attestation describes a supported cloud CI identity. This repository deliberately avoids runner dependency. Runtime code, npm integrity, 2FA protections, immutable tagged source, and clean-consumer behavior are unaffected; the local release pipeline provides independent tag-to-tarball and tarball-to-registry verification.

@@ -17,13 +17,15 @@ test("publishing is local-only and runner workflows are absent", () => {
   assert.equal(packageJson.publishConfig.provenance, false);
 });
 
-test("local release enforces immutable tags, complete tests, hidden OTP, and registry integrity", () => {
+test("local release enforces immutable tags, complete tests, native passkey auth, and registry integrity", () => {
   const source = read("scripts/release-local.mjs");
   assert.match(source, /cat-file/);
   assert.match(source, /merge-base/);
   assert.match(source, /git.*archive/s);
   assert.match(source, /\["test"\]/);
-  assert.match(source, /setRawMode\(true\)/);
+  assert.doesNotMatch(source, /readOtp|setRawMode|NPM_CONFIG_OTP:\s*otp/);
+  assert.match(source, /delete publishEnv\.NPM_CONFIG_OTP/);
+  assert.match(source, /native authentication flow/);
   assert.match(source, /--provenance=false/);
   assert.match(source, /registry\.integrity !== packed\.integrity/);
   assert.match(source, /expectedTools = 17/);
