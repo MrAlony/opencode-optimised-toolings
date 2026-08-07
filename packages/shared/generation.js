@@ -3,7 +3,7 @@ import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs"
 import { promises as fs } from "node:fs"
 import { createRequire } from "node:module"
-import { basename, dirname, join, resolve } from "node:path"
+import { basename, delimiter, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser"
 import { PACKAGE_NAME, isDevelopmentCheckout, openCodeConfigDir, packageVersion, userDataRoot } from "./paths.js"
@@ -377,16 +377,40 @@ async function materializeRegistryPackage(staging) {
   ])
 }
 
-function npmCommand() {
-  const candidates = [
-    process.env.npm_execpath,
-    join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
-    join(dirname(dirname(process.execPath)), "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+function pathEntries(env = process.env) {
+  return String(env.PATH ?? env.Path ?? "").split(delimiter).map((entry) => entry.trim().replace(/^"|"$/g, "")).filter(Boolean)
+}
+
+export function resolveNpmCommand(env = process.env) {
+  const npmCandidates = [
+    env.npm_execpath,
+    ...pathEntries(env).map((entry) => join(entry, "node_modules", "npm", "bin", "npm-cli.js")),
+    env.ProgramFiles && join(env.ProgramFiles, "nodejs", "node_modules", "npm", "bin", "npm-cli.js"),
+    env["ProgramFiles(x86)"] && join(env["ProgramFiles(x86)"], "nodejs", "node_modules", "npm", "bin", "npm-cli.js"),
+    process.platform === "win32" ? "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js" : "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
+    process.platform === "win32" ? "C:\\Program Files (x86)\\nodejs\\node_modules\\npm\\bin\\npm-cli.js" : "/usr/lib/node_modules/npm/bin/npm-cli.js",
   ].filter(Boolean)
-  const npmCli = candidates.find((file) => existsSync(file))
-  if (npmCli) return { executable: process.execPath, args: [npmCli] }
-  if (process.platform === "win32") throw new Error("Cannot locate npm-cli.js for package generation provisioning")
-  return { executable: "npm", args: [] }
+  for (const npmCli of npmCandidates) {
+    if (!existsSync(npmCli)) continue
+    const nodeCandidates = [
+      env.NODE_BINARY,
+      env.NODE,
+      ...pathEntries(env).map((entry) => join(entry, process.platform === "win32" ? "node.exe" : "node")),
+      basename(process.execPath).toLowerCase().replace(/\.exe$/, "") === "node" ? process.execPath : null,
+      resolve(dirname(dirname(dirname(dirname(npmCli)))), process.platform === "win32" ? "node.exe" : "bin/node"),
+      env.ProgramFiles && join(env.ProgramFiles, "nodejs", "node.exe"),
+      process.platform === "win32" ? "C:\\Program Files\\nodejs\\node.exe" : "/usr/bin/node",
+      process.platform === "win32" ? null : "/usr/local/bin/node",
+    ].filter(Boolean)
+    const node = nodeCandidates.find((file) => existsSync(file))
+    if (node) return { executable: node, args: [npmCli], npmCli }
+  }
+  if (process.platform !== "win32") return { executable: "npm", args: [], npmCli: null }
+  throw new Error("Node.js npm runtime is unavailable for package generation provisioning")
+}
+
+function npmCommand() {
+  return resolveNpmCommand(process.env)
 }
 
 async function installExactPackage(version, staging, options = {}) {
@@ -435,7 +459,9 @@ async function installLockedDependencies(packageRoot, options = {}) {
   }
 }
 
-export async function ensurePackageGeneration(packageRoot, options = {}) {
+const generationFlights = new Map()
+
+async function ensurePackageGenerationImpl(packageRoot, options = {}) {
   const version = options.version ?? packageVersion(packageRoot)
   if (!version) throw new Error("Cannot provision an unknown package version")
   if (isDevelopmentCheckout(packageRoot) && options.force !== true) {
@@ -502,6 +528,19 @@ export async function ensurePackageGeneration(packageRoot, options = {}) {
   } finally {
     await fs.rm(lock, { force: true }).catch(() => {})
   }
+}
+
+export function ensurePackageGeneration(packageRoot, options = {}) {
+  const version = options.version ?? packageVersion(packageRoot) ?? "unknown"
+  const key = `${normalize(packageRoot)}\u0000${version}\u0000${options.source ?? "loaded-installation"}\u0000${normalize(generationsRoot(options.env))}`
+  if (!generationFlights.has(key)) {
+    const flight = ensurePackageGenerationImpl(packageRoot, options)
+    generationFlights.set(key, flight)
+    void flight.finally(() => {
+      if (generationFlights.get(key) === flight) generationFlights.delete(key)
+    }).catch(() => {})
+  }
+  return generationFlights.get(key)
 }
 
 export async function validateActivationConfig(options = {}) {

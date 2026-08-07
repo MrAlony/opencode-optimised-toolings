@@ -51,6 +51,9 @@ const WORKBENCH_KEY = "alonix_workbench_state"
 const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
 const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
 const SELECTED_PROJECT_KEY = "alonix_selected_project"
+const PORTFOLIO_SNAPSHOT_KEY = "alonix_portfolio_snapshot"
+const PORTFOLIO_SNAPSHOT_VERSION = 1
+const PORTFOLIO_SNAPSHOT_SESSION_LIMIT = 1_000
 const REFRESH_DEBOUNCE_MS = 250
 const STRUCTURAL_RECONCILE_INTERVAL_MS = 30_000
 const PRESENCE_RECONCILE_INTERVAL_MS = 8_000
@@ -114,6 +117,24 @@ function normalizeDirectory(value) {
 function directoryKey(value) {
   const normalized = normalizeDirectory(value)
   return process.platform === "win32" ? normalized.toLowerCase() : normalized
+}
+
+function normalizePortfolioSnapshot(value) {
+  if (!value || value.version !== PORTFOLIO_SNAPSHOT_VERSION) return null
+  const projects = Array.isArray(value.projects) ? value.projects.filter((item) => item && typeof item === "object").slice(0, 200) : []
+  const sessions = Array.isArray(value.sessions) ? value.sessions.filter((item) => item?.id && typeof item === "object").slice(0, PORTFOLIO_SNAPSHOT_SESSION_LIMIT) : []
+  const savedAt = Number(value.savedAt)
+  if (!projects.length && !sessions.length) return null
+  return { version: PORTFOLIO_SNAPSHOT_VERSION, savedAt: Number.isFinite(savedAt) && savedAt > 0 ? savedAt : Date.now(), projects, sessions }
+}
+
+function portfolioSnapshot(projects, sessions) {
+  return {
+    version: PORTFOLIO_SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    projects: Array.from(projects ?? []).slice(0, 200),
+    sessions: Array.from(sessions ?? []).slice(0, PORTFOLIO_SNAPSHOT_SESSION_LIMIT),
+  }
 }
 
 function normalizeDirectories(value, limit = 200) {
@@ -350,11 +371,12 @@ export function createProjectStore(api) {
   const initialRead = (key, fallback) => (initiallyHydrated ? readKv(api, key, fallback) : fallback)
   const initialRegisteredProjects = normalizeDirectories(initialRead(REGISTERED_PROJECTS_KEY, []))
   const initialSelection = initialRead(SELECTED_PROJECT_KEY, {})
+  const initialSnapshot = normalizePortfolioSnapshot(initialRead(PORTFOLIO_SNAPSHOT_KEY, null))
   const [store, setStore] = createStore({
     // Registered folders are durable local state. Render them immediately while
     // the authoritative SDK refresh runs, rather than showing an empty spinner.
-    projects: mergeProjects([], initialRegisteredProjects),
-    sessions: [],
+    projects: mergeProjects(initialSnapshot?.projects ?? [], initialRegisteredProjects),
+    sessions: initialSnapshot?.sessions ?? [],
     statuses: {},
     registeredProjects: initialRegisteredProjects,
     selectedProjectID: typeof initialSelection?.id === "string" ? initialSelection.id : null,
@@ -363,9 +385,10 @@ export function createProjectStore(api) {
     hiddenProjects: normalizeIds(initialRead(HIDDEN_PROJECTS_KEY, []), 200),
     workbench: createWorkbench(initialRead(WORKBENCH_KEY, {})),
     panes: createPanes(initialRead(PANES_KEY, {})),
-    loading: false,
+    loading: true,
+    phase: initialSnapshot ? "cached" : "loading",
     error: "",
-    loadedAt: 0,
+    loadedAt: initialSnapshot?.savedAt ?? 0,
   })
 
   let inFlight = false
@@ -378,6 +401,17 @@ export function createProjectStore(api) {
   let disposed = false
   let persistenceHydrated = initiallyHydrated
   const pendingPersistence = new Map()
+  let initialSettled = Boolean(initialSnapshot)
+  let resolveInitialLoad
+  const initialLoad = new Promise((resolve) => {
+    resolveInitialLoad = resolve
+    if (initialSnapshot) resolve({ phase: "cached", ready: true, cached: true, error: "" })
+  })
+  const settleInitialLoad = () => {
+    if (initialSettled) return
+    initialSettled = true
+    resolveInitialLoad?.({ phase: store.phase, ready: store.phase === "ready" || store.phase === "cached", cached: store.phase === "cached", error: store.error })
+  }
 
   function persist(key, value) {
     if (!persistenceHydrated) {
@@ -403,6 +437,16 @@ export function createProjectStore(api) {
       const selected = readKv(api, SELECTED_PROJECT_KEY, {})
       setStore("selectedProjectID", typeof selected?.id === "string" ? selected.id : null)
       setStore("selectedProjectDirectory", typeof selected?.directory === "string" ? selected.directory : "")
+    }
+    if (!pending.has(PORTFOLIO_SNAPSHOT_KEY)) {
+      const snapshot = normalizePortfolioSnapshot(readKv(api, PORTFOLIO_SNAPSHOT_KEY, null))
+      if (snapshot) {
+        setStore("projects", reconcile(mergeProjects(snapshot.projects, store.registeredProjects), { key: "id" }))
+        setStore("sessions", reconcile(snapshot.sessions, { key: "id" }))
+        setStore("loadedAt", snapshot.savedAt)
+        setStore("phase", "cached")
+        settleInitialLoad()
+      }
     }
     persistenceHydrated = true
     migrateProjectPreferences()
@@ -437,6 +481,7 @@ export function createProjectStore(api) {
     }
     inFlight = true
     setStore("loading", true)
+    if (!store.loadedAt) setStore("phase", "loading")
     try {
       const { projects, sessions, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID())
       if (disposed) return
@@ -446,16 +491,28 @@ export function createProjectStore(api) {
       if (sessions) setStore("sessions", reconcile(sessions, { key: "id" }))
       if (statuses) setStore("statuses", reconcile(statuses))
       setStore("error", errors.length ? errors.join("; ") : "")
-      if (projects || sessions) {
+      // Folder metadata can arrive before any chat listing. Only an actual
+      // session-list result (including a legitimate empty array) makes zero
+      // chats authoritative.
+      if (sessions !== undefined) {
+        const authoritativeProjects = projects ?? store.projects
         setStore("loadedAt", Date.now())
-        migrateProjectPreferences(projects ?? store.projects)
+        setStore("phase", "ready")
+        persist(PORTFOLIO_SNAPSHOT_KEY, portfolioSnapshot(authoritativeProjects, sessions))
+      } else if (!store.loadedAt) {
+        setStore("phase", "error")
       }
+      if (projects || sessions) migrateProjectPreferences(projects ?? store.projects)
     } catch (error) {
       // Keep the last good portfolio; a blank workbench is worse than a stale one.
-      if (!disposed) setStore("error", errorText(error))
+      if (!disposed) {
+        setStore("error", errorText(error))
+        if (!store.loadedAt) setStore("phase", "error")
+      }
     } finally {
       inFlight = false
       if (!disposed) setStore("loading", false)
+      settleInitialLoad()
       if (queued && !disposed) {
         queued = false
         void load()
@@ -607,7 +664,7 @@ export function createProjectStore(api) {
     }),
   )
 
-  void load()
+  if (persistenceHydrated) void load()
 
   const sessionRows = createMemo(() => flattenProjectSessions(projectRows()))
   const recentSessionRows = createMemo(() => recentSessions(projectRows(), 5))
@@ -668,6 +725,12 @@ export function createProjectStore(api) {
     get loadedAt() {
       return store.loadedAt
     },
+    get ready() {
+      return (store.phase === "ready" || store.phase === "cached") && store.loadedAt > 0
+    },
+    get phase() {
+      return store.phase
+    },
     get workbench() {
       return store.workbench
     },
@@ -694,6 +757,17 @@ export function createProjectStore(api) {
     refresh,
     refreshPresence,
     reload: load,
+    waitForInitialLoad(timeoutMs = 30_000) {
+      if (initialSettled) return Promise.resolve({ phase: store.phase, ready: store.phase === "ready" || store.phase === "cached", cached: store.phase === "cached", error: store.error })
+      let timer
+      return Promise.race([
+        initialLoad,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ phase: "timeout", ready: false, error: "Initial portfolio loading exceeded its deadline" }), Math.max(100, Number(timeoutMs) || 30_000))
+          timer?.unref?.()
+        }),
+      ]).finally(() => { if (timer) clearTimeout(timer) })
+    },
 
     selectProject(project) {
       const row = typeof project === "string"

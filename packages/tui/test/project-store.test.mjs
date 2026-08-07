@@ -91,6 +91,73 @@ test("guard: solid resolves to the reactive client build, not the SSR stub", asy
   assert.equal(value(), 2, "signals must update; SSR builds would break every assertion below")
 })
 
+test("a persisted portfolio snapshot makes the first frame complete before network refresh", async () => {
+  const savedAt = Date.now() - 1000
+  const api = createApi({
+    kv: {
+      alonix_registered_projects: ["C:/work/alpha", "C:/work/beta"],
+      alonix_portfolio_snapshot: { version: 1, savedAt, projects: PROJECTS, sessions: SESSIONS },
+    },
+  })
+  api.client.project.list = async () => new Promise(() => {})
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    const result = await store.waitForInitialLoad()
+    assert.equal(result.ready, true)
+    assert.equal(result.cached, true)
+    assert.equal(store.ready, true)
+    assert.equal(store.phase, "cached")
+    assert.equal(store.summary().projects, 2)
+    assert.equal(store.summary().sessions, 2)
+    assert.equal(store.loadedAt, savedAt)
+  } finally { dispose() }
+})
+
+test("successful portfolio loading refreshes the durable first-frame snapshot", async () => {
+  const api = createApi()
+  await withStore(api, (store) => {
+    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
+    assert.equal(snapshot.version, 1)
+    assert.equal(snapshot.projects.length, 2)
+    assert.equal(snapshot.sessions.length, 2)
+    assert.equal(store.ready, true)
+  })
+})
+
+test("the initial readiness barrier resolves only after an authoritative portfolio cycle", async () => {
+  const api = createApi()
+  let releaseProjects
+  api.client.project.list = async () => new Promise((resolve) => { releaseProjects = () => resolve({ data: PROJECTS }) })
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    let settled = false
+    const barrier = store.waitForInitialLoad().then((value) => { settled = true; return value })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(settled, false)
+    assert.equal(store.ready, false)
+    releaseProjects()
+    const result = await barrier
+    assert.equal(result.ready, true)
+    assert.equal(store.ready, true)
+    assert.ok(store.loadedAt > 0)
+  } finally { dispose() }
+})
+
+test("the initial readiness barrier is bounded when authoritative loading never settles", async () => {
+  const api = createApi()
+  api.client.project.list = async () => new Promise(() => {})
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    const result = await store.waitForInitialLoad(40)
+    assert.equal(result.ready, false)
+    assert.equal(result.phase, "timeout")
+    assert.equal(store.ready, false)
+  } finally { dispose() }
+})
+
 test("the store loads projects and sessions across every directory", async () => {
   const api = createApi()
   await withStore(api, (store) => {
@@ -100,6 +167,8 @@ test("the store loads projects and sessions across every directory", async () =>
     assert.equal(store.projects.length, 2)
     assert.equal(store.sessions.length, 2)
     assert.ok(store.loadedAt > 0)
+    assert.equal(store.ready, true)
+    assert.equal(store.phase, "ready")
 
     // The derived model spans both projects.
     const rows = store.projectRows()
@@ -154,7 +223,7 @@ test("Windows rooted-slash persisted folders recover the current drive identity"
   })
 })
 
-test("registered folders render immediately before the SDK refresh settles", async () => {
+test("registered folders render immediately but chat counts stay non-authoritative until loading finishes", async () => {
   const api = createApi({ kv: { alonix_registered_projects: ["C:/work/saved"] } })
   api.client.project.list = async () => new Promise(() => {})
   const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
@@ -164,6 +233,8 @@ test("registered folders render immediately before the SDK refresh settles", asy
       assert.equal(store.projects.length, 1)
       assert.equal(store.projects[0].worktree, "C:/work/saved")
       assert.equal(store.projectRows()[0].name, "saved")
+      assert.equal(store.ready, false)
+      assert.equal(store.phase, "loading")
     })
   } finally {
     if (previous === undefined) delete process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
@@ -174,12 +245,17 @@ test("registered folders render immediately before the SDK refresh settles", asy
 test("a hung SDK request times out and never leaves folders loading forever", async () => {
   const api = createApi({ kv: { alonix_registered_projects: ["C:/work/saved"] } })
   api.client.project.list = async () => new Promise(() => {})
+  api.client.session.list = async () => new Promise(() => {})
   const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
   process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = "100"
   try {
     await withStore(api, async (store) => {
-      await new Promise((resolve) => setTimeout(resolve, 140))
+      // Project discovery times out first; only then can the bounded per-folder
+      // chat listings begin, so allow both authoritative phases to settle.
+      await new Promise((resolve) => setTimeout(resolve, 260))
       assert.equal(store.loading, false, "a missing SDK response must not trap the dock in loading")
+      assert.equal(store.ready, false, "failed initial loading must not make zero chats authoritative")
+      assert.equal(store.phase, "error")
       assert.equal(store.projects.length, 1, "persisted folders remain usable")
       assert.match(store.error, /project listing.*timed out/i)
     })

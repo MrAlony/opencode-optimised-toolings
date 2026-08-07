@@ -33,6 +33,25 @@ test("root aggregator preserves config hooks and registers every tool family", a
   }
 })
 
+test("transport provisioning failures degrade without rejecting tool registration or printing over the TUI", async () => {
+  const previousMode = process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
+  const previousData = process.env.OPENCODE_TOOLINGS_DATA_DIR
+  const configDir = mkdtempSync(join(tmpdir(), "alonix-transport-degraded-"))
+  try {
+    process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = "development"
+    process.env.OPENCODE_TOOLINGS_DATA_DIR = join(configDir, "runtime")
+    const hooks = await plugin({})
+    assert.equal(Object.keys(hooks.tool ?? {}).length, 17)
+    await hooks.dispose?.()
+  } finally {
+    if (previousMode === undefined) delete process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
+    else process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = previousMode
+    if (previousData === undefined) delete process.env.OPENCODE_TOOLINGS_DATA_DIR
+    else process.env.OPENCODE_TOOLINGS_DATA_DIR = previousData
+    rmSync(configDir, { recursive: true, force: true })
+  }
+})
+
 test("published runtime preserves the local TUI module boundary while root identity stays authoritative", () => {
   const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"))
   assert.ok(packageJson.files.includes("packages/tui/package.json"))

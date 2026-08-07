@@ -62,7 +62,7 @@ export function Workbench(props) {
         />
         <box flexGrow={1} />
         <Show when={summary().running > 0}><text fg={tokens().accent} wrapMode="none" selectable={false}>{GLYPH.dot} {summary().running} working</text></Show>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>{summary().projects} folders · {summary().sessions} chats</text>
+        <text fg={tokens().faint} wrapMode="none" selectable={false}>{summary().projects} folders · {store.ready ? `${summary().sessions} chats` : "loading chats"}</text>
         <Button tokens={tokens()} variant="secondary" onPress={props.onExit}>Back to chat</Button>
       </Toolbar>
 
@@ -73,6 +73,7 @@ export function Workbench(props) {
             api={props.api}
             tokens={tokens}
             sessions={sessions}
+            ready={store.ready}
             activeID={activeID()}
             width={viewport().width - 2}
             height={viewport().height - 3}
@@ -85,6 +86,7 @@ export function Workbench(props) {
           api={props.api}
           tokens={tokens}
           sessions={sessions}
+          ready={store.ready}
           width={viewport().width - 2}
           height={viewport().height - 3}
           onOpen={(session) => props.onOpenChat?.(session.id)}

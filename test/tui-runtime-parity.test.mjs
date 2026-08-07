@@ -109,6 +109,18 @@ test("complete TUI callback remains healthy after its first status poll and inte
   assert.equal(outcome.value?.kv?.alonix_dock_open, true, "the exercised Dock command toggles the restored false preference")
 })
 
+function semanticKv(value) {
+  const copy = structuredClone(value)
+  const snapshot = copy?.alonix_portfolio_snapshot
+  if (snapshot) {
+    delete snapshot.savedAt
+    for (const session of snapshot.sessions ?? []) {
+      if (session?.time) delete session.time.updated
+    }
+  }
+  return copy
+}
+
 test("checkout and staged generation restore the same delayed-KV state and registration transcript", async (context) => {
   const generation = process.env.ALONIX_GENERATION
   if (!generation) return context.skip("set ALONIX_GENERATION to compare a staged immutable generation")
@@ -118,6 +130,6 @@ test("checkout and staged generation restore the same delayed-KV state and regis
   for (const key of ["routes", "slots", "commands", "renderers", "events", "dialogs", "navigations"]) {
     assert.deepEqual(installed.value?.calls?.[key], checkout.value?.calls?.[key], `${key} must match exactly`)
   }
-  assert.deepEqual(installed.value?.kv, checkout.value?.kv, "restored and migrated IDE state must match exactly")
+  assert.deepEqual(semanticKv(installed.value?.kv), semanticKv(checkout.value?.kv), "restored and migrated IDE state must match semantically")
   assert.equal(installed.lifecycle?.stage, checkout.lifecycle?.stage)
 })

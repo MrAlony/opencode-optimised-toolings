@@ -133,7 +133,7 @@ export function HomeDeck(props) {
         </For>
       </box>
 
-      <Show when={rows().length}>
+      <Show when={props.store.ready && rows().length}>
         <box flexDirection="column" flexShrink={0}>
           <SectionLabel tokens={tokens()} meta={`${summary().sessions} total`}>
             Recent sessions
@@ -280,7 +280,7 @@ export function WorkspaceInspector(props) {
       <Panel tokens={tokens()} title="Sessions" glyph={GLYPH.ring} tone="accent">
         <box flexDirection="row" gap={1} flexShrink={0}>
           <Badge tokens={tokens()} tone="neutral">
-            {summary().sessions} total
+            {props.store.ready ? `${summary().sessions} total` : "loading"}
           </Badge>
           <Show when={summary().running > 0}>
             <Badge tokens={tokens()} tone="accent">
@@ -481,7 +481,7 @@ export function StatusBar(props) {
         </text>
       </Show>
       <text fg={tokens().faint} wrapMode="none" selectable={false}>
-        {summary().sessions} chats
+        {props.store.ready ? `${summary().sessions} chats` : "loading chats"}
       </text>
       <Show when={props.tooling?.indicator}>
         <text

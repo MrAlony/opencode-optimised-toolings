@@ -76,7 +76,7 @@ export function Monitor(props) {
         <Show when={running().length > 0}><text fg={tokens().accent} wrapMode="none" selectable={false}>{"  "}{running().length} working</text></Show>
       </box>
 
-      <Show when={visible().length} fallback={<EmptyState tokens={tokens()} title="Nothing is running" hint="Start a chat in a folder; active work will appear here automatically" action={<Button tokens={tokens()} variant="primary" size="lg" glyph={GLYPH.pointer} description="Choose the folder for a new chat" onPress={props.onChooseProject}>Choose a folder</Button>} />}>
+      <Show when={visible().length} fallback={<EmptyState tokens={tokens()} title={props.ready ? "Nothing is running" : "Loading live work"} hint={props.ready ? "Start a chat in a folder; active work will appear here automatically" : "Checking every workspace for active chats…"} action={props.ready ? <Button tokens={tokens()} variant="primary" size="lg" glyph={GLYPH.pointer} description="Choose the folder for a new chat" onPress={props.onChooseProject}>Choose a folder</Button> : undefined} />}>
         <scrollbox flexGrow={1} stickyScroll={false}>
           <For each={rows()}>
             {(row) => (

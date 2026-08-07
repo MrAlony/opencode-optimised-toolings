@@ -160,7 +160,7 @@ export function OperationsWorkspace(props) {
 
         <box flexDirection={wide() ? "row" : "column"} flexShrink={0} gap={1} marginTop={1}>
           <Card tokens={tokens()} title="Needs you" glyph={GLYPH.diamond} tone={needsYou().length ? "warning" : "neutral"} meta={needsYou().length} width={columnWidth()} minHeight={8}>
-            <Show when={needsYou().length} fallback={<text fg={tokens().muted} wrapMode="none" selectable={false}>{"  "}No agents are waiting for you</text>}>
+            <Show when={needsYou().length} fallback={<text fg={tokens().muted} wrapMode="none" selectable={false}>{"  "}{props.ready ? "No agents are waiting for you" : "Loading agent state…"}</text>}>
               <For each={needsYou()}>
                 {(session) => <SessionLine tokens={tokens()} session={session} width={columnWidth()} tone="warning" detail={session.projectName} meta="answer" onOpen={props.onOpen} />}
               </For>
@@ -168,7 +168,7 @@ export function OperationsWorkspace(props) {
           </Card>
 
           <Card tokens={tokens()} title="Working now" glyph={GLYPH.dot} tone={working().length ? "accent" : "neutral"} meta={working().length} width={columnWidth()} minHeight={8}>
-            <Show when={working().length} fallback={<text fg={tokens().muted} wrapMode="none" selectable={false}>{"  "}No agents are running</text>}>
+            <Show when={working().length} fallback={<text fg={tokens().muted} wrapMode="none" selectable={false}>{"  "}{props.ready ? "No agents are running" : "Loading agent state…"}</text>}>
               <For each={working()}>
                 {(session) => <SessionLine tokens={tokens()} session={session} width={columnWidth()} tone="accent" detail={session.projectName} meta="live" onOpen={props.onOpen} />}
               </For>
@@ -177,8 +177,8 @@ export function OperationsWorkspace(props) {
         </box>
 
         <box marginTop={1}>
-          <Card tokens={tokens()} title="Recent chats" glyph={GLYPH.ring} meta={sessions().length} width={props.width} minHeight={Math.max(8, Math.min(14, props.height - 22))}>
-            <Show when={recent().length} fallback={<text fg={tokens().muted} wrapMode="none" selectable={false}>{"  "}No previous chats</text>}>
+          <Card tokens={tokens()} title="Recent chats" glyph={GLYPH.ring} meta={props.ready ? sessions().length : "…"} width={props.width} minHeight={Math.max(8, Math.min(14, props.height - 22))}>
+            <Show when={recent().length} fallback={<text fg={tokens().muted} wrapMode="none" selectable={false}>{"  "}{props.ready ? "No previous chats" : "Loading chats…"}</text>}>
               <For each={recent()}>
                 {(session) => <SessionLine tokens={tokens()} session={session} width={props.width} detail={session.projectName || session.directory} meta={session.relative} onOpen={props.onOpen} />}
               </For>

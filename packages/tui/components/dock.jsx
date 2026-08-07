@@ -127,7 +127,7 @@ function ProjectCard(props) {
       </box>
       <box flexDirection="row" flexShrink={0} width={props.width} height={1} paddingLeft={3} paddingRight={1}>
         <text fg={tokens().faint} wrapMode="none" selectable={false}>
-          {project().running > 0 ? `${project().running} working · ` : ""}{project().sessionCount} chat{project().sessionCount === 1 ? "" : "s"}
+          {props.portfolioReady ? `${project().running > 0 ? `${project().running} working · ` : ""}${project().sessionCount} chat${project().sessionCount === 1 ? "" : "s"}` : "Loading chats…"}
         </text>
       </box>
     </box>
@@ -287,6 +287,7 @@ export function Dock(props) {
                       project={project}
                       width={width()}
                       collapsed={store.workbench.collapsed.has(project.stateKey)}
+                      portfolioReady={store.ready}
                       onToggle={() => store.toggleCollapsed(project)}
                       onOpen={(row) => {
                         store.selectProject?.(row)
@@ -309,7 +310,7 @@ export function Dock(props) {
                           props.onOpen?.(session)
                         }}
                       />
-                      <Show when={project.sessionCount === 0 && project.openable}>
+                      <Show when={store.ready && project.sessionCount === 0 && project.openable}>
                         <ClickRow width={width()} tokens={tokens()} onSelect={() => props.onNewSessionIn?.(project)}>
                           <text fg={tokens().muted} wrapMode="none" selectable={false}>{"  └ "}{GLYPH.plus} new chat here</text>
                         </ClickRow>

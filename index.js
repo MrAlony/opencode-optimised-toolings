@@ -34,23 +34,33 @@ function combineHooks(parts) {
 export const OptimisedToolingsPlugin = async (input) => {
   const packageRoot = packageRootFrom(import.meta.url);
   const attestation = await runtimeAttestation(packageRoot, { role: "server" });
+  let provisioningError = null;
   if (attestation.dependencyMatchesExpected === false) {
     // The npm-resolved package is transport only. OpenCode/npm may hoist a
     // different transitive tree than the published shrinkwrap. Provision the
     // package-local locked generation, switch both config entries atomically,
     // and execute that exact server generation in this process.
-    const prepared = await ensureAndActivateGeneration(packageRoot);
-    const target = prepared.generation.root;
-    if (target === packageRoot) throw new Error("Alonix locked-generation delegation did not change the runtime root");
-    const loaded = await import(`${pathToFileURL(join(target, "index.js")).href}?generation=${prepared.generation.fingerprint}`);
-    const factory = loaded.default ?? loaded.OptimisedToolingsPlugin;
-    if (typeof factory !== "function") throw new Error("Provisioned Alonix generation has no server plugin factory");
-    return factory(input);
+    try {
+      const prepared = await ensureAndActivateGeneration(packageRoot);
+      const target = prepared.generation.root;
+      if (target === packageRoot) throw new Error("Alonix locked-generation delegation did not change the runtime root");
+      const loaded = await import(`${pathToFileURL(join(target, "index.js")).href}?generation=${prepared.generation.fingerprint}`);
+      const factory = loaded.default ?? loaded.OptimisedToolingsPlugin;
+      if (typeof factory !== "function") throw new Error("Provisioned Alonix generation has no server plugin factory");
+      return factory(input);
+    } catch (error) {
+      // OpenCode initializes one plugin instance for many project roots. A
+      // provisioning failure must never reject every instance or print raw
+      // diagnostics over the active terminal. The transport has already proven
+      // its exact direct dependencies, so it remains a safe degraded fallback
+      // for this process and the immutable generation can retry next launch.
+      provisioningError = error instanceof Error ? error.message : String(error);
+    }
   }
-  writeServerLifecycle(packageRoot, attestation.sourceMatchesMarker === false ? "failed" : "active", {
+  writeServerLifecycle(packageRoot, attestation.sourceMatchesMarker === false ? "failed" : provisioningError ? "degraded" : "active", {
     ...attestation,
-    stage: attestation.sourceMatchesMarker === false ? "runtime-attestation" : "complete",
-    error: attestation.sourceMatchesMarker === false ? "Loaded server source bytes do not match the immutable generation marker" : null,
+    stage: attestation.sourceMatchesMarker === false ? "runtime-attestation" : provisioningError ? "generation-provisioning" : "complete",
+    error: attestation.sourceMatchesMarker === false ? "Loaded server source bytes do not match the immutable generation marker" : provisioningError,
   });
   if (attestation.sourceMatchesMarker === false) throw new Error("Alonix refused a drifted server generation");
   // Migration is deliberately failure-isolated: invalid user JSONC or a locked

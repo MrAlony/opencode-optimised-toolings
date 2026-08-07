@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { activatePackageGeneration, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, runtimeAttestation, runtimeHealth, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
+import { activatePackageGeneration, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, resolveNpmCommand, runtimeAttestation, runtimeHealth, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
 
 function createInstallation(root, version) {
   const packageRoot = join(root, "node_modules", "opencode-optimised-toolings")
@@ -36,6 +36,40 @@ test("a loaded npm installation becomes an immutable user-owned generation", asy
     assert.match(first.specs.server, /\/index\.js$/)
     assert.match(first.specs.tui, /\/packages\/tui\/index\.tsx$/)
     assert.equal(first.specs.tui.includes("/node_modules/"), false)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("npm discovery uses a real Node executable when the host runtime is opencode.exe", () => {
+  if (process.platform !== "win32") return
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-npm-runtime-"))
+  try {
+    const nodeRoot = join(directory, "nodejs")
+    const npmCli = join(nodeRoot, "node_modules", "npm", "bin", "npm-cli.js")
+    mkdirSync(join(nodeRoot, "node_modules", "npm", "bin"), { recursive: true })
+    writeFileSync(join(nodeRoot, "node.exe"), "fixture")
+    writeFileSync(npmCli, "fixture")
+    const command = resolveNpmCommand({ PATH: nodeRoot, ProgramFiles: directory })
+    assert.equal(command.executable, join(nodeRoot, "node.exe"))
+    assert.equal(command.npmCli, npmCli)
+    assert.deepEqual(command.args, [npmCli])
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("concurrent generation requests share one provisioning flight", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-flight-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations") }
+    let installs = 0
+    const installDependencies = async () => { installs += 1; await new Promise((resolve) => setTimeout(resolve, 25)) }
+    const [first, second, third] = await Promise.all([
+      ensurePackageGeneration(packageRoot, { env, installDependencies }),
+      ensurePackageGeneration(packageRoot, { env, installDependencies }),
+      ensurePackageGeneration(packageRoot, { env, installDependencies }),
+    ])
+    assert.equal(installs, 1)
+    assert.equal(first.root, second.root)
+    assert.equal(second.root, third.root)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 

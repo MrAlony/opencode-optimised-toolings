@@ -246,6 +246,16 @@ const tui: TuiPlugin = async (api, options) => {
   const { workbenchView, setWorkbenchView, workbenchMode, setWorkbenchMode, dockOpen, setDockOpen } = scope
   record("initializing", "reactive-scope-ready")
 
+  // Do not expose a partially hydrated Alonix shell. The host's native UI stays
+  // visible while the first authoritative portfolio cycle runs; routes and
+  // slots are registered only after that cycle settles. This removes the
+  // checkout-vs-installed first-frame race instead of hiding it with a delay.
+  const portfolioStartup = await projects.waitForInitialLoad()
+  record(portfolioStartup.ready ? "initializing" : "degraded", portfolioStartup.ready ? "portfolio-ready" : "portfolio-unavailable", {
+    portfolioPhase: portfolioStartup.phase,
+    portfolioError: portfolioStartup.error || null,
+  })
+
   const toggleDock = () => {
     const next = !dockOpen()
     setDockOpen(next)
