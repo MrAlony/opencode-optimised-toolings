@@ -246,6 +246,26 @@ export function dependencyAttestation(packageRoot) {
   return { fingerprint, graph, dependencies }
 }
 
+export function directDependencyAttestation(packageRoot) {
+  const root = resolve(packageRoot)
+  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
+  const expected = Object.fromEntries(Object.entries(manifest.dependencies ?? {}).sort(([left], [right]) => left.localeCompare(right)))
+  const actual = dependencyAttestation(root).dependencies
+  const mismatches = []
+  for (const [name, version] of Object.entries(expected)) {
+    const resolved = actual[name]?.version ?? null
+    if (resolved !== version) mismatches.push({ name, expected: version, actual: resolved })
+  }
+  const graph = Object.entries(actual).sort(([left], [right]) => left.localeCompare(right)).map(([name, detail]) => `${name}@${detail.version ?? "unresolved"}`)
+  return {
+    matchesExpected: mismatches.length === 0,
+    expected,
+    actual: Object.fromEntries(Object.entries(actual).sort(([left], [right]) => left.localeCompare(right)).map(([name, detail]) => [name, detail.version ?? null])),
+    mismatches,
+    fingerprint: createHash("sha256").update(JSON.stringify(graph)).digest("hex"),
+  }
+}
+
 function expectedDependencyAttestation(packageRoot) {
   try {
     const data = JSON.parse(readFileSync(join(packageRoot, "config", "runtime-dependencies.json"), "utf8"))
@@ -260,6 +280,7 @@ export async function runtimeAttestation(packageRoot, options = {}) {
   const version = packageVersion(root)
   const sourceFingerprint = await packageFingerprint(root)
   const dependencies = dependencyAttestation(root)
+  const directDependencies = directDependencyAttestation(root)
   const expectedDependencies = expectedDependencyAttestation(root)
   const dependencyMatchesExpected = expectedDependencies ? expectedDependencies.fingerprint === dependencies.fingerprint : null
   let marker = null
@@ -277,6 +298,9 @@ export async function runtimeAttestation(packageRoot, options = {}) {
     expectedDependencyFingerprint: expectedDependencies?.fingerprint ?? null,
     dependencyMatchesExpected,
     dependencies: dependencies.dependencies,
+    directDependencyFingerprint: directDependencies.fingerprint,
+    directDependencyMatchesExpected: directDependencies.matchesExpected,
+    directDependencyMismatches: directDependencies.mismatches,
     role: options.role ?? "unknown",
   }
 }
@@ -386,22 +410,25 @@ async function installExactPackage(version, staging, options = {}) {
 }
 
 async function installLockedDependencies(packageRoot, options = {}) {
-  if (typeof options.installDependencies === "function") return options.installDependencies(packageRoot)
   if (!existsSync(join(packageRoot, "npm-shrinkwrap.json"))) throw new Error("Package generation is missing npm-shrinkwrap.json")
-  const command = npmCommand()
-  await new Promise((resolvePromise, reject) => {
-    const child = spawn(command.executable, [...command.args, "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--workspaces=false"], {
-      cwd: packageRoot,
-      env: { ...process.env, NODE_AUTH_TOKEN: "", NPM_TOKEN: "", npm_config_provenance: "false" },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+  if (typeof options.installDependencies === "function") {
+    await options.installDependencies(packageRoot)
+  } else {
+    const command = npmCommand()
+    await new Promise((resolvePromise, reject) => {
+      const child = spawn(command.executable, [...command.args, "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--workspaces=false"], {
+        cwd: packageRoot,
+        env: { ...process.env, NODE_AUTH_TOKEN: "", NPM_TOKEN: "", npm_config_provenance: "false" },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      })
+      let output = ""
+      child.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-16_000) })
+      child.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-16_000) })
+      child.once("error", reject)
+      child.once("close", (code) => code === 0 ? resolvePromise() : reject(new Error(`npm could not install the locked Alonix runtime dependencies (exit ${code})\n${output}`)))
     })
-    let output = ""
-    child.stdout.on("data", (chunk) => { output = `${output}${chunk}`.slice(-16_000) })
-    child.stderr.on("data", (chunk) => { output = `${output}${chunk}`.slice(-16_000) })
-    child.once("error", reject)
-    child.once("close", (code) => code === 0 ? resolvePromise() : reject(new Error(`npm could not install the locked Alonix runtime dependencies (exit ${code})\n${output}`)))
-  })
+  }
   const attestation = await runtimeAttestation(packageRoot, { role: "provisioning" })
   if (attestation.dependencyMatchesExpected !== true) {
     throw new Error(`Provisioned dependency graph does not match the packaged runtime attestation (${attestation.dependencyFingerprint} != ${attestation.expectedDependencyFingerprint ?? "missing"})`)

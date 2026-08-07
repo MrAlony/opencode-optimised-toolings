@@ -109,20 +109,40 @@ try {
   run(process.execPath, ["--eval", "require('fs').mkdirSync(process.argv[1], { recursive: true })", consumerRoot]);
   run("npm", ["init", "-y"], { cwd: consumerRoot });
   run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], { cwd: consumerRoot });
+  const generationDataRoot = join(releaseRoot, "consumer-generation-data");
   const probe = `
+    import { pathToFileURL } from "node:url";
+    import { join } from "node:path";
+    const transportRoot = ${JSON.stringify(join(consumerRoot, "node_modules", packageName))};
+    const generationModule = await import(${JSON.stringify(pathToFileURL(join(consumerRoot, "node_modules", packageName, "packages", "shared", "generation.js")).href)});
+    const transport = await generationModule.runtimeAttestation(transportRoot, { role: "release-transport" });
+    if (transport.directDependencyMatchesExpected !== true) {
+      throw new Error("packed transport direct dependencies do not match package.json: " + JSON.stringify(transport.directDependencyMismatches));
+    }
+    const provisioned = await generationModule.ensurePackageGeneration(transportRoot, {
+      env: { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: ${JSON.stringify(join(generationDataRoot, "generations"))}, OPENCODE_TOOLINGS_DATA_DIR: ${JSON.stringify(generationDataRoot)} },
+    });
+    const validation = await generationModule.validateGeneration(provisioned.root, ${JSON.stringify(version)});
+    if (!validation.valid) throw new Error("packed transport did not provision a valid immutable generation: " + validation.reason);
+    const attestation = await generationModule.runtimeAttestation(provisioned.root, { role: "release-generation" });
+    if (attestation.dependencyMatchesExpected !== true) throw new Error("provisioned generation dependency graph does not match the packaged attestation");
+    if (attestation.sourceMatchesMarker !== true) throw new Error("provisioned generation source does not match its immutable marker");
     process.env.OPENCODE_TOOLINGS_MODE = "development";
-    const generation = await import(${JSON.stringify(pathToFileURL(join(consumerRoot, "node_modules", packageName, "packages", "shared", "generation.js")).href)});
-    const attestation = await generation.runtimeAttestation(${JSON.stringify(join(consumerRoot, "node_modules", packageName))}, { role: "release-consumer" });
-    if (attestation.dependencyMatchesExpected !== true) throw new Error("packed consumer dependency graph does not match the packaged attestation");
-    const module = await import(${JSON.stringify(pathToFileURL(join(consumerRoot, "node_modules", packageName, "index.js")).href)});
+    process.env.OPENCODE_TOOLINGS_DATA_DIR = ${JSON.stringify(join(generationDataRoot, "runtime"))};
+    const module = await import(pathToFileURL(join(provisioned.root, "index.js")).href);
     const hooks = await module.default({});
     const names = Object.keys(hooks.tool ?? {}).sort();
     if (names.length !== ${expectedTools}) throw new Error("expected ${expectedTools} tools, got " + names.length);
     if (names.some((name) => name.includes("many"))) throw new Error("legacy tool ID in package: " + names.join(","));
-    console.log(JSON.stringify({ tools: names.length, names }));
+    console.log(JSON.stringify({ tools: names.length, names, generationRoot: provisioned.root, transportDependencyExact: transport.dependencyMatchesExpected, generationDependencyExact: attestation.dependencyMatchesExpected }));
     await hooks.dispose?.();
   `;
-  run("node", ["--input-type=module", "--eval", probe], { cwd: consumerRoot });
+  const probeResult = run("node", ["--input-type=module", "--eval", probe], { cwd: consumerRoot, capture: true });
+  const probeData = JSON.parse(probeResult.stdout.trim().split(/\r?\n/).at(-1));
+  run("node", ["--test", "test/tui-runtime-parity.test.mjs"], {
+    cwd: buildRoot,
+    env: { ...process.env, ALONIX_GENERATION: probeData.generationRoot, OPENCODE_TOOLINGS_DATA_DIR: join(releaseRoot, "tui-parity-runtime") },
+  });
 
   console.log(JSON.stringify({
     mode: args.publish ? "publish" : "verify-only",

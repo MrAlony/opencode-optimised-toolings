@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { activatePackageGeneration, ensurePackageGeneration, generationPackageRoot, runtimeAttestation, runtimeHealth, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
+import { activatePackageGeneration, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, runtimeAttestation, runtimeHealth, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
 
 function createInstallation(root, version) {
   const packageRoot = join(root, "node_modules", "opencode-optimised-toolings")
@@ -39,6 +39,24 @@ test("a loaded npm installation becomes an immutable user-owned generation", asy
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
+test("transport direct dependencies stay exact even when an unrelated transitive package floats", () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-transport-"))
+  try {
+    const packageRoot = createInstallation(directory, "4.0.2")
+    const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
+    manifest.dependencies = { direct: "1.0.0" }
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify(manifest))
+    const directRoot = join(directory, "node_modules", "direct")
+    const transitiveRoot = join(directRoot, "node_modules", "floating")
+    mkdirSync(transitiveRoot, { recursive: true })
+    writeFileSync(join(directRoot, "package.json"), JSON.stringify({ name: "direct", version: "1.0.0", dependencies: { floating: "^1.0.0" } }))
+    writeFileSync(join(transitiveRoot, "package.json"), JSON.stringify({ name: "floating", version: "1.9.0" }))
+    const contract = directDependencyAttestation(packageRoot)
+    assert.equal(contract.matchesExpected, true)
+    assert.deepEqual(contract.mismatches, [])
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
 test("generation provisioning safely excludes a destination nested under the source installation", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-generation-nested-"))
   try {
@@ -49,6 +67,24 @@ test("generation provisioning safely excludes a destination nested under the sou
     assert.equal(generation.created, true)
     assert.match(generation.root, /data[\\/]v4\.0\.2--[a-f0-9]{16}[\\/]opencode-optimised-toolings$/)
     assert.equal(generation.root.includes(`${join("node_modules", "opencode-optimised-toolings")}`), false)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("custom dependency installers are still subject to the full locked graph attestation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-custom-install-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations") }
+    await assert.rejects(
+      () => ensurePackageGeneration(packageRoot, {
+        env,
+        installDependencies: async (stagedRoot) => {
+          const graph = ["unexpected@1.0.0"]
+          writeFileSync(join(stagedRoot, "config/runtime-dependencies.json"), JSON.stringify({ schemaVersion: 1, fingerprint: createHash("sha256").update(JSON.stringify(graph)).digest("hex"), graph }))
+        },
+      }),
+      /dependency graph does not match/,
+    )
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
