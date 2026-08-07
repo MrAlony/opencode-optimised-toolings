@@ -3,6 +3,7 @@ import { createMemo, createSignal, For, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { GLYPH } from "../lib/design.js"
 import { TOOL_GROUPS, WEB_PROVIDERS } from "../lib/settings.js"
+import { DEFAULT_STREAMING_SETTINGS } from "../lib/streaming.js"
 import { Button, SegmentedControl, TextInput, Toolbar } from "./controls.jsx"
 import { SectionLabel } from "./ide-kit.jsx"
 import { dockWidth } from "./dock.jsx"
@@ -76,9 +77,11 @@ export function SettingsView(props) {
       setDraft(structuredClone(result ?? draft()))
       setSecretInput({})
       setSecretClear({})
-      setMessage(result?.changed === false
-        ? "Already saved. No files were rewritten."
-        : "Saved. Restart OpenCode to activate config-time changes.")
+      setMessage(result?.streamingChanged && !result?.restartRequired
+        ? "Smooth streaming updated live. No restart needed."
+        : result?.changed === false
+          ? "Already saved. No files were rewritten."
+          : "Saved. Restart OpenCode to activate config-time changes.")
     } catch (error) {
       setMessage(`Could not save: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
@@ -100,7 +103,7 @@ export function SettingsView(props) {
       <box flexDirection="row" flexGrow={1} minHeight={0}>
         <box width={22} flexShrink={0} flexDirection="column" padding={1} gap={1} backgroundColor={tokens().panel}>
           <For each={[
-            ["tools", "Tool access"], ["instructions", "Instructions"], ["dcp", "Context / DCP"], ["web", "Web providers"], ["about", "Plugin & safety"],
+            ["tools", "Tool access"], ["streaming", "Smooth streaming"], ["instructions", "Instructions"], ["dcp", "Context / DCP"], ["web", "Web providers"], ["about", "Plugin & safety"],
           ]}>
             {([value, label]) => <Button tokens={tokens()} width={20} variant={page() === value ? "primary" : "secondary"} onPress={() => setPage(value)}>{label}</Button>}
           </For>
@@ -122,6 +125,45 @@ export function SettingsView(props) {
                   )}</For>
                 </box>
               )}</For>
+            </box>
+          </Show>
+
+          <Show when={page() === "streaming"}>
+            <box flexDirection="column" gap={1}>
+              <SectionLabel tokens={tokens()} title="SMOOTH STREAMING" meta="live presentation only" />
+              <text fg={tokens().muted} wrapMode="wrap">Reveal incoming assistant text by Unicode character instead of provider-sized chunks. Authoritative messages, copy/export, persistence, and API text remain immediate and unchanged.</text>
+              <ToggleRow tokens={tokens()} label="Smooth assistant streaming" value={draft().streaming?.enabled !== false} onChange={(value) => update(["streaming", "enabled"], value)} />
+              <text fg={tokens().accent}><b>Reveal style</b></text>
+              <SegmentedControl
+                tokens={tokens()}
+                value={draft().streaming?.style ?? DEFAULT_STREAMING_SETTINGS.style}
+                onChange={(value) => update(["streaming", "style"], value)}
+                items={[{ value: "adaptive", label: "Adaptive" }, { value: "cinematic", label: "Cinematic" }, { value: "instant", label: "Instant" }]}
+              />
+              <text fg={tokens().faint} wrapMode="wrap">Adaptive stays responsive under bursts. Cinematic is deliberately calmer. Instant preserves all integration while removing the visual delay.</text>
+              <text fg={tokens().accent}><b>Motion accessibility</b></text>
+              <SegmentedControl
+                tokens={tokens()}
+                value={draft().streaming?.motion ?? DEFAULT_STREAMING_SETTINGS.motion}
+                onChange={(value) => update(["streaming", "motion"], value)}
+                items={[{ value: "full", label: "Full" }, { value: "reduced", label: "Reduced" }]}
+              />
+              <text fg={tokens().accent}><b>Maximum visual delay</b></text>
+              <SegmentedControl
+                tokens={tokens()}
+                value={String(draft().streaming?.maxDelayMs ?? DEFAULT_STREAMING_SETTINGS.maxDelayMs)}
+                onChange={(value) => update(["streaming", "maxDelayMs"], Number(value))}
+                items={[{ value: "120", label: "120ms" }, { value: "180", label: "180ms" }, { value: "250", label: "250ms" }, { value: "400", label: "400ms" }]}
+              />
+              <ToggleRow tokens={tokens()} label="Animate expanded reasoning" value={draft().streaming?.reasoning === true} onChange={(value) => update(["streaming", "reasoning"], value)} />
+              <text fg={tokens().accent}><b>Active-tail treatment</b></text>
+              <SegmentedControl
+                tokens={tokens()}
+                value={draft().streaming?.tail ?? DEFAULT_STREAMING_SETTINGS.tail}
+                onChange={(value) => update(["streaming", "tail"], value)}
+                items={[{ value: "subtle", label: "Subtle" }, { value: "off", label: "Off" }]}
+              />
+              <text fg={tokens().faint} wrapMode="wrap">Changes apply immediately to active and future chats. OpenCode's global animations setting remains the master reduced-motion switch.</text>
             </box>
           </Show>
 
