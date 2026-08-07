@@ -6,7 +6,7 @@ import { createMemo, createSignal, For, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
 import { liveActivity } from "../lib/activity.js"
 import { fit, fitLeft } from "../lib/layout.js"
-import { agentWindow, missionControlModel } from "../lib/mission-control.js"
+import { agentWindow, missionControlLayout, missionControlModel, missionScrollIndex } from "../lib/mission-control.js"
 import { workspaceSnapshot } from "../lib/workspace.js"
 import { ActivityLine, Button, ClickRow, SegmentedControl } from "./controls.jsx"
 import { Badge, EmptyState, StatusDot } from "./ide-kit.jsx"
@@ -69,7 +69,7 @@ function AgentCard(props) {
   const tone = () => agent().needsAttention ? "warning" : agent().stalled ? "error" : agent().collision ? "warning" : "accent"
   return (
     <box flexDirection="column" flexShrink={0} width={props.width} minHeight={props.density === "compact" ? 5 : 9} border borderStyle="rounded" borderColor={tone() === "warning" ? props.tokens.warning : tone() === "error" ? props.tokens.error : props.tokens.accent} backgroundColor={props.tokens.panel}>
-      <ClickRow tokens={props.tokens} width={props.width - 2} selected={props.selected} onSelect={() => props.onFocus?.(agent())}>
+      <ClickRow tokens={props.tokens} width={Math.max(1, props.width - 2)} selected={props.selected} onHover={props.onHover} onSelect={() => props.onFocus?.(agent())}>
         <StatusDot tokens={props.tokens} tone={tone()} pulse={agent().running} />
         <box flexDirection="column" flexGrow={1} minWidth={0}>
           <text fg={props.tokens.text} wrapMode="none"><b>{fit(agent().title, Math.max(8, props.width - 14))}</b></text>
@@ -126,16 +126,18 @@ export function Monitor(props) {
   const project = createMemo(() => projects()[Math.min(projectIndex(), projects().length - 1)] ?? projects()[0])
   const model = createMemo(() => missionControlModel({ agents: enriched(), filter: filter(), project: project().id, now: Date.now() }))
   const focused = createMemo(() => model().agents.find((agent) => agent.id === focusedID()) ?? null)
-  const rowHeight = createMemo(() => density() === "table" ? 1 : density() === "compact" ? 6 : 10)
-  const windowed = createMemo(() => agentWindow(model().agents, selected(), Math.max(1, Math.floor((props.height - 9) / rowHeight()))))
-  const columns = createMemo(() => density() === "table" ? 1 : props.width >= 108 ? 3 : props.width >= 68 ? 2 : 1)
-  const cardWidth = createMemo(() => Math.max(28, Math.floor((props.width - (columns() - 1)) / columns())))
+  const layout = createMemo(() => missionControlLayout({ width: props.width, height: props.height }, density()))
+  const windowed = createMemo(() => agentWindow(model().agents, selected(), layout().capacity))
   const cardRows = createMemo(() => {
     const out = []
     const list = windowed().rows
-    for (let index = 0; index < list.length; index += columns()) out.push(list.slice(index, index + columns()))
+    for (let index = 0; index < list.length; index += layout().columns) out.push(list.slice(index, index + layout().columns))
     return out
   })
+  const scrollAgents = (event) => {
+    const direction = event?.scroll?.direction ?? (Number(event?.delta) < 0 ? "up" : "down")
+    setSelected((current) => missionScrollIndex(current, model().agents.length, direction, layout().columns))
+  }
 
   return (
     <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} paddingLeft={1} paddingRight={1} gap={1}>
@@ -156,14 +158,14 @@ export function Monitor(props) {
 
       <Show when={focused()} fallback={
         <Show when={model().agents.length} fallback={<EmptyState tokens={tokens()} title={props.ready ? "No live agents match this view" : "Loading live work"} hint={props.ready ? "Change the filter or use the Delivery Hub to start and plan work." : "Checking every workspace for active chats…"} action={props.ready ? <Button tokens={tokens()} variant="primary" size="lg" glyph={GLYPH.pointer} onPress={props.onChooseProject}>Start new work</Button> : undefined} />}>
-          <scrollbox flexGrow={1} stickyScroll={false} onMouseScroll={(event) => setSelected(Math.max(0, Math.min(model().agents.length - 1, selected() + (Number(event?.delta) > 0 ? 1 : -1))))}>
-            <Show when={density() === "table"} fallback={<For each={cardRows()}>{(row) => <box flexDirection="row" flexShrink={0} gap={1} marginBottom={1}><For each={row}>{(agent) => <AgentCard tokens={tokens()} agent={agent} width={cardWidth()} density={density()} selected={model().agents[selected()]?.id === agent.id} onFocus={(item) => setFocusedID(item.id)} />}</For></box>}</For>}>
-              <For each={windowed().rows}>{(agent, index) => <AgentTableRow tokens={tokens()} agent={agent} width={props.width} selected={model().agents[selected()]?.id === agent.id} onHover={() => setSelected(windowed().start + index())} onFocus={(item) => setFocusedID(item.id)} />}</For>
+          <scrollbox flexGrow={1} stickyScroll={false} viewportCulling onMouseScroll={scrollAgents}>
+            <Show when={density() === "table"} fallback={<For each={cardRows()}>{(row, rowIndex) => <box flexDirection="row" flexShrink={0} gap={layout().gap} marginBottom={1}><For each={row}>{(agent, columnIndex) => <AgentCard tokens={tokens()} agent={agent} width={layout().cardWidth} density={density()} selected={model().agents[selected()]?.id === agent.id} onHover={() => setSelected(windowed().start + rowIndex() * layout().columns + columnIndex())} onFocus={(item) => setFocusedID(item.id)} />}</For></box>}</For>}>
+              <For each={windowed().rows}>{(agent, index) => <AgentTableRow tokens={tokens()} agent={agent} width={layout().contentWidth} selected={model().agents[selected()]?.id === agent.id} onHover={() => setSelected(windowed().start + index())} onFocus={(item) => setFocusedID(item.id)} />}</For>
             </Show>
           </scrollbox>
         </Show>
       }>
-        {(agent) => <FocusPanel tokens={tokens()} agent={agent()} width={props.width} onOpen={props.onOpen} onClose={() => setFocusedID("")} />}
+        {(agent) => <FocusPanel tokens={tokens()} agent={agent()} width={layout().contentWidth} onOpen={props.onOpen} onClose={() => setFocusedID("")} />}
       </Show>
     </box>
   )

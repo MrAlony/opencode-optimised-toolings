@@ -29,6 +29,16 @@ test("candidate promotion is built from the exact validated working tree before 
   assert.doesNotMatch(candidate, /git tag|git push|npm publish/)
 })
 
+test("shareability validation requires the native stealth runtime and rejects retired Python workers", () => {
+  const source = read("scripts/verify-shareable.mjs");
+  assert.match(source, /packages\/stealth\/index\.js/);
+  assert.match(source, /packages\/stealth\/lib\/worker-client\.js/);
+  assert.match(source, /packages\/stealth\/lib\/tor\.js/);
+  assert.match(source, /forbiddenLegacyFiles/);
+  assert.match(source, /packages\/stealth\/worker\.py/);
+  assert.match(source, /packages\/stealth\/requirements\.txt/);
+});
+
 test("local release enforces immutable tags, complete tests, native passkey auth, and registry integrity", () => {
   const source = read("scripts/release-local.mjs");
   assert.match(source, /cat-file/);

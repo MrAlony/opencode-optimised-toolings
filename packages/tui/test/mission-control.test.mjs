@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { agentWindow, MISSION_STALL_MS, missionControlModel } from "../lib/mission-control.js"
+import { agentWindow, missionControlLayout, missionControlModel, missionScrollIndex, MISSION_STALL_MS } from "../lib/mission-control.js"
 
 const now = 1_000_000
 const agents = [
@@ -34,6 +34,32 @@ test("agent window mounts only the bounded visible range", () => {
   assert.equal(window.rows.length, 9)
   assert.ok(window.rows.some((item) => item.id === 50))
   assert.equal(window.before + window.rows.length + window.after, 100)
+})
+
+test("card capacity counts every column and never overflows the padded viewport", () => {
+  for (const density of ["cards", "compact", "table"]) {
+    for (const width of [20, 40, 67, 68, 107, 108, 160]) {
+      for (const height of [8, 18, 29, 60]) {
+        const layout = missionControlLayout({ width, height }, density)
+        assert.equal(layout.capacity, layout.visibleRows * layout.columns)
+        const used = layout.columns * layout.cardWidth + layout.gap * (layout.columns - 1)
+        assert.ok(used <= layout.contentWidth, `${density}@${width}x${height}: ${used} overflows ${layout.contentWidth}`)
+      }
+    }
+  }
+  const threeColumns = missionControlLayout({ width: 108, height: 29 }, "cards")
+  assert.equal(threeColumns.columns, 3)
+  assert.equal(threeColumns.visibleRows, 2)
+  assert.equal(threeColumns.capacity, 6, "two three-column rows must mount six agents, not two")
+})
+
+test("arbitrary agent counts remain reachable one visual row at a time", () => {
+  const total = 101
+  assert.equal(missionScrollIndex(0, total, "down", 3), 3)
+  assert.equal(missionScrollIndex(99, total, "down", 3), 100)
+  assert.equal(missionScrollIndex(3, total, "up", 3), 0)
+  assert.equal(missionScrollIndex(0, total, "up", 3), 0)
+  assert.equal(missionScrollIndex(8, total, "down", 1), 9)
 })
 
 test("malformed input degrades safely", () => {

@@ -15,6 +15,50 @@ function fileName(item) {
 
 export const MISSION_STALL_MS = 10 * 60 * 1000
 
+const MISSION_DENSITIES = new Set(["cards", "compact", "table"])
+
+/**
+ * Geometry for the live-agent viewport.
+ *
+ * The monitor owns one cell of horizontal padding on each side. Capacity is
+ * measured in agents, not visual rows: a three-column viewport with two rows
+ * must mount six agents. Keeping this calculation pure prevents column-count
+ * changes from silently hiding otherwise reachable agents.
+ */
+export function missionControlLayout(viewport = {}, requestedDensity = "cards") {
+  const width = Math.max(1, Math.floor(Number(viewport.width) || 1))
+  const height = Math.max(1, Math.floor(Number(viewport.height) || 1))
+  const contentWidth = Math.max(1, width - 2)
+  const density = MISSION_DENSITIES.has(requestedDensity) ? requestedDensity : "cards"
+  const columns = density === "table" ? 1 : contentWidth >= 106 ? 3 : contentWidth >= 66 ? 2 : 1
+  const rowHeight = density === "table" ? 1 : density === "compact" ? 6 : 10
+  const visibleRows = Math.max(1, Math.floor(Math.max(1, height - 9) / rowHeight))
+  const gap = columns > 1 ? 1 : 0
+  const cardWidth = Math.max(1, Math.floor((contentWidth - gap * (columns - 1)) / columns))
+  return {
+    width,
+    height,
+    contentWidth,
+    density,
+    columns,
+    rowHeight,
+    visibleRows,
+    capacity: visibleRows * columns,
+    gap,
+    cardWidth,
+  }
+}
+
+export function missionScrollIndex(current, total, direction, step = 1) {
+  const size = Math.max(0, Math.floor(Number(total) || 0))
+  if (!size) return 0
+  const index = Math.max(0, Math.min(size - 1, Math.floor(Number(current) || 0)))
+  const amount = Math.max(1, Math.floor(Number(step) || 1))
+  const text = String(direction ?? "").toLowerCase()
+  const delta = ["up", "left", "-1"].includes(text) ? -amount : amount
+  return Math.max(0, Math.min(size - 1, index + delta))
+}
+
 export function missionControlModel(input = {}) {
   const now = number(input.now) || Date.now()
   const filter = ["all", "attention", "working", "stalled", "collisions"].includes(input.filter) ? input.filter : "all"

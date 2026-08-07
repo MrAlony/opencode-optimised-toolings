@@ -47,7 +47,7 @@ test("delivery state is Alonix-owned KV and never mutates host sessions", () => 
   assert.doesNotMatch(store, /session\.(create|update|delete|fork)\(/)
 })
 
-test("Alonix sidebar contributes exceptions without duplicating native sidebar sections", () => {
+test("Alonix sidebar contributes exceptions without duplicating native sidebar sections", (context) => {
   const source = read(path.join(components, "ide-surfaces.jsx"))
   const start = source.indexOf("export function WorkspaceInspector")
   const end = source.indexOf("export function StatusBar")
@@ -56,8 +56,12 @@ test("Alonix sidebar contributes exceptions without duplicating native sidebar s
   assert.match(inspector, /Alonix capability/)
   for (const duplicate of ["title=\"Sessions\"", "title=\"Plan\"", "title=\"Changes\"", "title=\"Context\"", "title=\"Environment\""]) assert.equal(inspector.includes(duplicate), false, `duplicate sidebar panel remained: ${duplicate}`)
   assert.doesNotMatch(inspector, /todos\.slice|files\.slice/)
-  const nativeTodo = read(path.join(repository, "runtime/src/opencode-1.18.15/packages/tui/src/feature-plugins/sidebar/todo.tsx"))
-  const nativeFiles = read(path.join(repository, "runtime/src/opencode-1.18.15/packages/tui/src/feature-plugins/sidebar/files.tsx"))
-  assert.match(nativeTodo, /<For each=\{list\(\)\}>/)
-  assert.match(nativeFiles, /<For each=\{list\(\)\}>/)
+  const nativeTodoPath = path.join(repository, "runtime/src/opencode-1.18.15/packages/tui/src/feature-plugins/sidebar/todo.tsx")
+  const nativeFilesPath = path.join(repository, "runtime/src/opencode-1.18.15/packages/tui/src/feature-plugins/sidebar/files.tsx")
+  if (!fs.existsSync(nativeTodoPath) || !fs.existsSync(nativeFilesPath)) {
+    context.skip("optional generated OpenCode source fixture is unavailable in clean package archives")
+    return
+  }
+  assert.match(read(nativeTodoPath), /<For each=\{list\(\)\}>/)
+  assert.match(read(nativeFilesPath), /<For each=\{list\(\)\}>/)
 })
