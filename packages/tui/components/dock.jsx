@@ -286,8 +286,8 @@ export function Dock(props) {
                       tokens={tokens()}
                       project={project}
                       width={width()}
-                      collapsed={store.workbench.collapsed.has(project.id)}
-                      onToggle={() => store.toggleCollapsed(project.id)}
+                      collapsed={store.workbench.collapsed.has(project.stateKey)}
+                      onToggle={() => store.toggleCollapsed(project)}
                       onOpen={(row) => {
                         store.selectProject?.(row)
                         props.onOpenProject?.(row)
@@ -298,7 +298,7 @@ export function Dock(props) {
                       }}
                       onHide={props.onHideProject}
                     />
-                    <Show when={!store.workbench.collapsed.has(project.id)}>
+                    <Show when={!store.workbench.collapsed.has(project.stateKey)}>
                       <ProjectSessions
                         api={props.api}
                         tokens={tokens()}

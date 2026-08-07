@@ -7,7 +7,14 @@
 
 import { createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
-import { buildProjectModel, flattenProjectSessions, recentSessions, summarizeProjects } from "../lib/projects.js"
+import {
+  buildProjectModel,
+  flattenProjectSessions,
+  normalizeProjectPreferenceKeys,
+  projectStateKey,
+  recentSessions,
+  summarizeProjects,
+} from "../lib/projects.js"
 import { listMessages, listProjects, listSessions, listStatuses } from "../lib/sdk.js"
 import { durableStatus, mergeStatus } from "../lib/presence.js"
 import {
@@ -43,6 +50,7 @@ const PANES_KEY = "alonix_monitor_panes"
 const WORKBENCH_KEY = "alonix_workbench_state"
 const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
 const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
+const SELECTED_PROJECT_KEY = "alonix_selected_project"
 const REFRESH_DEBOUNCE_MS = 250
 const STRUCTURAL_RECONCILE_INTERVAL_MS = 30_000
 const PRESENCE_RECONCILE_INTERVAL_MS = 8_000
@@ -72,6 +80,15 @@ function writeKv(api, key, value) {
   }
 }
 
+function kvReady(api) {
+  try {
+    // Older/mock hosts do not expose readiness; their synchronous KV is ready.
+    return api?.kv?.ready !== false
+  } catch {
+    return true
+  }
+}
+
 /**
  * Load every project, and the sessions belonging to each of them.
  *
@@ -85,8 +102,17 @@ function writeKv(api, key, value) {
  * flattened into an empty array, so one unreachable project cannot blank the
  * whole portfolio.
  */
+function normalizeDirectory(value) {
+  let normalized = String(value ?? "").trim().replaceAll("\\", "/").replace(/\/+$/, "")
+  if (process.platform === "win32" && /^\/(?!\/)/.test(normalized)) {
+    const drive = String(process.env.SystemDrive ?? process.cwd().match(/^[a-zA-Z]:/)?.[0] ?? "C:").replace(/\/$/, "")
+    normalized = `${drive}${normalized}`
+  }
+  return normalized
+}
+
 function directoryKey(value) {
-  const normalized = String(value ?? "").trim().replaceAll("\\", "/").replace(/\/+$/, "")
+  const normalized = normalizeDirectory(value)
   return process.platform === "win32" ? normalized.toLowerCase() : normalized
 }
 
@@ -94,7 +120,7 @@ function normalizeDirectories(value, limit = 200) {
   const out = []
   const seen = new Set()
   for (const item of Array.from(value ?? [])) {
-    const directory = String(item ?? "").trim().replaceAll("\\", "/").replace(/\/+$/, "")
+    const directory = normalizeDirectory(item)
     const key = directoryKey(directory)
     if (!key || seen.has(key)) continue
     seen.add(key)
@@ -320,7 +346,10 @@ function errorText(error) {
 }
 
 export function createProjectStore(api) {
-  const initialRegisteredProjects = normalizeDirectories(readKv(api, REGISTERED_PROJECTS_KEY, []))
+  const initiallyHydrated = kvReady(api)
+  const initialRead = (key, fallback) => (initiallyHydrated ? readKv(api, key, fallback) : fallback)
+  const initialRegisteredProjects = normalizeDirectories(initialRead(REGISTERED_PROJECTS_KEY, []))
+  const initialSelection = initialRead(SELECTED_PROJECT_KEY, {})
   const [store, setStore] = createStore({
     // Registered folders are durable local state. Render them immediately while
     // the authoritative SDK refresh runs, rather than showing an empty spinner.
@@ -328,12 +357,12 @@ export function createProjectStore(api) {
     sessions: [],
     statuses: {},
     registeredProjects: initialRegisteredProjects,
-    selectedProjectID: null,
-    selectedProjectDirectory: "",
-    pinnedProjects: normalizeIds(readKv(api, PINNED_PROJECTS_KEY, [])),
-    hiddenProjects: normalizeIds(readKv(api, HIDDEN_PROJECTS_KEY, []), 200),
-    workbench: createWorkbench(readKv(api, WORKBENCH_KEY, {})),
-    panes: createPanes(readKv(api, PANES_KEY, {})),
+    selectedProjectID: typeof initialSelection?.id === "string" ? initialSelection.id : null,
+    selectedProjectDirectory: typeof initialSelection?.directory === "string" ? initialSelection.directory : "",
+    pinnedProjects: normalizeIds(initialRead(PINNED_PROJECTS_KEY, [])),
+    hiddenProjects: normalizeIds(initialRead(HIDDEN_PROJECTS_KEY, []), 200),
+    workbench: createWorkbench(initialRead(WORKBENCH_KEY, {})),
+    panes: createPanes(initialRead(PANES_KEY, {})),
     loading: false,
     error: "",
     loadedAt: 0,
@@ -347,10 +376,58 @@ export function createProjectStore(api) {
   let presenceDebounce = null
   let presenceRotation = 0
   let disposed = false
+  let persistenceHydrated = initiallyHydrated
+  const pendingPersistence = new Map()
+
+  function persist(key, value) {
+    if (!persistenceHydrated) {
+      pendingPersistence.set(key, value)
+      return
+    }
+    writeKv(api, key, value)
+  }
+
+  // OpenCode hydrates kv.json asynchronously. Plugin callbacks are outside the
+  // component render graph, so relying on a Solid effect here is host-build
+  // dependent. A tiny bounded watcher observes the authoritative readiness flag
+  // in both checkout and installed modes and is explicitly cleaned up.
+  function hydratePersistence() {
+    if (persistenceHydrated || !kvReady(api)) return false
+    const pending = new Set(pendingPersistence.keys())
+    if (!pending.has(REGISTERED_PROJECTS_KEY)) setStore("registeredProjects", normalizeDirectories(readKv(api, REGISTERED_PROJECTS_KEY, [])))
+    if (!pending.has(PINNED_PROJECTS_KEY)) setStore("pinnedProjects", normalizeIds(readKv(api, PINNED_PROJECTS_KEY, [])))
+    if (!pending.has(HIDDEN_PROJECTS_KEY)) setStore("hiddenProjects", normalizeIds(readKv(api, HIDDEN_PROJECTS_KEY, []), 200))
+    if (!pending.has(WORKBENCH_KEY)) setStore("workbench", createWorkbench(readKv(api, WORKBENCH_KEY, {})))
+    if (!pending.has(PANES_KEY)) setStore("panes", createPanes(readKv(api, PANES_KEY, {})))
+    if (!pending.has(SELECTED_PROJECT_KEY)) {
+      const selected = readKv(api, SELECTED_PROJECT_KEY, {})
+      setStore("selectedProjectID", typeof selected?.id === "string" ? selected.id : null)
+      setStore("selectedProjectDirectory", typeof selected?.directory === "string" ? selected.directory : "")
+    }
+    persistenceHydrated = true
+    migrateProjectPreferences()
+    for (const [key, value] of pendingPersistence) writeKv(api, key, value)
+    pendingPersistence.clear()
+    void load()
+    return true
+  }
+  let hydrationTimer = null
+  if (!persistenceHydrated) {
+    hydrationTimer = setInterval(() => {
+      if (hydratePersistence() && hydrationTimer) {
+        clearInterval(hydrationTimer)
+        hydrationTimer = null
+      }
+    }, 25)
+  }
 
   async function load() {
     if (disposed) return
-    const persistedProjects = normalizeDirectories(readKv(api, REGISTERED_PROJECTS_KEY, store.registeredProjects))
+    const persistedRaw = readKv(api, REGISTERED_PROJECTS_KEY, store.registeredProjects)
+    const persistedProjects = normalizeDirectories(persistedRaw)
+    if (persistenceHydrated && JSON.stringify(Array.from(persistedRaw ?? [])) !== JSON.stringify(persistedProjects)) {
+      persist(REGISTERED_PROJECTS_KEY, persistedProjects)
+    }
     if (persistedProjects.join("\n") !== store.registeredProjects.join("\n")) {
       setStore("registeredProjects", persistedProjects)
     }
@@ -369,7 +446,10 @@ export function createProjectStore(api) {
       if (sessions) setStore("sessions", reconcile(sessions, { key: "id" }))
       if (statuses) setStore("statuses", reconcile(statuses))
       setStore("error", errors.length ? errors.join("; ") : "")
-      if (projects || sessions) setStore("loadedAt", Date.now())
+      if (projects || sessions) {
+        setStore("loadedAt", Date.now())
+        migrateProjectPreferences(projects ?? store.projects)
+      }
     } catch (error) {
       // Keep the last good portfolio; a blank workbench is worse than a stale one.
       if (!disposed) setStore("error", errorText(error))
@@ -469,6 +549,7 @@ export function createProjectStore(api) {
     disposed = true
     clearInterval(structuralTimer)
     clearInterval(presenceTimer)
+    if (hydrationTimer) clearInterval(hydrationTimer)
     if (debounce) clearTimeout(debounce)
     if (presenceDebounce) clearTimeout(presenceDebounce)
     for (const off of offs) {
@@ -546,13 +627,30 @@ export function createProjectStore(api) {
 
   function commitWorkbench(next) {
     setStore("workbench", next)
-    writeKv(api, WORKBENCH_KEY, serializeWorkbench(next))
+    persist(WORKBENCH_KEY, serializeWorkbench(next))
   }
 
   function commitPanes(next) {
     setStore("panes", next)
-    writeKv(api, PANES_KEY, serializePanes(next))
+    persist(PANES_KEY, serializePanes(next))
   }
+
+  function migrateProjectPreferences(identityRows = projectRows()) {
+    const rows = Array.from(identityRows ?? [])
+    if (!rows.length) return
+    const collapsed = normalizeProjectPreferenceKeys(store.workbench.collapsed, rows)
+    const currentCollapsed = [...store.workbench.collapsed]
+    if (collapsed.join("\n") !== currentCollapsed.join("\n")) {
+      commitWorkbench({ ...store.workbench, collapsed: new Set(collapsed) })
+    }
+    const pinned = normalizeProjectPreferenceKeys(store.pinnedProjects, rows, 32)
+    if (pinned.join("\n") !== store.pinnedProjects.join("\n")) {
+      setStore("pinnedProjects", pinned)
+      persist(PINNED_PROJECTS_KEY, pinned)
+    }
+  }
+
+  createEffect(migrateProjectPreferences)
 
   return {
     get projects() {
@@ -598,25 +696,31 @@ export function createProjectStore(api) {
     reload: load,
 
     selectProject(project) {
-      const projectID = typeof project === "string" ? project : project?.id
-      const directory = typeof project === "object" ? String(project?.worktree ?? "") : ""
-      setStore("selectedProjectID", typeof projectID === "string" && projectID ? projectID : null)
+      const row = typeof project === "string"
+        ? projectRows().find((item) => item.id === project || item.stateKey === project)
+        : project
+      const projectID = row?.id ?? (typeof project === "string" ? project : null)
+      const directory = String(row?.worktree ?? "")
+      const id = typeof projectID === "string" && projectID ? projectID : null
+      setStore("selectedProjectID", id)
       if (directory) setStore("selectedProjectDirectory", directory)
+      persist(SELECTED_PROJECT_KEY, { id, directory: directory || store.selectedProjectDirectory })
     },
     addProject(directory) {
       const target = normalizeDirectories([directory])[0]
       if (!target) return false
       const next = normalizeDirectories([target, ...store.registeredProjects])
       setStore("registeredProjects", next)
-      writeKv(api, REGISTERED_PROJECTS_KEY, next)
+      persist(REGISTERED_PROJECTS_KEY, next)
       const hidden = store.hiddenProjects.filter((item) => directoryKey(item) !== directoryKey(target))
       if (hidden.length !== store.hiddenProjects.length) {
         setStore("hiddenProjects", hidden)
-        writeKv(api, HIDDEN_PROJECTS_KEY, hidden)
+        persist(HIDDEN_PROJECTS_KEY, hidden)
       }
       const id = `alonix:${directoryKey(target)}`
       setStore("selectedProjectID", id)
       setStore("selectedProjectDirectory", target)
+      persist(SELECTED_PROJECT_KEY, { id, directory: target })
       setStore("projects", reconcile(mergeProjects(store.projects, [target]), { key: "id" }))
       void load()
       return true
@@ -643,8 +747,10 @@ export function createProjectStore(api) {
     togglePinTab(id) {
       commitWorkbench(togglePinTab(store.workbench, id))
     },
-    toggleCollapsed(projectID) {
-      commitWorkbench(toggleCollapsed(store.workbench, projectID))
+    toggleCollapsed(project) {
+      const row = typeof project === "object" ? project : projectRows().find((item) => item.id === project || item.stateKey === project)
+      const key = row ? projectStateKey(row) : String(project ?? "")
+      commitWorkbench(toggleCollapsed(store.workbench, key))
     },
     focusPane(pane) {
       commitWorkbench(focusPane(store.workbench, pane))
@@ -677,14 +783,16 @@ export function createProjectStore(api) {
       if (!target) return
       const next = normalizeIds([target, ...store.hiddenProjects], 200)
       setStore("hiddenProjects", next)
-      writeKv(api, HIDDEN_PROJECTS_KEY, next)
+      persist(HIDDEN_PROJECTS_KEY, next)
       const registered = store.registeredProjects.filter((item) => directoryKey(item) !== directoryKey(target))
       if (registered.length !== store.registeredProjects.length) {
         setStore("registeredProjects", registered)
-        writeKv(api, REGISTERED_PROJECTS_KEY, registered)
+        persist(REGISTERED_PROJECTS_KEY, registered)
       }
       if (store.selectedProjectID && projectRows().find((row) => row.id === store.selectedProjectID)?.worktree === target) {
         setStore("selectedProjectID", null)
+        setStore("selectedProjectDirectory", "")
+        persist(SELECTED_PROJECT_KEY, { id: null, directory: "" })
       }
     },
     unhideProject(worktree) {
@@ -692,20 +800,22 @@ export function createProjectStore(api) {
       if (!target) return
       const next = store.hiddenProjects.filter((item) => item !== target)
       setStore("hiddenProjects", next)
-      writeKv(api, HIDDEN_PROJECTS_KEY, next)
+      persist(HIDDEN_PROJECTS_KEY, next)
     },
     showAllProjects() {
       setStore("hiddenProjects", [])
-      writeKv(api, HIDDEN_PROJECTS_KEY, [])
+      persist(HIDDEN_PROJECTS_KEY, [])
     },
-    togglePinProject(projectID) {
-      if (typeof projectID !== "string" || !projectID) return
+    togglePinProject(project) {
+      const row = typeof project === "object" ? project : projectRows().find((item) => item.id === project || item.stateKey === project)
+      const key = row ? projectStateKey(row) : String(project ?? "")
+      if (!key) return
       const current = store.pinnedProjects
-      const next = current.includes(projectID)
-        ? current.filter((item) => item !== projectID)
-        : normalizeIds([projectID, ...current])
+      const next = current.includes(key)
+        ? current.filter((item) => item !== key)
+        : normalizeIds([key, ...current])
       setStore("pinnedProjects", next)
-      writeKv(api, PINNED_PROJECTS_KEY, next)
+      persist(PINNED_PROJECTS_KEY, next)
     },
 
     addPane(sessionID) {

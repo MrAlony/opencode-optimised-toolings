@@ -37,6 +37,19 @@ test("createClock exposes a controller object, not a callable tick", async () =>
   }
 })
 
+test("all persisted IDE state waits for the host KV readiness signal", async () => {
+  const entry = await source("index.tsx")
+  const store = await source("components/project-store.jsx")
+  assert.match(entry, /api\.kv\.ready/)
+  assert.match(entry, /awaitKvReady\(api\)/)
+  assert.match(entry, /dockInitiallyHydrated/)
+  assert.match(entry, /setInterval\(\(\) => \{\s*if \(hydrateDock\(\)/)
+  assert.match(store, /persistenceHydrated/)
+  assert.match(store, /pendingPersistence/)
+  assert.match(store, /function hydratePersistence\(\)/)
+  assert.match(store, /setInterval\(\(\) => \{\s*if \(hydratePersistence\(\)/)
+})
+
 test("no component invokes the clock controller as a function", async () => {
   for (const file of COMPONENTS) {
     const text = await source(file)

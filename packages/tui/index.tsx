@@ -49,6 +49,23 @@ function readDockPreference(api: TuiPluginApi): boolean {
   }
 }
 
+function kvReady(api: TuiPluginApi): boolean {
+  try {
+    return api.kv.ready !== false
+  } catch {
+    return true
+  }
+}
+
+async function awaitKvReady(api: TuiPluginApi, timeoutMs = 5_000): Promise<boolean> {
+  if (kvReady(api)) return true
+  const deadline = Date.now() + timeoutMs
+  while (!kvReady(api) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return kvReady(api)
+}
+
 type RenderProps = {
   input: Record<string, unknown>
   metadata: Record<string, unknown>
@@ -133,12 +150,8 @@ const tui: TuiPlugin = async (api, options) => {
     throw new Error("Alonix refused a drifted TUI generation")
   }
 
-  // Make generic custom-tool output visible even before the patched binary exists.
-  try {
-    api.kv.set("generic_tool_output_visibility", true)
-  } catch {
-    // KV is not namespaced; failure is harmless.
-  }
+  const persistedStateReady = await awaitKvReady(api)
+  record(persistedStateReady ? "initializing" : "degraded", persistedStateReady ? "kv-ready" : "kv-timeout")
 
   const registration: RendererRegistration = {
     available: false,
@@ -172,9 +185,34 @@ const tui: TuiPlugin = async (api, options) => {
     })
     const [workbenchView, setWorkbenchView] = createSignal<"activity" | "changes" | "plan">("activity")
     const [workbenchMode, setWorkbenchMode] = createSignal<"work" | "monitor">("work")
-    // The dock is docked open by default: it is the primary navigation surface,
-    // and the preference survives restarts.
-    const [dockOpen, setDockOpen] = createSignal<boolean>(readDockPreference(api))
+    // OpenCode hydrates KV asynchronously. Installed code can initialize faster
+    // than a checkout, so defaults are used only until the same shared KV is
+    // ready; this removes package-load timing from visible UI restoration.
+    const dockInitiallyHydrated = kvReady(api)
+    const [dockOpen, setDockOpen] = createSignal<boolean>(dockInitiallyHydrated ? readDockPreference(api) : true)
+    let dockHydrated = dockInitiallyHydrated
+    let dockChangedBeforeHydration = false
+    const hydrateDock = () => {
+      if (dockHydrated || !kvReady(api)) return false
+      if (!dockChangedBeforeHydration) setDockOpen(readDockPreference(api))
+      dockHydrated = true
+      try { api.kv.set("generic_tool_output_visibility", true) } catch {}
+      if (dockChangedBeforeHydration) {
+        try { api.kv.set(DOCK_KEY, dockOpen()) } catch {}
+      }
+      return true
+    }
+    let dockHydrationTimer: ReturnType<typeof setInterval> | null = null
+    if (dockInitiallyHydrated) {
+      try { api.kv.set("generic_tool_output_visibility", true) } catch {}
+    } else {
+      dockHydrationTimer = setInterval(() => {
+        if (hydrateDock() && dockHydrationTimer) {
+          clearInterval(dockHydrationTimer)
+          dockHydrationTimer = null
+        }
+      }, 25)
+    }
     return {
       tokens,
       clock,
@@ -190,6 +228,12 @@ const tui: TuiPlugin = async (api, options) => {
       setWorkbenchMode,
       dockOpen,
       setDockOpen,
+      get dockChangedBeforeHydration() { return dockChangedBeforeHydration },
+      set dockChangedBeforeHydration(value: boolean) { dockChangedBeforeHydration = value },
+      stopDockHydration() {
+        if (dockHydrationTimer) clearInterval(dockHydrationTimer)
+        dockHydrationTimer = null
+      },
         disposeRoot,
       }
     })
@@ -205,6 +249,10 @@ const tui: TuiPlugin = async (api, options) => {
   const toggleDock = () => {
     const next = !dockOpen()
     setDockOpen(next)
+    if (!kvReady(api)) {
+      scope.dockChangedBeforeHydration = true
+      return
+    }
     try {
       api.kv.set(DOCK_KEY, next)
     } catch {
@@ -695,6 +743,7 @@ const tui: TuiPlugin = async (api, options) => {
   }, 750)
   api.lifecycle.onDispose(() => {
     clearInterval(poll)
+    scope.stopDockHydration()
     scope.disposeRoot()
   })
 }

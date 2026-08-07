@@ -6,6 +6,8 @@ import {
   flattenProjectSessions,
   projectForSession,
   projectLabel,
+  projectStateKey,
+  normalizeProjectPreferenceKeys,
   recentProjects,
   recentSessions,
   summarizeProjects,
@@ -144,6 +146,17 @@ test("ordering puts the current project first, then pinned, running, and recency
   assert.equal(rows[0].current, true)
   assert.equal(rows[1].pinned, true)
   assert.equal(rows[2].running, 1)
+})
+
+test("project-owned state uses directory identity across synthetic and server IDs", () => {
+  const synthetic = { id: "alonix:c:/work/alpha", worktree: "C:/work/alpha" }
+  const server = { id: "p_alpha", worktree: "C:\\work\\alpha\\" }
+  assert.equal(projectStateKey(synthetic), projectStateKey(server))
+  assert.deepEqual(
+    normalizeProjectPreferenceKeys([synthetic.id, server.id, "alonix:/work/alpha"], [server]),
+    [projectStateKey(server)],
+    "legacy synthetic/server IDs converge without duplicating state",
+  )
 })
 
 test("explicit project selection overrides the launch directory and survives id replacement", () => {

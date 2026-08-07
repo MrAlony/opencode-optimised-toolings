@@ -25,17 +25,25 @@ function executeTui(root) {
     import { resolve } from "node:path";
     import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support/configure";
     ensureRuntimePluginSupport();
-    const calls={routes:[],slots:[],commands:[],renderers:[],events:[],dialogs:[],navigations:[],disposes:[]};
+    const calls={routes:[],slots:[],commands:[],renderers:[],events:[],dialogs:[],navigations:[],disposes:[],kvWrites:[]};
+    const initialKv=new Map([
+      ["alonix_registered_projects",["C:/work/alpha"]],
+      ["alonix_workbench_state",{tabs:[{id:"s1",title:"Alpha work",projectID:"p1",directory:"C:/work/alpha"}],activeID:"s1",mru:["s1"],focus:"main",collapsed:["p1"]}],
+      ["alonix_selected_project",{id:"p1",directory:"C:/work/alpha"}],
+      ["alonix_dock_open",false],
+    ]);
+    let kvReady=false;
+    const setKvReady=(value)=>{kvReady=value};
     const noop=()=>{};
     const api={
       route:{register(items){calls.routes.push(...items.map(x=>x.name));return noop},navigate(x){calls.navigations.push(x)},current:()=>({type:"home"})},
       slots:{register(x){calls.slots.push(...Object.keys(x.slots||{}));return noop}},
       keymap:{registerLayer(x){for(const command of x.commands||[]){calls.commands.push(command.name);if(["alonix-ide.settings","alonix-ide.workbench","alonix-ide.monitor","alonix-ide.palette","alonix-ide.project.add","alonix-ide.dock"].includes(command.name)) command.run()}return noop}},
       toolRenderers:{register(name){calls.renderers.push(name);return noop}},
-      kv:{get(_k,d){return d},set(){}},
+      kv:{get ready(){return kvReady},get(k,d){return kvReady&&initialKv.has(k)?initialKv.get(k):d},set(k,v){initialKv.set(k,v);calls.kvWrites.push([k,v])}},
       ui:{toast(){},dialog:{setSize(x){calls.dialogs.push(["size",x])},replace(){calls.dialogs.push(["replace"])},clear(){calls.dialogs.push(["clear"])}},Prompt:()=>null,DialogSelect:()=>null,Slot:()=>null},
       state:{path:{worktree:process.cwd(),directory:process.cwd()},session:{count:()=>0,get:()=>null,diff:()=>[],todo:()=>[],messages:()=>[],status:()=>({type:"idle"}),permission:()=>null,question:()=>null},part:()=>null,lsp:()=>[],mcp:()=>[]},
-      client:{project:{list:async()=>({data:[]})},session:{list:async()=>({data:[]}),status:async()=>({data:{}}),messages:async()=>({data:[]})}},
+      client:{project:{list:async()=>({data:[{id:"p1",worktree:"C:/work/alpha",name:"Alpha"}]})},session:{list:async()=>({data:[{id:"s1",title:"Alpha work",projectID:"p1",directory:"C:/work/alpha",time:{updated:Date.now()}}]}),status:async()=>({data:{}}),messages:async()=>({data:[]})}},
       event:{on(name){calls.events.push(name);return noop}},theme:{current:{background:"#111111",foreground:"#eeeeee",primary:"#6699ff"}},renderer:{},
       lifecycle:{onDispose(fn){if(typeof fn==="function")calls.disposes.push(fn)}},app:{version:"1.18.14"}
     };
@@ -43,10 +51,11 @@ function executeTui(root) {
     process.on("uncaughtException",error=>{uncaught=error?.stack??String(error)});
     const loaded=await import(pathToFileURL(resolve(${JSON.stringify(root)},"packages/tui/index.tsx")).href+"?runtime-parity="+Date.now());
     let callbackError=null;
+    setTimeout(()=>setKvReady(true),100);
     try{await loaded.default.tui(api,{animations:false})}catch(error){callbackError=error?.stack??String(error)}
     await new Promise(done=>setTimeout(done,5_300));
     for(const dispose of calls.disposes.reverse()){try{dispose()}catch{}}
-    console.log(JSON.stringify({callbackError,uncaught,calls:{...calls,disposes:calls.disposes.length}}));
+    console.log(JSON.stringify({callbackError,uncaught,calls:{...calls,disposes:calls.disposes.length},kv:Object.fromEntries(initialKv)}));
     if(callbackError||uncaught)process.exitCode=2;
   `
   return new Promise((done) => {
@@ -89,4 +98,26 @@ test("complete TUI callback remains healthy after its first status poll and inte
   assert.ok(outcome.value?.calls.navigations.includes("alonix-workbench"))
   assert.ok(outcome.value?.calls.dialogs.some((item) => item[0] === "replace"))
   assert.ok(outcome.value?.calls.disposes >= 18)
+  assert.deepEqual(outcome.value?.kv?.alonix_registered_projects, ["C:/work/alpha"])
+  assert.deepEqual(outcome.value?.kv?.alonix_workbench_state?.tabs?.map((tab) => tab.id), ["s1"])
+  assert.deepEqual(
+    outcome.value?.kv?.alonix_workbench_state?.collapsed,
+    ["directory:c:/work/alpha"],
+    JSON.stringify(outcome.value?.calls?.kvWrites),
+  )
+  assert.deepEqual(outcome.value?.kv?.alonix_selected_project, { id: "p1", directory: "C:/work/alpha" })
+  assert.equal(outcome.value?.kv?.alonix_dock_open, true, "the exercised Dock command toggles the restored false preference")
+})
+
+test("checkout and staged generation restore the same delayed-KV state and registration transcript", async (context) => {
+  const generation = process.env.ALONIX_GENERATION
+  if (!generation) return context.skip("set ALONIX_GENERATION to compare a staged immutable generation")
+  const [checkout, installed] = await Promise.all([executeTui(repositoryRoot), executeTui(generation)])
+  assert.equal(checkout.code, 0, checkout.stderr || checkout.stdout)
+  assert.equal(installed.code, 0, installed.stderr || installed.stdout)
+  for (const key of ["routes", "slots", "commands", "renderers", "events", "dialogs", "navigations"]) {
+    assert.deepEqual(installed.value?.calls?.[key], checkout.value?.calls?.[key], `${key} must match exactly`)
+  }
+  assert.deepEqual(installed.value?.kv, checkout.value?.kv, "restored and migrated IDE state must match exactly")
+  assert.equal(installed.lifecycle?.stage, checkout.lifecycle?.stage)
 })

@@ -18,6 +18,47 @@ function directoryKey(value) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized
 }
 
+/** Stable identity for folder-owned UI state across synthetic/server project IDs. */
+export function projectStateKey(project) {
+  const directory = directoryKey(project?.worktree)
+  if (directory) return `directory:${directory}`
+  const id = String(project?.id ?? "").trim()
+  return id ? `project:${id}` : ""
+}
+
+/**
+ * Migrate persisted project preferences from historical server/synthetic IDs to
+ * canonical directory identity. Unknown values are retained for temporarily
+ * unavailable projects and de-duplicated.
+ */
+export function normalizeProjectPreferenceKeys(values, rows, limit = 200) {
+  const projects = Array.from(rows ?? [])
+  const aliases = new Map()
+  for (const project of projects) {
+    const stateKey = projectStateKey(project)
+    if (!stateKey) continue
+    aliases.set(stateKey, stateKey)
+    const id = String(project?.id ?? "").trim()
+    if (id) aliases.set(id, stateKey)
+    const directory = directoryKey(project?.worktree)
+    if (directory) {
+      aliases.set(`alonix:${directory}`, stateKey)
+      if (process.platform === "win32") aliases.set(`alonix:${directory.replace(/^[a-z]:/, "")}`, stateKey)
+    }
+  }
+  const out = []
+  const seen = new Set()
+  for (const raw of Array.from(values ?? [])) {
+    if (typeof raw !== "string" || !raw) continue
+    const value = aliases.get(raw) ?? raw
+    if (seen.has(value)) continue
+    seen.add(value)
+    out.push(value)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 /**
  * Human name for a project.
  *
@@ -174,10 +215,12 @@ export function buildProjectModel(input = {}) {
       return b.updated - a.updated
     })
     const updated = bucket.sessions.reduce((max, session) => Math.max(max, session.updated), 0)
+    const stateKey = projectStateKey(bucket)
     return {
       ...bucket,
+      stateKey,
       openable: Boolean(bucket.worktree),
-      pinned: pinned.has(bucket.id),
+      pinned: pinned.has(stateKey) || pinned.has(bucket.id),
       current: selectedProjectDirectory
         ? directoryKey(bucket.worktree) === directoryKey(selectedProjectDirectory)
         : bucket.id === (selectedProjectID ?? routeProject),

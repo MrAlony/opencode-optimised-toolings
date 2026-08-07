@@ -287,6 +287,9 @@ test("plugin reactive state owns an explicit root and is disposed with the plugi
   assert.match(index, /createRoot\(\(disposeRoot\) =>/)
   assert.match(index, /scope\.disposeRoot\(\)/)
   assert.match(index, /clearInterval\(poll\)/)
-  // Exactly one poller drives both the status surfaces and the toasts.
-  assert.equal((index.match(/setInterval/g) ?? []).length, 1)
+  assert.match(index, /scope\.stopDockHydration\(\)/)
+  // Exactly one long-lived status poller drives status surfaces and toasts;
+  // the other bounded intervals only wait for host KV hydration and clean up.
+  assert.equal((index.match(/const poll = setInterval/g) ?? []).length, 1)
+  assert.match(index, /dockHydrationTimer = setInterval/)
 })

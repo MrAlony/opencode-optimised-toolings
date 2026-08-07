@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url"
 register("./solid-client-loader.mjs", pathToFileURL(import.meta.filename))
 
 const { createProjectStore } = await import("./project-store-harness.mjs")
-const { createRoot, createEffect } = await import("solid-js")
+const { createRoot, createEffect, createSignal } = await import("solid-js")
 
 const PROJECTS = [
   { id: "p1", worktree: "C:/work/alpha", name: "Alpha" },
@@ -20,6 +20,7 @@ const SESSIONS = [
 
 function createApi(overrides = {}) {
   const kv = new Map(Object.entries(overrides.kv ?? {}))
+  const [kvReady, setKvReady] = createSignal(overrides.kvReady !== false)
   const listeners = new Map()
   const calls = { projectList: 0, sessionList: 0, statusList: 0, messageList: 0 }
   const api = {
@@ -27,9 +28,11 @@ function createApi(overrides = {}) {
     listeners,
     kvStore: kv,
     kv: {
-      get: (key, fallback) => (kv.has(key) ? kv.get(key) : fallback),
+      get ready() { return kvReady() },
+      get: (key, fallback) => (kvReady() && kv.has(key) ? kv.get(key) : fallback),
       set: (key, value) => kv.set(key, value),
     },
+    setKvReady,
     event: {
       on: (name, handler) => {
         listeners.set(name, handler)
@@ -138,6 +141,16 @@ test("a session reachable from two directories is listed once", async () => {
   api.client.session.list = async () => ({ data: [SESSIONS[0]] })
   await withStore(api, (store) => {
     assert.equal(store.sessions.length, 1, "duplicates across directories must collapse")
+  })
+})
+
+test("Windows rooted-slash persisted folders recover the current drive identity", async () => {
+  if (process.platform !== "win32") return
+  const api = createApi({ kv: { alonix_registered_projects: ["/Users/dell/work/saved"] }, projects: [], sessions: [] })
+  await withStore(api, (store) => {
+    assert.match(store.registeredProjects[0], /^[A-Za-z]:\/Users\/dell\/work\/saved$/)
+    assert.equal(store.projectRows()[0].stateKey, `directory:${store.registeredProjects[0].toLowerCase()}`)
+    assert.deepEqual(api.kvStore.get("alonix_registered_projects"), store.registeredProjects, "repaired identity is written back once")
   })
 })
 
@@ -404,12 +417,63 @@ test("sidebar recents are global rather than inherited from selected-project ord
   })
 })
 
+test("ID-only navigation resolves and persists the owning project directory", async () => {
+  const api = createApi()
+  await withStore(api, (store) => {
+    store.selectProject("p2")
+    assert.equal(store.projectRows().find((row) => row.id === "p2").current, true)
+    assert.deepEqual(api.kvStore.get("alonix_selected_project"), { id: "p2", directory: "C:/work/beta" })
+  })
+})
+
 test("explicit selection changes the highlighted project", async () => {
   const api = createApi()
   await withStore(api, (store) => {
     store.selectProject(store.projectRows().find((row) => row.id === "p2"))
     assert.equal(store.projectRows().find((row) => row.id === "p2").current, true)
     assert.equal(store.projectRows().find((row) => row.id === "p1").current, false)
+  })
+})
+
+test("installed-fast startup hydrates delayed host KV instead of losing opened folders and tabs", async () => {
+  const saved = {
+    tabs: [{ id: "s1", title: "Alpha work", projectID: "p1", directory: "C:/work/alpha" }],
+    activeID: "s1",
+    mru: ["s1"],
+    focus: "main",
+    collapsed: ["p1"],
+  }
+  const api = createApi({
+    kvReady: false,
+    kv: {
+      alonix_workbench_state: saved,
+      alonix_registered_projects: ["C:/work/alpha"],
+      alonix_selected_project: { id: "p1", directory: "C:/work/alpha" },
+    },
+  })
+  await withStore(api, async (store) => {
+    assert.deepEqual(store.workbench.tabs, [], "state is not guessed before host KV is ready")
+    api.setKvReady(true)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.deepEqual(store.workbench.tabs.map((tab) => tab.id), ["s1"])
+    assert.equal(store.selectedProjectID, "p1")
+    assert.ok(store.workbench.collapsed.has("directory:c:/work/alpha"), "legacy project ID migrates to directory identity")
+    assert.deepEqual(api.kvStore.get("alonix_workbench_state").collapsed, ["directory:c:/work/alpha"], "canonical identity is flushed to durable KV")
+  })
+})
+
+test("an interaction before delayed KV hydration wins without overwriting saved state early", async () => {
+  const api = createApi({
+    kvReady: false,
+    kv: { alonix_workbench_state: { tabs: [{ id: "s1" }], activeID: "s1", mru: ["s1"], collapsed: [] } },
+  })
+  await withStore(api, async (store) => {
+    store.openTab({ id: "s2", title: "New interaction", projectID: "p2" })
+    assert.deepEqual(api.kvStore.get("alonix_workbench_state").tabs.map((tab) => tab.id), ["s1"], "disk snapshot is untouched before hydration")
+    api.setKvReady(true)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.deepEqual(store.workbench.tabs.map((tab) => tab.id), ["s2"], "queued user change has precedence")
+    assert.deepEqual(api.kvStore.get("alonix_workbench_state").tabs.map((tab) => tab.id), ["s2"])
   })
 })
 
@@ -452,13 +516,14 @@ test("the portfolio store never creates sessions", async () => {
   })
 })
 
-test("pinned projects persist and toggle", async () => {
+test("pinned projects persist by canonical directory identity", async () => {
   const api = createApi()
   await withStore(api, (store) => {
-    store.togglePinProject("p2")
-    assert.deepEqual(store.pinnedProjects, ["p2"])
+    const beta = store.projectRows().find((row) => row.id === "p2")
+    store.togglePinProject(beta)
+    assert.deepEqual(store.pinnedProjects, ["directory:c:/work/beta"])
     assert.ok(store.projectRows().find((row) => row.id === "p2").pinned)
-    store.togglePinProject("p2")
+    store.togglePinProject(beta)
     assert.deepEqual(store.pinnedProjects, [])
   })
 })
