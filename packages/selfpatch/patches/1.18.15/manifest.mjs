@@ -1,5 +1,4 @@
 import { manifest as base } from "../1.18.13/manifest.mjs"
-import { streamingCreate, streamingReplacements } from "./streaming.mjs"
 
 // OpenCode v1.18.15 keeps every Alonix patch anchor exact, but changed two
 // touched host files around those anchors. Bind the proven patch bodies to the
@@ -17,13 +16,9 @@ const beforeSha256 = new Map([
 export const manifest = {
   ...base,
   version: "1.18.15",
-  create: [...base.create, streamingCreate],
   files: base.files.map((entry) => ({
     ...entry,
     beforeSha256: beforeSha256.get(entry.path) ?? entry.beforeSha256,
-    replacements: entry.path === "packages/tui/src/routes/session/index.tsx"
-      ? [...entry.replacements, ...streamingReplacements]
-      : entry.replacements,
   })),
 }
 

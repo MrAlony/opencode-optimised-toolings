@@ -8,8 +8,7 @@ const excludedFiles = [/^config\/secrets\.local\.json$/, /^config\/install-state
 const textExtensions = new Set([".js", ".mjs", ".json", ".md", ".py", ".toml", ".yml", ".yaml", ".txt", ".rst", ".cfg", ".html", ".css", ".ts"]);
 const credentialScope = /^(config\/|packages\/(?:web|stealth)\/|scripts\/|index\.js$)/;
 const findings = [];
-const required = ["index.js", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "packages/cbm/SKILL.md", "packages/web/index.js", "packages/stealth/index.js", "packages/stealth/lib/worker-client.js", "packages/stealth/lib/tor.js", "services/searxng/LICENSE", "services/searxng/searx/data/__init__.py", "config/secrets.example.json"];
-const forbiddenLegacy = ["packages/stealth/worker.py", "packages/stealth/requirements.txt"];
+const required = ["index.js", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "packages/cbm/SKILL.md", "packages/web/index.js", "packages/stealth/worker.py", "services/searxng/LICENSE", "services/searxng/searx/data/__init__.py", "config/secrets.example.json"];
 
 function walk(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -37,9 +36,6 @@ function walk(directory) {
 for (const path of required) {
   try { statSync(resolve(root, path)); } catch { findings.push(`${path}: required shareable file is missing`); }
 }
-for (const path of forbiddenLegacy) {
-  try { statSync(resolve(root, path)); findings.push(`${path}: obsolete Python stealth artifact must remain absent`); } catch {}
-}
 walk(root);
 if (findings.length) { console.error("SHAREABILITY CHECK: FAILED"); findings.forEach((item) => console.error(`- ${item}`)); process.exit(1); }
-console.log("SHAREABILITY CHECK: PASSED\n- No hardcoded local user paths in shareable source.\n- No likely embedded credentials in authored tooling/config surfaces and no private keys anywhere.\n- No unauthenticated Tor control configuration.\n- Required native stealth, SearXNG data/license, and package entry files are present; obsolete Python stealth artifacts are absent.\n- Local secrets, backups, environments, runtime state, and generated settings are excluded.");
+console.log("SHAREABILITY CHECK: PASSED\n- No hardcoded local user paths in shareable source.\n- No likely embedded credentials in authored tooling/config surfaces and no private keys anywhere.\n- No unauthenticated Tor control configuration.\n- Required SearXNG data/license and package entry files are present.\n- Local secrets, backups, environments, runtime state, and generated settings are excluded.");

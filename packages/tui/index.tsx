@@ -33,7 +33,6 @@ import { ProjectAdd } from "./components/project-add.jsx"
 import { Dock } from "./components/dock.jsx"
 import { SettingsView } from "./components/settings.jsx"
 import { applyManagedSettings, readManagedSettings } from "./lib/settings.js"
-import { readStreamingSettings, writeStreamingSettings } from "./lib/streaming.js"
 import { workbenchCommands } from "./lib/command-registry.js"
 
 type Tokens = ReturnType<typeof createTokens>
@@ -526,17 +525,8 @@ const tui: TuiPlugin = async (api, options) => {
             <SettingsView
               tokens={tokens}
               dockOpen={dockOpen}
-              initial={{ ...readManagedSettings(), streaming: readStreamingSettings(api.kv) }}
-              onSave={(draft: any) => {
-                const managed = applyManagedSettings(draft)
-                const streaming = writeStreamingSettings(api.kv, draft?.streaming)
-                return {
-                  ...managed,
-                  streaming: streaming.value,
-                  streamingChanged: streaming.changed,
-                  changed: managed.changed || streaming.changed,
-                }
-              }}
+              initial={readManagedSettings()}
+              onSave={(draft: unknown) => applyManagedSettings(draft)}
               onClose={openWorkbench}
             />
           </ClockProvider>

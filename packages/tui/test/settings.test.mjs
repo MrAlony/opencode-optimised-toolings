@@ -4,7 +4,6 @@ import { mkdtemp, readFile, stat, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { applyManagedSettings, readManagedSettings, settingsPaths } from "../lib/settings.js"
-import { DEFAULT_STREAMING_SETTINGS, readStreamingSettings, writeStreamingSettings } from "../lib/streaming.js"
 
 async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "alonix-settings-"))
@@ -164,21 +163,6 @@ test("malformed user JSONC fails closed before writing", async () => {
   await writeFile(paths.configPath, "{ broken")
   assert.throws(() => applyManagedSettings({ tools: {} }, options), /not valid JSON\/JSONC/)
   assert.equal(await readFile(paths.configPath, "utf8"), "{ broken")
-})
-
-test("streaming preferences use live shared KV and never enter personal config files", async () => {
-  const { paths, options } = await fixture()
-  const store = new Map()
-  const kv = { get: (key, fallback) => store.has(key) ? store.get(key) : fallback, set: (key, value) => store.set(key, value) }
-  assert.deepEqual(readStreamingSettings(kv), DEFAULT_STREAMING_SETTINGS)
-  const saved = writeStreamingSettings(kv, { enabled: true, style: "cinematic", motion: "full", maxDelayMs: 250, reasoning: true, tail: "off" })
-  assert.equal(saved.changed, true)
-  assert.equal(readStreamingSettings(kv).reasoning, true)
-  const before = await readFile(paths.configPath, "utf8")
-  applyManagedSettings({ ...readManagedSettings(options), web: {} }, options)
-  const after = await readFile(paths.configPath, "utf8")
-  assert.doesNotMatch(after, /alonix_streaming|cinematic|maxDelayMs/)
-  assert.match(before, /personal provider data must survive/)
 })
 
 test("private secret file receives restrictive POSIX mode where supported", async () => {

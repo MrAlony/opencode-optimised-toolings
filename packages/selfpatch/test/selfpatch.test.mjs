@@ -334,38 +334,17 @@ test("an existing but partial source cache is not considered ready", async () =>
   }
 })
 
-test("v1.18.15 has a dedicated strict profile for changed upstream files and streaming presentation", () => {
+test("v1.18.15 has a dedicated strict profile for changed upstream files", () => {
   assert.equal(patchManifest11815.version, "1.18.15")
   assert.deepEqual(
     patchManifest11815.files.map((entry) => entry.path),
     patchManifest.files.map((entry) => entry.path),
   )
-  const baseByPath = new Map(patchManifest.files.map((entry) => [entry.path, entry]))
-  for (const entry of patchManifest11815.files) {
-    const inherited = baseByPath.get(entry.path)?.replacements ?? []
-    assert.deepEqual(entry.replacements.slice(0, inherited.length), inherited, `reviewed capability changed for ${entry.path}`)
-    if (entry.path !== "packages/tui/src/routes/session/index.tsx") assert.equal(entry.replacements.length, inherited.length)
-  }
-  const session = patchManifest11815.files.find((entry) => entry.path === "packages/tui/src/routes/session/index.tsx")
-  const inheritedSessionCount = baseByPath.get("packages/tui/src/routes/session/index.tsx").replacements.length
-  const streaming = session.replacements.slice(inheritedSessionCount)
-  assert.ok(streaming.length >= 9, "the exact 1.18.15 profile must own the complete streaming presentation boundary")
-  const streamingSource = streaming.map((item) => item.replace).join("\n")
-  assert.match(streamingSource, /createStreamingScheduler\(renderer\)/)
-  assert.match(streamingSource, /createStreamingText/)
-  assert.match(streamingSource, /ctx\.streamingSettings\(\)\.reasoning/)
-  assert.match(streamingSource, /!inMinimal\(\) \|\| expanded\(\)/, "collapsed hidden reasoning must not consume animation frames")
-  assert.match(streamingSource, /content=\{content\(\)\}/)
-  assert.doesNotMatch(streamingSource, /session\.update|message\.part\.delta|clipboard|formatTranscript/)
-  const streamingModule = patchManifest11815.create.find((entry) => entry.path.endsWith("routes/session/streaming.ts"))?.content ?? ""
-  assert.match(streamingModule, /Intl\.Segmenter/)
-  assert.doesNotMatch(streamingSource, /active: \(\) => props\.last/)
-  assert.match(streamingSource, /active: \(\) => !partDone\(\) && !done\(\)/)
-  assert.match(streamingSource, /active: \(\) => !isDone\(\) && ctx\.streamingSettings\(\)\.reasoning/)
-  assert.match(streamingModule, /renderer\.setFrameCallback/)
-  assert.match(streamingModule, /renderer\.requestLive/)
-  assert.match(streamingModule, /controller\.deadline\(\)/)
-  assert.match(streamingModule, /Math\.min\(600, Math\.max\(160/)
+  assert.deepEqual(
+    patchManifest11815.files.map((entry) => entry.replacements),
+    patchManifest.files.map((entry) => entry.replacements),
+    "the new profile must reuse only the already-reviewed patch bodies",
+  )
   const upstreamChanges = new Map(patchManifest11815.files.map((entry) => [entry.path, entry.beforeSha256]))
   assert.equal(upstreamChanges.get("packages/tui/src/routes/session/index.tsx"), "90f0471caac6eac5768cf4358d4371207dd69362affeddb4ea0f30133a7e576c")
   assert.equal(upstreamChanges.get("packages/opencode/src/session/prompt.ts"), "0ef73c460d46619cd3e75d4b790a22a3c4c999b311a43e7887b634ff7a3fa06d")
