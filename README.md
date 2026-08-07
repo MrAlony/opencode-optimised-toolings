@@ -23,7 +23,7 @@ On package load Alonix:
 5. Stores mutable state under `~/.config/opencode/alonix/` rather than inside an immutable npm cache.
 6. Provisions heavyweight optional assets lazily so startup remains fast and offline-safe.
 
-The package is idempotent and self-healing. An update is fully installed and validated in a new immutable generation before either config file changes. Server and TUI entries then switch together in a rollback-capable transaction; an older OpenCode process cannot downgrade a newer configured generation. Incomplete, corrupt, offline, interrupted, or malformed states leave the previous generation active. Direct checkout development and installed generations use the same one-root/two-direct-entry topology.
+The package is idempotent and self-healing. An update is fully installed and validated in a new immutable generation before either config file changes. Server and TUI entries then switch together in a rollback-capable transaction; an older OpenCode process cannot downgrade a newer configured generation. Host enhancement artifacts are bound to the current manifest fingerprint. A mismatch is quarantined, and only stale dedicated `opencode serve` processes are retired so newly opened clients cannot reuse withdrawn in-memory host code; interactive OpenCode windows are never killed. Incomplete, corrupt, offline, interrupted, or malformed states leave the previous generation active. Direct checkout development and installed generations use the same one-root/two-direct-entry topology.
 
 ## Included capabilities
 
@@ -51,7 +51,7 @@ Web keys may be configured in Alonix Settings or supplied through `SERPER_API_KE
 
 All normal plugin tools and Settings remain available without modifying the OpenCode binary. Optional host enhancements activate only after exact source compatibility is proven. Compatible OpenCode updates reuse the verified capability profile; incompatible updates remain on the official binary in portable mode instead of blocking startup or updates.
 
-When an enhancement build is installed, running OpenCode processes are not stopped. Fully quit and relaunch to load the new executable and TUI registration.
+When an enhancement build is installed, interactive OpenCode processes are not stopped. The startup controller automatically retires stale dedicated `opencode serve` processes when the active manifest changes, so a newly opened client cannot attach to a withdrawn host. Existing interactive windows keep their mapped executable until they are closed normally.
 
 ## Development
 

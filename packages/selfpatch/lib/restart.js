@@ -14,9 +14,10 @@ async function exists(file) {
  * Install the patched binary over the official OpenCode binary, in place.
  *
  * The official executable is replaced on disk while running instances keep
- * their already-mapped image, so no process is ever stopped, killed, or
- * restarted: the file is swapped exactly like a package update, and the user
- * restarts OpenCode at their convenience to activate it. The original
+ * their already-mapped image. This low-level file swap never interacts with
+ * processes; the host recovery controller separately retires only stale
+ * dedicated `opencode serve` processes when the active manifest changes.
+ * Interactive OpenCode processes remain untouched. The original
  * official binary is preserved once under `<official>.alonix-toolings-backup` for
  * restore.
  *

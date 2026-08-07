@@ -17,10 +17,11 @@ export function repoRoot() {
  * not the enhanced build it downloads the installed version's source, selects
  * an exact or byte-verified compatible capability profile, rebuilds, and installs
  * the enhanced binary over the official one. If host capabilities changed, the
- * official binary and the portable plugin continue unchanged.
- * one in place — no running instance is stopped and nothing restarts by
- * itself; the user restarts OpenCode at their convenience and the next launch
- * reports the patched binary as active. Progress and errors are continuously
+ * official binary and the portable plugin continue unchanged. Interactive
+ * OpenCode processes are never stopped. Dedicated `opencode serve` processes
+ * are retired only when the host-controller identity changes or a mismatched
+ * artifact is quarantined, preventing a new client window from reusing a
+ * withdrawn in-memory server. Progress and errors are continuously
  * written to the shared state file that the TUI companion renders. Tool
  * outputs are never modified.
  */

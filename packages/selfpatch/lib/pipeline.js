@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url"
 import { patchedBinaryPath, readState, runtimeDir, sha256File, writeState } from "./state.js"
 import { detectBinary } from "./detect.js"
 import { installPatchedBinary } from "./restart.js"
+import { reconcileHostRuntime } from "./host-recovery.js"
 import { bunCacheEntries, looksLikeBrokenInstall, packagesFromBuildLog, verifyPackages } from "./integrity.js"
 
 export const OPENCODE_VERSION = "1.18.13"
@@ -686,6 +687,7 @@ export async function runSelfPatch(root) {
     }
     const manifest = profile.manifest
     const manifestSha = await manifestSha256(manifest)
+    await reconcileHostRuntime(root, { version: bin.version, manifestSha256: manifestSha, binaryPath: bin.path })
     const sourceMarker = await readPatchMarker(sourceRootForMarker)
     const artifactMarker = await readPatchedArtifactMarker(root, bin.version)
     if (await exists(patchedPath)) {
