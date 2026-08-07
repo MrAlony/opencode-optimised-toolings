@@ -31,8 +31,10 @@ export async function SelfPatchPlugin() {
   try {
     tuiRegistration = await ensureTuiCompanion(root)
   } catch (error) {
+    // Maintenance diagnostics belong in structured status, never painted over
+    // the active terminal. Portable tools remain available and the next launch
+    // retries registration.
     tuiRegistration = { error: error?.message ?? String(error), changed: false, restartRequired: false }
-    console.warn(`[toolings] ${tuiRegistration.error}`)
   }
 
   function ensureStarted() {

@@ -142,11 +142,44 @@ function replaceManaged(list, spec) {
   return output
 }
 
+const TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY", "ENOENT"])
+
+async function sameFileText(file, text) {
+  try { return await fs.readFile(file, "utf8") === text } catch { return false }
+}
+
+async function replaceWithRetry(temporary, file, text, options = {}) {
+  const attempts = Math.max(1, Number(options.attempts) || 10)
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await fs.mkdir(dirname(file), { recursive: true })
+      await fs.rename(temporary, file)
+      return
+    } catch (error) {
+      // Another same-process plugin instance may have completed the identical
+      // write while Windows still held our destination handle. That is success,
+      // not a reason to print an error over the TUI.
+      if (await sameFileText(file, text)) {
+        await fs.rm(temporary, { force: true }).catch(() => {})
+        return
+      }
+      if (!TRANSIENT_RENAME_CODES.has(error?.code) || attempt === attempts - 1) throw error
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, Math.min(250, 15 * (2 ** attempt))))
+    }
+  }
+}
+
 async function atomicWrite(file, text) {
   await fs.mkdir(dirname(file), { recursive: true })
+  if (await sameFileText(file, text)) return false
   const temporary = join(dirname(file), `.${basename(file)}.${process.pid}.${randomUUID()}.tmp`)
-  await fs.writeFile(temporary, text, { encoding: "utf8", mode: 0o600 })
-  await fs.rename(temporary, file)
+  try {
+    await fs.writeFile(temporary, text, { encoding: "utf8", mode: 0o600 })
+    await replaceWithRetry(temporary, file, text)
+    return true
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {})
+  }
 }
 
 function pidAlive(pid) {
@@ -561,49 +594,97 @@ function configPaths(configDir) {
   }
 }
 
+function activationHash(text) {
+  return createHash("sha256").update(text).digest("hex")
+}
+
+async function recoverActivationJournal(configDir) {
+  const journal = join(configDir, "alonix", ".generation-activation.json")
+  if (!existsSync(journal)) return { recovered: false }
+  let transaction
+  try { transaction = JSON.parse(await fs.readFile(journal, "utf8")) }
+  catch {
+    await fs.rm(journal, { force: true }).catch(() => {})
+    return { recovered: false }
+  }
+  const files = Array.isArray(transaction?.files) ? transaction.files : []
+  const committed = files.length > 0 && (await Promise.all(files.map(async (item) => {
+    try { return activationHash(await fs.readFile(item.file, "utf8")) === item.afterHash } catch { return false }
+  }))).every(Boolean)
+  if (!committed) {
+    for (const item of files) {
+      const before = await fs.readFile(item.backup, "utf8")
+      await atomicWrite(item.file, before)
+    }
+  }
+  await fs.rm(journal, { force: true }).catch(() => {})
+  return { recovered: !committed, completed: committed }
+}
+
 export async function activatePackageGeneration(generation, options = {}) {
   if (!generation?.valid || !generation?.root || !generation?.specs) throw new Error("Cannot activate an unverified package generation")
   const configDir = resolve(options.configDir ?? openCodeConfigDir(options.env))
-  const paths = configPaths(configDir)
-  const documents = []
-  let newestConfiguredVersion = null
-  for (const [role, file] of Object.entries(paths)) {
-    const before = existsSync(file) ? await fs.readFile(file, "utf8") : role === "tui" ? '{\n  "$schema": "https://opencode.ai/tui.json",\n  "plugin": []\n}\n' : "{}\n"
-    const data = parseDocument(before, basename(file))
-    for (const entry of Array.isArray(data.plugin) ? data.plugin : []) {
-      const version = generationVersionFromSpec(entrySpec(entry))
-      if (version && (!newestConfiguredVersion || compareVersions(version, newestConfiguredVersion) > 0)) newestConfiguredVersion = version
-    }
-    documents.push({ role, file, before, data })
-  }
-  if (newestConfiguredVersion && compareVersions(generation.version, newestConfiguredVersion) < 0) {
-    return { changed: false, skipped: "newer-generation-configured", configuredVersion: newestConfiguredVersion, generation: generation.root, version: generation.version, files: [] }
-  }
-  const planned = []
-  for (const { role, file, before, data } of documents) {
-    const spec = role === "server" ? generation.specs.server : generation.specs.tui
-    const after = setJsonc(before, ["plugin"], replaceManaged(data.plugin, spec))
-    parseDocument(after, basename(file))
-    if (after !== before) planned.push({ role, file, before, after })
-  }
-  if (!planned.length) return { changed: false, generation: generation.root, version: generation.version, files: [] }
-
-  const backupDir = join(configDir, "alonix", "backups")
-  await fs.mkdir(backupDir, { recursive: true })
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-  const applied = []
+  await fs.mkdir(configDir, { recursive: true })
+  const lock = join(configDir, "alonix", ".generation-activation.lock")
+  await fs.mkdir(dirname(lock), { recursive: true })
+  await acquireLock(lock)
   try {
+    await recoverActivationJournal(configDir)
+    const paths = configPaths(configDir)
+    const documents = []
+    let newestConfiguredVersion = null
+    for (const [role, file] of Object.entries(paths)) {
+      const before = existsSync(file) ? await fs.readFile(file, "utf8") : role === "tui" ? '{\n  "$schema": "https://opencode.ai/tui.json",\n  "plugin": []\n}\n' : "{}\n"
+      const data = parseDocument(before, basename(file))
+      for (const entry of Array.isArray(data.plugin) ? data.plugin : []) {
+        const version = generationVersionFromSpec(entrySpec(entry))
+        if (version && (!newestConfiguredVersion || compareVersions(version, newestConfiguredVersion) > 0)) newestConfiguredVersion = version
+      }
+      documents.push({ role, file, before, data })
+    }
+    if (newestConfiguredVersion && compareVersions(generation.version, newestConfiguredVersion) < 0) {
+      return { changed: false, skipped: "newer-generation-configured", configuredVersion: newestConfiguredVersion, generation: generation.root, version: generation.version, files: [] }
+    }
+    const planned = []
+    for (const { role, file, before, data } of documents) {
+      const spec = role === "server" ? generation.specs.server : generation.specs.tui
+      const after = setJsonc(before, ["plugin"], replaceManaged(data.plugin, spec))
+      parseDocument(after, basename(file))
+      if (after !== before) planned.push({ role, file, before, after, afterHash: activationHash(after) })
+    }
+    if (!planned.length) return { changed: false, generation: generation.root, version: generation.version, files: [] }
+
+    const backupDir = join(configDir, "alonix", "backups")
+    await fs.mkdir(backupDir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-")
     for (const item of planned) {
       item.backup = join(backupDir, `${stamp}-generation-${basename(item.file)}`)
       await fs.writeFile(item.backup, item.before, { encoding: "utf8", mode: 0o600 })
-      await atomicWrite(item.file, item.after)
-      applied.push(item)
     }
-  } catch (error) {
-    for (const item of applied.reverse()) await atomicWrite(item.file, item.before).catch(() => {})
-    throw error
+    const journal = join(configDir, "alonix", ".generation-activation.json")
+    await atomicWrite(journal, `${JSON.stringify({ version: 1, generation: generation.root, createdAt: new Date().toISOString(), files: planned.map(({ file, backup, afterHash }) => ({ file, backup, afterHash })) }, null, 2)}\n`)
+    const applied = []
+    try {
+      // Write TUI first. If the process is interrupted before the server switch,
+      // the new TUI can fail closed against the old server. The reverse ordering
+      // could expose an old TUI with new server behavior.
+      for (const item of planned.toSorted((left, right) => (left.role === "tui" ? -1 : 1) - (right.role === "tui" ? -1 : 1))) {
+        await atomicWrite(item.file, item.after)
+        applied.push(item)
+      }
+      for (const item of planned) {
+        if (activationHash(await fs.readFile(item.file, "utf8")) !== item.afterHash) throw new Error(`Candidate activation verification failed for ${basename(item.file)}`)
+      }
+      await fs.rm(journal, { force: true })
+    } catch (error) {
+      for (const item of planned) await atomicWrite(item.file, item.before).catch(() => {})
+      await fs.rm(journal, { force: true }).catch(() => {})
+      throw error
+    }
+    return { changed: true, generation: generation.root, version: generation.version, restartRequired: true, files: planned.map((item) => item.file), backups: planned.map((item) => item.backup) }
+  } finally {
+    await fs.rm(lock, { force: true }).catch(() => {})
   }
-  return { changed: true, generation: generation.root, version: generation.version, restartRequired: true, files: planned.map((item) => item.file), backups: planned.map((item) => item.backup) }
 }
 
 export async function ensureAndActivateGeneration(packageRoot, options = {}) {

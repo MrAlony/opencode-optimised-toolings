@@ -371,11 +371,12 @@ function bunCandidates(root) {
   return [
     ["bun", "bin", "bun.exe"],
     ["bun", "bin", "bun"],
-    ["@oven", "bun-windows-x64", "bun.exe"],
-    ["@oven", "bun-linux-x64", "bun"],
-    ["@oven", "bun-darwin-arm64", "bun"],
-    ["@oven", "bun-darwin-x64", "bun"],
-    ["@oven", "bun-linux-arm64", "bun"],
+    ["@oven", "bun-windows-x64", "bin", "bun.exe"],
+    ["@oven", "bun-windows-x64-baseline", "bin", "bun.exe"],
+    ["@oven", "bun-linux-x64", "bin", "bun"],
+    ["@oven", "bun-darwin-arm64", "bin", "bun"],
+    ["@oven", "bun-darwin-x64", "bin", "bun"],
+    ["@oven", "bun-linux-arm64", "bin", "bun"],
   ].map((parts) => path.join(base, ...parts))
 }
 
@@ -384,7 +385,9 @@ export async function resolveBun(root) {
     return { command: process.env.OPENCODE_TOOLINGS_BUN, prefixArgs: [], source: "env" }
   }
   for (const candidate of bunCandidates(root)) {
-    if (await exists(candidate)) return { command: candidate, prefixArgs: [], source: "workspace" }
+    if (!(await exists(candidate))) continue
+    const probe = spawnSync(candidate, ["--version"], { encoding: "utf8", timeout: 10_000, windowsHide: true })
+    if (!probe.error && probe.status === 0) return { command: candidate, prefixArgs: [], source: "workspace" }
   }
   const probe = spawnSync("bun", ["--version"], { encoding: "utf8", timeout: 10_000, windowsHide: true })
   if (!probe.error && probe.status === 0) return { command: "bun", prefixArgs: [], source: "path" }

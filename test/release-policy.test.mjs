@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 const root = resolve(import.meta.dirname, "..");
@@ -16,6 +16,18 @@ test("publishing is local-only and runner workflows are absent", () => {
   assert.equal(packageJson.scripts["release:local"], "node scripts/release-local.mjs");
   assert.equal(packageJson.publishConfig.provenance, false);
 });
+
+test("candidate promotion is built from the exact validated working tree before any release", () => {
+  const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
+  const candidate = readFileSync(join(root, "scripts", "candidate-local.mjs"), "utf8")
+  assert.equal(packageJson.scripts["candidate:local"], "node scripts/candidate-local.mjs")
+  assert.match(candidate, /npm", \["pack", "--json"/)
+  assert.match(candidate, /checkoutFingerprint !== transportFingerprint/)
+  assert.match(candidate, /test\/tui-runtime-parity\.test\.mjs/)
+  assert.match(candidate, /activatePackageGeneration\(generation/)
+  assert.ok(candidate.indexOf("tui-runtime-parity.test.mjs") < candidate.indexOf("activatePackageGeneration(generation"), "candidate parity must pass before live activation")
+  assert.doesNotMatch(candidate, /git tag|git push|npm publish/)
+})
 
 test("local release enforces immutable tags, complete tests, native passkey auth, and registry integrity", () => {
   const source = read("scripts/release-local.mjs");

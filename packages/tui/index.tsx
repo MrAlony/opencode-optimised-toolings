@@ -292,7 +292,11 @@ const tui: TuiPlugin = async (api, options) => {
   }
   lifecycle.renderersRegistered = registration.registered
   lifecycle.renderersFailed = [...registration.failed]
-  record("initializing", "renderers-registered")
+  const rendererCapabilityReady = registration.available && registration.registered === customTools.length && registration.failed.length === 0
+  record(rendererCapabilityReady ? "initializing" : "degraded", rendererCapabilityReady ? "renderers-registered" : "host-renderers-unavailable", {
+    missingCapability: registration.available ? null : "api.toolRenderers",
+    expectedRenderers: customTools.length,
+  })
 
   const openSwitcher = () => openPalette("")
 
@@ -726,7 +730,10 @@ const tui: TuiPlugin = async (api, options) => {
       bindings: [],
     })
     lifecycle.keymapRegistered = true
-    record("active", "complete")
+    record(rendererCapabilityReady ? "active" : "degraded", rendererCapabilityReady ? "complete" : "complete-portable", {
+      missingCapability: registration.available ? null : "api.toolRenderers",
+      expectedRenderers: customTools.length,
+    })
   } catch (error) {
     record("failed", "registering-keymap", { error: error instanceof Error ? error.stack ?? error.message : String(error) })
     throw error

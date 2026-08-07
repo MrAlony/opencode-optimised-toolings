@@ -18,13 +18,14 @@ const bun = bunCandidates.find((file) => {
   try { return existsSync(file) && (process.platform !== "win32" || statSync(file).size > 1_000_000) } catch { return false }
 }) ?? bunCandidates.at(-1)
 
-function executeTui(root) {
+function executeTui(root, options = {}) {
   const runtime = mkdtempSync(join(tmpdir(), "alonix-tui-runtime-"))
   const script = `
     import { pathToFileURL } from "node:url";
     import { resolve } from "node:path";
     import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support/configure";
     ensureRuntimePluginSupport();
+    const options=${JSON.stringify(options)};
     const calls={routes:[],slots:[],commands:[],renderers:[],events:[],dialogs:[],navigations:[],disposes:[],kvWrites:[]};
     const initialKv=new Map([
       ["alonix_registered_projects",["C:/work/alpha"]],
@@ -39,7 +40,7 @@ function executeTui(root) {
       route:{register(items){calls.routes.push(...items.map(x=>x.name));return noop},navigate(x){calls.navigations.push(x)},current:()=>({type:"home"})},
       slots:{register(x){calls.slots.push(...Object.keys(x.slots||{}));return noop}},
       keymap:{registerLayer(x){for(const command of x.commands||[]){calls.commands.push(command.name);if(["alonix-ide.settings","alonix-ide.workbench","alonix-ide.monitor","alonix-ide.palette","alonix-ide.project.add","alonix-ide.dock"].includes(command.name)) command.run()}return noop}},
-      toolRenderers:{register(name){calls.renderers.push(name);return noop}},
+      ...(options.renderers === false ? {} : {toolRenderers:{register(name){calls.renderers.push(name);return noop}}}),
       kv:{get ready(){return kvReady},get(k,d){return kvReady&&initialKv.has(k)?initialKv.get(k):d},set(k,v){initialKv.set(k,v);calls.kvWrites.push([k,v])}},
       ui:{toast(){},dialog:{setSize(x){calls.dialogs.push(["size",x])},replace(){calls.dialogs.push(["replace"])},clear(){calls.dialogs.push(["clear"])}},Prompt:()=>null,DialogSelect:()=>null,Slot:()=>null},
       state:{path:{worktree:process.cwd(),directory:process.cwd()},session:{count:()=>0,get:()=>null,diff:()=>[],todo:()=>[],messages:()=>[],status:()=>({type:"idle"}),permission:()=>null,question:()=>null},part:()=>null,lsp:()=>[],mcp:()=>[]},
@@ -120,6 +121,17 @@ function semanticKv(value) {
   }
   return copy
 }
+
+test("missing host renderer capability is lifecycle-degraded rather than falsely active", async () => {
+  const outcome = await executeTui(repositoryRoot, { renderers: false })
+  assert.equal(outcome.code, 0, outcome.stderr || outcome.stdout)
+  assert.equal(outcome.value?.callbackError, null)
+  assert.equal(outcome.lifecycle?.status, "degraded", JSON.stringify(outcome.lifecycle))
+  assert.equal(outcome.lifecycle?.stage, "complete-portable", JSON.stringify(outcome.lifecycle))
+  assert.equal(outcome.lifecycle?.renderersAvailable, false)
+  assert.equal(outcome.lifecycle?.renderersRegistered, 0)
+  assert.equal(outcome.lifecycle?.missingCapability, "api.toolRenderers")
+})
 
 test("checkout and staged generation restore the same delayed-KV state and registration transcript", async (context) => {
   const generation = process.env.ALONIX_GENERATION

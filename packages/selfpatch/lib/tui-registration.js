@@ -32,9 +32,26 @@ function specIdentity(spec) {
 
 async function writeJsonAtomic(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true })
+  const text = `${JSON.stringify(value, null, 2)}\n`
+  try { if (await fs.readFile(file, "utf8") === text) return false } catch {}
   const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`)
-  await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
-  await fs.rename(temporary, file)
+  try {
+    await fs.writeFile(temporary, text, { encoding: "utf8", mode: 0o600 })
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        await fs.rename(temporary, file)
+        return true
+      } catch (error) {
+        try {
+          if (await fs.readFile(file, "utf8") === text) return false
+        } catch {}
+        if (!["EPERM", "EACCES", "EBUSY", "ENOENT"].includes(error?.code) || attempt === 9) throw error
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, Math.min(250, 15 * (2 ** attempt))))
+      }
+    }
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {})
+  }
 }
 
 export async function ensureTuiCompanion(root, options = {}) {
@@ -83,6 +100,6 @@ export async function ensureTuiCompanion(root, options = {}) {
   if (!inserted) next.push(spec)
   const changed = JSON.stringify(next) !== JSON.stringify(config.plugin ?? [])
   if (changed) await writeJsonAtomic(configPath, { ...config, $schema: config.$schema ?? "https://opencode.ai/tui.json", plugin: next })
-  await writeJsonAtomic(markerPath, { spec, updatedAt: new Date().toISOString() })
+  if (previousIdentity !== identity) await writeJsonAtomic(markerPath, { spec, updatedAt: new Date().toISOString() })
   return { changed, configPath, spec, restartRequired: changed, replaced: previousSpec && previousSpec !== spec ? previousSpec : null }
 }

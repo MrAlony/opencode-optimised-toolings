@@ -114,16 +114,105 @@ export function folderWindow(entries, selected = 0, height = 10) {
   }
 }
 
+/**
+ * Prepare a directory listing once, before interactive filtering begins.
+ *
+ * Sorting with localeCompare is substantially more expensive than painting the
+ * visible terminal rows. Keeping the normalized search key and stable sort in
+ * one cached index means each keystroke performs only a linear string scan.
+ */
+export function folderIndex(entries) {
+  const rows = Array.from(entries ?? [])
+    .filter((entry) => entry && entry.directory === true && typeof entry.name === "string" && entry.name)
+    .map((entry) => ({
+      name: entry.name,
+      search: entry.name.toLocaleLowerCase(),
+      project: entry.project === true,
+      hidden: entry.name.startsWith(".") || NOISE.has(entry.name),
+    }))
+  rows.sort((a, b) => {
+    if (a.project !== b.project) return a.project ? -1 : 1
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
+  })
+  return rows
+}
+
+/**
+ * Small bounded async cache for directory navigation.
+ *
+ * In-flight reads are shared, successful listings get a useful TTL, and errors
+ * expire quickly so a transient filesystem/SDK failure never poisons a folder
+ * for the lifetime of the dialog.
+ */
+export function createDirectoryCache(loader, options = {}) {
+  const limit = Math.max(4, Math.floor(Number(options.limit) || 32))
+  const ttlMs = Math.max(1_000, Number(options.ttlMs) || 120_000)
+  const errorTtlMs = Math.max(0, Number(options.errorTtlMs) || 1_500)
+  const cache = new Map()
+
+  const touch = (key, entry) => {
+    cache.delete(key)
+    cache.set(key, entry)
+    while (cache.size > limit) cache.delete(cache.keys().next().value)
+  }
+
+  const get = (value, input = {}) => {
+    const key = normalizePath(value)
+    const now = Date.now()
+    const cached = cache.get(key)
+    if (!input.refresh && cached) {
+      if (cached.promise) return cached.promise
+      if (cached.expiresAt > now) {
+        touch(key, cached)
+        return Promise.resolve(cached.value)
+      }
+      cache.delete(key)
+    }
+
+    const entry = { promise: null, value: null, expiresAt: 0 }
+    const promise = Promise.resolve()
+      .then(() => loader(key))
+      .then((result) => {
+        entry.promise = null
+        entry.value = result
+        entry.expiresAt = Date.now() + (result?.error ? errorTtlMs : ttlMs)
+        if (entry.expiresAt <= Date.now()) cache.delete(key)
+        else touch(key, entry)
+        return result
+      })
+      .catch((error) => {
+        cache.delete(key)
+        throw error
+      })
+    entry.promise = promise
+    touch(key, entry)
+    return promise
+  }
+
+  return {
+    get,
+    invalidate(value) {
+      cache.delete(normalizePath(value))
+    },
+    clear() {
+      cache.clear()
+    },
+    get size() {
+      return cache.size
+    },
+  }
+}
+
 export function browseModel(input = {}) {
   const directory = normalizePath(input.directory)
-  const query = String(input.query ?? "").trim().toLowerCase()
+  const query = String(input.query ?? "").trim().toLocaleLowerCase()
   const showHidden = input.showHidden === true
   const known = new Set(Array.from(input.knownProjects ?? []).map((item) => normalizePath(item)))
+  const indexed = input.indexed === true ? Array.from(input.entries ?? []) : folderIndex(input.entries)
 
-  const entries = Array.from(input.entries ?? [])
-    .filter((entry) => entry && entry.directory === true && typeof entry.name === "string" && entry.name)
-    .filter((entry) => showHidden || (!entry.name.startsWith(".") && !NOISE.has(entry.name)))
-    .filter((entry) => !query || entry.name.toLowerCase().includes(query))
+  const entries = indexed
+    .filter((entry) => showHidden || !entry.hidden)
+    .filter((entry) => !query || entry.search.includes(query))
     .map((entry) => {
       const path = joinPath(directory, entry.name)
       return {
@@ -133,12 +222,6 @@ export function browseModel(input = {}) {
         added: known.has(path),
       }
     })
-
-  entries.sort((a, b) => {
-    // Projects first: they are what the user is looking for.
-    if (a.project !== b.project) return a.project ? -1 : 1
-    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
-  })
 
   return {
     directory,

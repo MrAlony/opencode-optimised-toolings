@@ -20,3 +20,16 @@ Mandatory rules for every human or AI agent:
 GitHub is the source mirror and release archive. npm is the installation/update registry. Local deterministic release tooling performs the build and publication work.
 
 See `docs/RELEASE_RECOVERY.md` for the complete procedure and security model.
+
+## Mandatory validation promotion workflow
+
+Every runtime, TUI, plugin-loading, configuration, updater, self-patch, or user-visible interaction change must move through these stages in order. No AI or human agent may skip a stage:
+
+1. **Direct local checkout validation first.** During active development, global OpenCode server and TUI entries must point directly to this checkout's `index.js` and `packages/tui/index.tsx`. The user validates the mutable working tree in the real application before packaging work begins.
+2. **Immutable installed candidate second.** Only after the user confirms direct-local behavior may an agent pack the exact working tree, provision an isolated immutable generation, atomically activate both candidate server/TUI entries with backups, and request candidate validation.
+3. **Explicit release approval last.** Commit, tag, push, GitHub Release creation, npm publication, registry migration, or live `@latest`/exact-version activation requires a new explicit user approval after the candidate is confirmed.
+4. A passing automated suite is necessary but never substitutes for direct-local and installed-candidate runtime validation.
+5. Never silently switch a development session from direct local checkout to a candidate or published package. State the promotion and preserve rollback backups.
+6. If candidate behavior differs from direct local behavior, stop release work and treat that as a packaging/runtime parity defect. Do not publish, tag a correction, or ask the user to accept the discrepancy.
+
+The required promotion sequence is therefore: **local checkout -> user confirmation -> immutable candidate -> user confirmation -> Git/GitHub/npm release**.

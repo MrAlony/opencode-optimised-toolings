@@ -1,22 +1,23 @@
 /** @jsxImportSource @opentui/solid */
-// Add a project.
+// Fast, bounded folder picker for adding a project.
 //
-// Two ways in, because neither alone is enough: type or paste a path when you
-// know it, or click through directories when you do not. Adding a project just
-// means preparing the native home prompt for that directory. OpenCode registers
-// the project only after the first message creates the session, so this validates
-// the directory and hands it to the caller without creating an empty chat.
+// Directory reads are cached and stale requests cannot overwrite the current
+// location. Listings are indexed/sorted once, filtering is deferred, and only
+// the visible rows are mounted. This keeps pointer and keyboard interaction
+// responsive even for directories containing thousands of children.
 
 import { useTerminalDimensions } from "@opentui/solid"
-import { createDeferred, createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js"
+import { readdir } from "node:fs/promises"
+import { createDeferred, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
 import { classifyKey, moveIndex } from "../lib/keys.js"
 import { fit, fitLeft } from "../lib/layout.js"
 import {
   baseName,
-  breadcrumbs,
   browseModel,
   commonRoots,
+  createDirectoryCache,
+  folderIndex,
   folderWindow,
   homeOf,
   joinPath,
@@ -25,143 +26,161 @@ import {
 } from "../lib/browse.js"
 import { Button, TextInput } from "./controls.jsx"
 import { listDirectory as listSdkDirectory } from "../lib/sdk.js"
-import { EmptyState, KeyHints, Rule, SectionLabel, Spinner } from "./ide-kit.jsx"
+import { EmptyState, SectionLabel, Spinner } from "./ide-kit.jsx"
 
-const HINTS = [
-  { key: "↑↓", label: "move" },
-  { key: "↵", label: "enter folder" },
-  { key: "click", label: "open" },
-  { key: "esc", label: "cancel" },
-]
-
-/** Directory markers that identify a project root without a second request. */
+const EMPTY_LISTING = Object.freeze({ directory: "", entries: [], isProject: false, error: "" })
 const MARKERS = new Set([
-  ".git",
-  "package.json",
-  "pyproject.toml",
-  "Cargo.toml",
-  "go.mod",
-  "pom.xml",
-  "build.gradle",
-  "Gemfile",
-  "composer.json",
-  "CMakeLists.txt",
-  "Makefile",
+  ".git", "package.json", "pyproject.toml", "Cargo.toml", "go.mod", "pom.xml",
+  "build.gradle", "Gemfile", "composer.json", "CMakeLists.txt", "Makefile",
 ])
 
-/**
- * Normalise a host file listing.
- *
- * The shape has varied across host versions, so both `type: "directory"` and a
- * boolean `directory` are accepted rather than assuming one.
- */
 function toEntries(nodes) {
   return Array.from(nodes ?? [])
     .map((node) => {
       if (!node || typeof node !== "object") return null
       const name = String(node.name ?? baseName(node.path ?? "") ?? "")
       if (!name) return null
-      const isDirectory = node.type === "directory" || node.directory === true || node.isDirectory === true
-      return { name, directory: isDirectory }
+      const directory = node.type === "directory" || node.directory === true || node.isDirectory === true
+      return { name, directory }
     })
     .filter(Boolean)
 }
 
+async function nativeDirectory(directory) {
+  const nodes = await readdir(directory, { withFileTypes: true })
+  const names = new Set()
+  const entries = []
+  for (const node of nodes) {
+    names.add(node.name)
+    if (node.isDirectory()) entries.push({ name: node.name, directory: true })
+  }
+  return { entries, isProject: [...MARKERS].some((marker) => names.has(marker)) }
+}
+
+async function sdkDirectory(api, directory) {
+  const entries = toEntries(await listSdkDirectory(api?.client, directory))
+  const names = new Set(entries.map((entry) => entry.name))
+  return { entries, isProject: [...MARKERS].some((marker) => names.has(marker)) }
+}
+
 async function listDirectory(api, directory) {
   const normalized = normalizePath(directory)
-  if (!normalized) return { entries: [], error: "" }
+  if (!normalized) return { directory: normalized, entries: [], isProject: false, source: "native", error: "" }
   try {
-    const nodes = await listSdkDirectory(api?.client, normalized)
-    const entries = toEntries(nodes)
-    const names = new Set(entries.map((entry) => entry.name))
-    return {
-      // A directory containing a project marker is worth highlighting.
-      entries: entries.map((entry) => ({ ...entry, project: false })),
-      isProject: [...MARKERS].some((marker) => names.has(marker)),
-      error: "",
+    const result = await nativeDirectory(normalized)
+    return { directory: normalized, ...result, source: "native", error: "" }
+  } catch (nativeError) {
+    try {
+      const result = await sdkDirectory(api, normalized)
+      return { directory: normalized, ...result, source: "sdk", error: "" }
+    } catch (sdkError) {
+      const nativeMessage = nativeError instanceof Error ? nativeError.message : String(nativeError)
+      const sdkMessage = sdkError instanceof Error ? sdkError.message : String(sdkError)
+      return {
+        directory: normalized,
+        entries: [],
+        isProject: false,
+        source: "unavailable",
+        error: sdkMessage || nativeMessage,
+      }
     }
-  } catch (error) {
-    return { entries: [], error: error instanceof Error ? error.message : String(error) }
   }
 }
 
 export function ProjectAdd(props) {
   const tokens = props.tokens
-  const [directory, setDirectory] = createSignal(normalizePath(props.initialDirectory) || "")
-  const [typed, setTyped] = createSignal("")
-  const [pathDraft, setPathDraft] = createSignal(normalizePath(props.initialDirectory) || "")
+  const dimensions = useTerminalDimensions()
+  const initial = normalizePath(props.initialDirectory) || ""
+  const [directory, setDirectory] = createSignal(initial)
+  const [pathDraft, setPathDraft] = createSignal(initial)
+  const [query, setQuery] = createSignal("")
+  const [showHidden, setShowHidden] = createSignal(false)
   const [index, setIndex] = createSignal(0)
+  const [listing, setListing] = createSignal(EMPTY_LISTING)
+  const [loading, setLoading] = createSignal(false)
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal("")
-  const dimensions = useTerminalDimensions()
-  const deferredTyped = createDeferred(typed, { timeoutMs: 60 })
-  const listingCache = new Map()
+  const [reload, setReload] = createSignal(0)
+  const [history, setHistory] = createSignal(initial ? [initial] : [])
+  const [historyIndex, setHistoryIndex] = createSignal(initial ? 0 : -1)
+  const deferredQuery = createDeferred(query, { timeoutMs: 75 })
+  const cache = createDirectoryCache((target) => listDirectory(props.api, target), {
+    limit: 40,
+    ttlMs: 120_000,
+    errorTtlMs: 1_000,
+  })
+  let request = 0
 
-  const cachedListing = (dir) => {
-    const key = normalizePath(dir)
-    const cached = listingCache.get(key)
-    if (cached) return cached
-    const request = listDirectory(props.api, key)
-    listingCache.set(key, request)
-    if (listingCache.size > 48) listingCache.delete(listingCache.keys().next().value)
-    return request
-  }
+  createEffect(() => {
+    const target = directory()
+    reload()
+    const owner = ++request
+    setLoading(true)
+    setFailure("")
+    void cache.get(target).then((result) => {
+      if (owner !== request) return
+      setListing(result)
+    }).catch((error) => {
+      if (owner !== request) return
+      setListing({ directory: target, entries: [], isProject: false, error: error instanceof Error ? error.message : String(error) })
+    }).finally(() => {
+      if (owner === request) setLoading(false)
+    })
+  })
+  onCleanup(() => { request += 1; cache.clear() })
 
-  const [listing] = createResource(directory, cachedListing)
-  // Solid resources are undefined during their initial and transition frames.
-  // Keep render expressions on a stable value instead of dereferencing the
-  // resource twice across a conditional boundary.
-  const listingState = createMemo(() => listing() ?? { entries: [], isProject: false, error: "" })
-
+  const currentListing = createMemo(() => listing().directory === directory() ? listing() : EMPTY_LISTING)
+  const listingSource = createMemo(() => currentListing().source === "sdk" ? "compatibility mode" : "local filesystem")
+  const indexedEntries = createMemo(() => folderIndex(currentListing().entries))
   const known = createMemo(() => (props.projects?.() ?? []).map((project) => project.worktree))
-
-  const model = createMemo(() =>
-    browseModel({
-      directory: directory(),
-      entries: listingState().entries,
-      knownProjects: known(),
-      isProject: listingState().isProject === true,
-      query: deferredTyped(),
-    }),
-  )
+  const model = createMemo(() => browseModel({
+    directory: directory(),
+    entries: indexedEntries(),
+    indexed: true,
+    knownProjects: known(),
+    isProject: currentListing().isProject,
+    query: deferredQuery(),
+    showHidden: showHidden(),
+  }))
 
   createEffect(() => {
     const size = model().entries.length
-    if (index() > Math.max(0, size - 1)) setIndex(Math.max(0, size - 1))
+    if (!size) setIndex(0)
+    else if (index() >= size) setIndex(size - 1)
   })
 
-  const width = () => Math.max(30, Number(props.width) || 90)
-  // The host dialog starts one quarter down the terminal, leaving roughly 75%
-  // of its rows. Budget every fixed control explicitly so the folder viewport
-  // can never make the dialog taller than the remaining screen.
-  const panelHeight = createMemo(() => Math.max(12, Math.floor(dimensions().height * 0.75) - 2))
-  const compact = createMemo(() => panelHeight() < 30)
-  const listHeight = createMemo(() => Math.max(3, Math.min(14, panelHeight() - (compact() ? 9 : 27))))
+  const width = () => Math.max(36, Number(props.width) || 84)
+  const panelHeight = createMemo(() => Math.max(13, Math.floor(dimensions().height * 0.75) - 2))
+  const compact = createMemo(() => panelHeight() < 25 || width() < 66)
+  const listHeight = createMemo(() => Math.max(4, Math.min(18, panelHeight() - (compact() ? 9 : 15))))
   const visible = createMemo(() => folderWindow(model().entries, index(), listHeight()))
+  const currentName = createMemo(() => baseName(directory()) || directory() || "folder")
 
-  // Offer a shortcut only when the listing proves the folder exists, so the
-  // picker never advertises a dead end.
-  const [homeListing] = createResource(
-    () => homeOf(props.initialDirectory) ?? homeOf(directory()),
-    (home) => listDirectory(props.api, home),
-  )
+  const shortcuts = createMemo(() => commonRoots({
+    home: homeOf(props.initialDirectory) ?? homeOf(directory()),
+    current: props.initialDirectory ?? directory(),
+  }).slice(0, compact() ? 2 : 5))
 
-  const shortcuts = createMemo(() => {
-    const home = homeOf(props.initialDirectory) ?? homeOf(directory())
-    const existing = (homeListing()?.entries ?? [])
-      .filter((entry) => entry.directory)
-      .map((entry) => joinPath(home, entry.name))
-    return commonRoots({ home, current: props.initialDirectory ?? directory(), existing })
-  })
-
-  const enter = (path) => {
-    const next = normalizePath(path)
-    if (!next) return
+  const enter = (value, options = {}) => {
+    const next = normalizePath(value)
+    if (!next || next === directory()) return
+    if (options.history !== false) {
+      const prior = history().slice(0, historyIndex() + 1)
+      setHistory([...prior, next].slice(-32))
+      setHistoryIndex(Math.min(31, prior.length))
+    }
     setDirectory(next)
     setPathDraft(next)
-    setTyped("")
+    setQuery("")
     setIndex(0)
     setFailure("")
+  }
+
+  const goBack = () => {
+    if (historyIndex() <= 0) return
+    const nextIndex = historyIndex() - 1
+    setHistoryIndex(nextIndex)
+    enter(history()[nextIndex], { history: false })
   }
 
   const goUp = () => {
@@ -169,9 +188,13 @@ export function ProjectAdd(props) {
     if (parent) enter(parent)
   }
 
-  /** Adding prepares a directory-scoped draft; the caller owns navigation. */
-  const add = async (path) => {
-    const target = normalizePath(path ?? directory())
+  const refresh = () => {
+    cache.invalidate(directory())
+    setReload((value) => value + 1)
+  }
+
+  const add = async () => {
+    const target = normalizePath(directory())
     if (!target || busy()) return
     setBusy(true)
     setFailure("")
@@ -186,23 +209,17 @@ export function ProjectAdd(props) {
 
   const handleKey = (event) => {
     const action = classifyKey(event)
-    if (action === "dismiss") {
-      props.onClose?.()
-      return
-    }
+    if (action === "dismiss") return props.onClose?.()
     if (action === "confirm") {
       const entry = model().entries[index()]
       if (entry) enter(entry.path)
       else if (model().canAdd) void add()
       return
     }
-    if (action === "left") {
-      goUp()
-      return
-    }
+    if (action === "left") return goUp()
     if (["up", "down", "page-up", "page-down", "first", "last"].includes(action)) {
+      event?.preventDefault?.()
       setIndex((current) => moveIndex(current, model().entries.length, action, listHeight()))
-      return
     }
   }
 
@@ -218,132 +235,78 @@ export function ProjectAdd(props) {
       overflow="hidden"
     >
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
-          {GLYPH.plus}
-        </text>
-        <text fg={tokens().text} wrapMode="none" selectable={false}>
-          <b>Add a project</b>
-        </text>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>
-          pick a folder to work in
-        </text>
+        <text fg={tokens().accent} wrapMode="none" selectable={false}>{GLYPH.plus}</text>
+        <text fg={tokens().text} wrapMode="none" selectable={false}><b>Add folder</b></text>
+        <text fg={tokens().faint} wrapMode="none" selectable={false}>{compact() ? "" : "Choose where a new chat belongs"}</text>
         <box flexGrow={1} />
-        <Show when={listing.loading || busy()}>
-          <Spinner tokens={tokens()} tone="accent" />
-        </Show>
+        <Show when={loading() || busy()}><Spinner tokens={tokens()} tone="accent" /></Show>
       </box>
 
-      {/*
-        Typing a path from memory is the worst way to choose a folder, so the
-        usual destinations are one click away before any browsing starts.
-      */}
       <Show when={!compact() && shortcuts().length}>
-        <box flexDirection="column" flexShrink={0} height={3} gap={1} overflow="hidden">
-          <text fg={tokens().faint} wrapMode="none" selectable={false}>
-            JUMP TO
-          </text>
-          <box flexDirection="row" flexShrink={0} gap={1} flexWrap="wrap">
-            <For each={shortcuts().slice(0, 5)}>
-              {(root) => (
-                <Button
-                  tokens={tokens()}
-                  variant={directory() === root.path ? "secondary" : "ghost"}
-                  size="sm"
-                  onPress={() => enter(root.path)}
-                >
-                  {root.name}
-                </Button>
-              )}
-            </For>
-          </box>
+        <box flexDirection="row" flexShrink={0} height={1} gap={1} overflow="hidden">
+          <text fg={tokens().faint} wrapMode="none" selectable={false}>QUICK</text>
+          <For each={shortcuts()}>{(root) => (
+            <Button tokens={tokens()} variant={directory() === root.path ? "secondary" : "ghost"} size="sm" onPress={() => enter(root.path)}>
+              {root.name}
+            </Button>
+          )}</For>
         </box>
       </Show>
 
-      <Show when={!compact()}>
-      <box flexDirection="row" flexShrink={0} height={1} gap={1}>
-        <Button
-          tokens={tokens()}
-          variant="secondary"
-          size="sm"
-          glyph={GLYPH.caretRight}
-          onPress={goUp}
-          disabled={!model().parent}
-        >
-          Up one level
+      <box flexDirection="row" flexShrink={0} height={1} gap={1} overflow="hidden">
+        <Button tokens={tokens()} variant="secondary" size="sm" disabled={historyIndex() <= 0} onPress={goBack}>Back</Button>
+        <Button tokens={tokens()} variant="secondary" size="sm" disabled={!model().parent} onPress={goUp}>Up</Button>
+        <Button tokens={tokens()} variant="ghost" size="sm" onPress={refresh}>Refresh</Button>
+        <Button tokens={tokens()} variant={showHidden() ? "secondary" : "ghost"} size="sm" onPress={() => { setShowHidden((value) => !value); setIndex(0) }}>
+          {showHidden() ? "Hide system" : "Show hidden"}
         </Button>
-        <For each={breadcrumbs(directory(), 4)}>
-          {(crumb) => (
-            <box
-              flexShrink={0}
-              onMouseUp={() => {
-                if (crumb.path) enter(crumb.path)
-              }}
-            >
-              <text fg={crumb.path ? tokens().muted : tokens().faint} wrapMode="none" selectable={false}>
-                {crumb.name}
-              </text>
-            </box>
-          )}
-        </For>
+        <box flexGrow={1} />
+        <text fg={tokens().muted} wrapMode="none" selectable={false}>{fitLeft(directory(), Math.max(12, width() - 40))}</text>
       </box>
-      </Show>
 
       <Show when={!compact()}>
         <TextInput
           tokens={tokens()}
-          label="Folder path"
           glyph={GLYPH.square}
           value={pathDraft()}
-          placeholder="Paste or type a folder path"
+          placeholder="Paste a folder path and press Enter"
           autoFocus
           onInput={setPathDraft}
-          onSubmit={(value) => enter(value)}
-          hint="Press Enter to open this path"
+          onSubmit={enter}
         />
       </Show>
 
       <TextInput
         tokens={tokens()}
-        label="Filter folders"
         glyph={GLYPH.pointer}
-        value={typed()}
-        placeholder="Type part of a folder name"
+        value={query()}
+        placeholder="Filter folders"
         autoFocus={compact()}
-        onInput={(value) => {
-          setTyped(value)
-          setIndex(0)
-        }}
+        onInput={(value) => { setQuery(value); setIndex(0) }}
         onKeyDown={handleKey}
       />
 
-      <Show when={listingState().error}>
-        <text fg={tokens().error} wrapMode="wrap" selectable={false}>
-          {fit(listingState().error, width() * 2)}
-        </text>
-      </Show>
-      <Show when={failure()}>
-        <text fg={tokens().error} wrapMode="wrap" selectable={false}>
-          {fit(failure(), width() * 2)}
-        </text>
+      <Show when={currentListing().error || failure()}>
+        <box flexDirection="row" flexShrink={0} height={1} gap={1}>
+          <text fg={tokens().error} wrapMode="none" selectable={false}>{fit(failure() || currentListing().error, width() - 12)}</text>
+          <Button tokens={tokens()} variant="secondary" size="sm" onPress={refresh}>Try again</Button>
+        </box>
       </Show>
 
-      <box flexDirection="column" flexShrink={0} height={listHeight() + 1} minHeight={6} overflow="hidden">
+      <box flexDirection="column" flexShrink={0} height={listHeight() + 1} minHeight={5} overflow="hidden">
         <SectionLabel
           tokens={tokens()}
-          meta={model().entries.length ? `${visible().start + 1}-${visible().end} of ${model().entries.length} · wheel or ↑↓` : "wheel or ↑↓"}
+          meta={model().entries.length ? `${visible().start + 1}-${visible().end} of ${model().entries.length} · ${listingSource()}` : loading() ? "reading local filesystem…" : "0 folders"}
         >
-          Folders
+          {currentName()}
         </SectionLabel>
-        <Show
-          when={model().entries.length}
-          fallback={
-            <EmptyState
-              tokens={tokens()}
-              title={listing.loading ? "Reading folder…" : "No folders here"}
-              hint="You can still add this folder itself"
-            />
-          }
-        >
+        <Show when={model().entries.length} fallback={
+          <EmptyState
+            tokens={tokens()}
+            title={loading() ? "Reading this folder…" : query() ? "No matching folders" : "No folders inside"}
+            hint={loading() ? "You can keep typing while it loads" : "You can still use the current folder"}
+          />
+        }>
           <box
             flexDirection="column"
             flexShrink={0}
@@ -356,82 +319,68 @@ export function ProjectAdd(props) {
               event?.stopPropagation?.()
               const direction = event?.scroll?.direction
               if (direction !== "up" && direction !== "down") return
-              const step = Math.max(1, Math.min(4, Math.round(Number(event?.scroll?.delta) || 3)))
-              setIndex((current) => {
-                const last = Math.max(0, model().entries.length - 1)
-                return direction === "down" ? Math.min(last, current + step) : Math.max(0, current - step)
-              })
+              const step = Math.max(1, Math.min(5, Math.round(Number(event?.scroll?.delta) || 3)))
+              setIndex((current) => direction === "down"
+                ? Math.min(model().entries.length - 1, current + step)
+                : Math.max(0, current - step))
             }}
           >
-            <For each={visible().entries}>
-              {(entry, position) => {
-                const absolute = () => visible().start + position()
-                return (
-                  <box
-                    flexDirection="row"
-                    flexShrink={0}
-                    height={1}
-                    width="100%"
-                    gap={1}
-                    paddingLeft={1}
-                    backgroundColor={absolute() === index() ? tokens().selectionStrong : undefined}
-                    onMouseUp={() => enter(entry.path)}
-                    onMouseMove={() => setIndex(absolute())}
-                  >
-                    <text fg={entry.added ? tokens().success : tokens().faint} wrapMode="none" selectable={false}>
-                      {entry.added ? GLYPH.ok : GLYPH.caretRight}
-                    </text>
-                    <text fg={tokens().text} wrapMode="none" selectable={false}>
-                      {fit(entry.name, width() - 22)}
-                    </text>
-                    <box flexGrow={1} />
-                    <Show when={entry.added}>
-                      <text fg={tokens().faint} wrapMode="none" selectable={false}>
-                        already added
-                      </text>
-                    </Show>
-                  </box>
-                )
-              }}
-            </For>
+            <For each={visible().entries}>{(entry, position) => {
+              const absolute = () => visible().start + position()
+              const selected = () => absolute() === index()
+              return (
+                <box
+                  flexDirection="row"
+                  flexShrink={0}
+                  height={1}
+                  width="100%"
+                  gap={1}
+                  paddingLeft={1}
+                  paddingRight={1}
+                  backgroundColor={selected() ? tokens().selectionStrong : undefined}
+                  focusable
+                  onMouseUp={() => enter(entry.path)}
+                  onMouseMove={() => { const next = absolute(); if (next !== index()) setIndex(next) }}
+                  onKeyDown={(event) => {
+                    const name = String(event?.name ?? "").toLowerCase()
+                    if (name === "enter" || name === "return" || name === "space") enter(entry.path)
+                    else handleKey(event)
+                  }}
+                >
+                  <text fg={entry.added ? tokens().success : selected() ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+                    {entry.added ? GLYPH.ok : GLYPH.caretRight}
+                  </text>
+                  <text fg={tokens().text} wrapMode="none" selectable={false}>{fit(entry.name, width() - 23)}</text>
+                  <box flexGrow={1} />
+                  <Show when={entry.added}><text fg={tokens().faint} wrapMode="none" selectable={false}>added</text></Show>
+                </box>
+              )
+            }}</For>
           </box>
         </Show>
       </box>
 
-      <Show when={!compact()}>
-        <Rule tokens={tokens()} />
-      </Show>
-
-      <box flexDirection="row" flexShrink={0} height={compact() ? 1 : 3} gap={compact() ? 1 : 2} alignItems="center">
+      <box flexDirection="row" flexShrink={0} height={compact() ? 1 : 3} gap={1} alignItems="center">
         <Button
           tokens={tokens()}
           variant="primary"
           size={compact() ? "sm" : "lg"}
           glyph={GLYPH.plus}
-          description={model().alreadyAdded ? "This folder is already in your list" : "Adds it to your folders"}
           disabled={!model().canAdd || busy()}
           onPress={() => void add()}
         >
-          {model().alreadyAdded ? "Already added" : `Use ${fit(baseName(directory()) || "this folder", 20)}`}
+          {model().alreadyAdded ? "Already added" : `Use ${fit(currentName(), 22)}`}
         </Button>
         <Show when={!compact()}>
-        <box flexDirection="column" flexGrow={1} minWidth={0}>
-          <text fg={model().isProject ? tokens().success : tokens().muted} wrapMode="none" selectable={false}>
-            {model().isProject ? `${GLYPH.ok} Project files detected` : "Any folder can be added"}
-          </text>
-          <text fg={tokens().faint} wrapMode="none" selectable={false}>
-            The folder appears immediately; the chat is created after your first message.
-          </text>
-        </box>
+          <box flexDirection="column" flexGrow={1} minWidth={0}>
+            <text fg={model().isProject ? tokens().success : tokens().muted} wrapMode="none" selectable={false}>
+              {model().isProject ? `${GLYPH.ok} Project files detected` : "Any folder can be used"}
+            </text>
+            <text fg={tokens().faint} wrapMode="none" selectable={false}>The chat is created only after your first message.</text>
+          </box>
         </Show>
-        <Button tokens={tokens()} variant="ghost" size={compact() ? "sm" : "md"} onPress={() => props.onClose?.()}>
-          Cancel
-        </Button>
+        <Button tokens={tokens()} variant="ghost" size={compact() ? "sm" : "md"} onPress={() => props.onClose?.()}>Cancel</Button>
       </box>
-
-      <Show when={!compact()}>
-        <KeyHints tokens={tokens()} hints={HINTS} />
-      </Show>
     </box>
   )
 }

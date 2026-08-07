@@ -1,6 +1,6 @@
 {
   "name": "opencode-optimised-toolings",
-  "version": "5.0.2",
+  "version": "6.0.0",
   "private": false,
   "type": "module",
   "main": "./index.js",
@@ -92,6 +92,7 @@
     "verify:shareable": "node scripts/verify-shareable.mjs",
     "services": "node scripts/services.mjs",
     "setup": "node scripts/setup.mjs",
+    "candidate:local": "node scripts/candidate-local.mjs",
     "release:local": "node scripts/release-local.mjs"
   },
   "dependencies": {

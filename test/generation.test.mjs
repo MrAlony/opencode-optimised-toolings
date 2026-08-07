@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { activatePackageGeneration, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, resolveNpmCommand, runtimeAttestation, runtimeHealth, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
@@ -182,6 +182,63 @@ test("activation switches server and TUI together and preserves unrelated config
     assert.equal(tui.plugin[2], "other-tui")
     assert.equal(tui.theme, "keep")
     assert.equal(result.backups.length, 2)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("concurrent activation is serialized and converges on one server/TUI generation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-concurrent-activation-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: ["old-server"] }, null, 2))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: ["old-tui"] }, null, 2))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations") }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    const results = await Promise.all(Array.from({ length: 8 }, () => activatePackageGeneration(generation, { configDir })))
+    assert.equal(results.filter((item) => item.changed).length, 1)
+    const server = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8"))
+    const tui = JSON.parse(readFileSync(join(configDir, "tui.json"), "utf8"))
+    assert.equal(server.plugin[0], generation.specs.server)
+    assert.equal(tui.plugin[0], generation.specs.tui)
+    assert.equal(existsSync(join(configDir, "alonix", ".generation-activation.json")), false)
+    assert.equal(existsSync(join(configDir, "alonix", ".generation-activation.lock")), false)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("an interrupted split activation is rolled back before the next transaction", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-recover-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    const alonixDir = join(configDir, "alonix")
+    const backupDir = join(alonixDir, "backups")
+    mkdirSync(backupDir, { recursive: true })
+    const serverFile = join(configDir, "opencode.json")
+    const tuiFile = join(configDir, "tui.json")
+    const serverBefore = JSON.stringify({ plugin: ["old-server"] }, null, 2)
+    const tuiBefore = JSON.stringify({ plugin: ["old-tui"] }, null, 2)
+    writeFileSync(serverFile, serverBefore)
+    writeFileSync(tuiFile, JSON.stringify({ plugin: ["file:///partial/new-tui.tsx"] }, null, 2))
+    const serverBackup = join(backupDir, "server.json")
+    const tuiBackup = join(backupDir, "tui.json")
+    writeFileSync(serverBackup, serverBefore)
+    writeFileSync(tuiBackup, tuiBefore)
+    writeFileSync(join(alonixDir, ".generation-activation.json"), JSON.stringify({
+      version: 1,
+      files: [
+        { file: serverFile, backup: serverBackup, afterHash: "not-committed" },
+        { file: tuiFile, backup: tuiBackup, afterHash: "not-committed" },
+      ],
+    }))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations") }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    await activatePackageGeneration(generation, { configDir })
+    const server = JSON.parse(readFileSync(serverFile, "utf8"))
+    const tui = JSON.parse(readFileSync(tuiFile, "utf8"))
+    assert.equal(server.plugin[0], generation.specs.server)
+    assert.equal(tui.plugin[0], generation.specs.tui)
+    assert.equal(existsSync(join(alonixDir, ".generation-activation.json")), false)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 

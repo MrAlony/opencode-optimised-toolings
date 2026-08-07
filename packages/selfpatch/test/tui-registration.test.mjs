@@ -53,6 +53,20 @@ test("development registration preserves unrelated TUI settings and replaces onl
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 
+test("unchanged development registration does not rewrite its marker on every project instance", async () => {
+  const f = developmentFixture()
+  try {
+    const first = await ensureTuiCompanion(f.root, { configDirectory: f.configDirectory })
+    const marker = join(f.configDirectory, ".sparkly-toolings-tui.json")
+    const before = readFileSync(marker, "utf8")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const second = await ensureTuiCompanion(f.root, { configDirectory: f.configDirectory })
+    assert.equal(first.changed, true)
+    assert.equal(second.changed, false)
+    assert.equal(readFileSync(marker, "utf8"), before)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test("installed registration provisions one generation and switches both configs to direct files", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-tui-installed-"))
   const previousMode = process.env.OPENCODE_TOOLINGS_PACKAGE_MODE

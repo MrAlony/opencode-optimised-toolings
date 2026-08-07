@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { defaultState, readState, sanitizeStoredState, sha256File, stateSummary, writeState } from "../lib/state.js"
 import {
   applyManifest,
@@ -11,11 +12,13 @@ import {
   manifestSha256,
   patchFileContent,
   resolvePatchProfile,
+  resolveBun,
   sourceReady,
 } from "../lib/pipeline.js"
 import { detectBinary, isDevRuntime, resolveOnPath, versionOf } from "../lib/detect.js"
 import { SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
+import { manifest as patchManifest11815 } from "../patches/1.18.15/manifest.mjs"
 
 test("alonix-toolings tool registration exposes a callable execute", async () => {
   const previous = process.env.OPENCODE_CONFIG_DIR
@@ -331,6 +334,22 @@ test("an existing but partial source cache is not considered ready", async () =>
   }
 })
 
+test("v1.18.15 has a dedicated strict profile for changed upstream files", () => {
+  assert.equal(patchManifest11815.version, "1.18.15")
+  assert.deepEqual(
+    patchManifest11815.files.map((entry) => entry.path),
+    patchManifest.files.map((entry) => entry.path),
+  )
+  assert.deepEqual(
+    patchManifest11815.files.map((entry) => entry.replacements),
+    patchManifest.files.map((entry) => entry.replacements),
+    "the new profile must reuse only the already-reviewed patch bodies",
+  )
+  const upstreamChanges = new Map(patchManifest11815.files.map((entry) => [entry.path, entry.beforeSha256]))
+  assert.equal(upstreamChanges.get("packages/tui/src/routes/session/index.tsx"), "90f0471caac6eac5768cf4358d4371207dd69362affeddb4ea0f30133a7e576c")
+  assert.equal(upstreamChanges.get("packages/opencode/src/session/prompt.ts"), "0ef73c460d46619cd3e75d4b790a22a3c4c999b311a43e7887b634ff7a3fa06d")
+})
+
 test("v1.18.13 patch carries tool renderers through every TUI API boundary", () => {
   const files = new Map(patchManifest.files.map((file) => [file.path, file]))
   const pluginTypes = files.get("packages/plugin/src/tui.ts")
@@ -475,6 +494,14 @@ test("OpenCode updates are never blocked or replaced without verified source com
   assert.match(source, /optional enhancements were safely skipped/)
   assert.match(source, /readPatchMarker\(sourceRootForMarker\)/, "changed profiles must retry compatibility against pristine source")
   assert.doesNotMatch(source, /No bundled patch manifest for OpenCode/)
+})
+
+test("resolveBun skips non-executable package wrappers on Windows", async () => {
+  const resolved = await resolveBun(fileURLToPath(new URL("../../..", import.meta.url)))
+  assert.ok(resolved, "a usable Bun executable must be resolved for host rebuilding")
+  if (process.platform === "win32" && resolved.source === "workspace") {
+    assert.doesNotMatch(resolved.command.replaceAll("\\", "/"), /node_modules\/bun\/bin\/bun\.exe$/i)
+  }
 })
 
 test("source dependency hydration never runs third-party lifecycle scripts", () => {

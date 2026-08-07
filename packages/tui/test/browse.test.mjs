@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { commonRoots, folderWindow, homeOf, baseName, breadcrumbs, browseModel, joinPath, looksLikeProject, normalizePath, parentOf } from "../lib/browse.js"
+import { commonRoots, createDirectoryCache, folderIndex, folderWindow, homeOf, baseName, breadcrumbs, browseModel, joinPath, looksLikeProject, normalizePath, parentOf } from "../lib/browse.js"
 
 function dir(name, project = false) {
   return { name, directory: true, project }
@@ -185,6 +185,45 @@ test("large folder listings render through a bounded moving window", () => {
   assert.equal(last.start, 9_988)
   assert.equal(last.end, 10_000)
   assert.equal(last.after, 0)
+})
+
+test("large listings are indexed and sorted once before interactive filtering", () => {
+  const raw = Array.from({ length: 10_000 }, (_, index) => dir(`folder-${10_000 - index}`))
+  raw.push(dir(".hidden"), dir("node_modules"), dir("priority", true))
+  const indexed = folderIndex(raw)
+  assert.equal(indexed.length, 10_003)
+  assert.equal(indexed[0].name, "priority")
+  assert.equal(indexed.find((entry) => entry.name === ".hidden").hidden, true)
+
+  const model = browseModel({ directory: "C:/work", entries: indexed, indexed: true, query: "9999" })
+  assert.deepEqual(model.entries.map((entry) => entry.name), ["folder-9999"])
+})
+
+test("directory cache shares in-flight work, stays bounded, and retries failures", async () => {
+  let calls = 0
+  let fail = true
+  const cache = createDirectoryCache(async (directory) => {
+    calls += 1
+    if (directory === "C:/broken" && fail) throw new Error("temporary")
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    return { directory, entries: [] }
+  }, { limit: 4, ttlMs: 10_000 })
+
+  const first = cache.get("C:/work")
+  const second = cache.get("C:\\work\\")
+  assert.equal(first, second, "the same normalized in-flight request must be shared")
+  await Promise.all([first, second])
+  assert.equal(calls, 1)
+  await cache.get("C:/work")
+  assert.equal(calls, 1, "successful backtracking must use the cached result")
+
+  await assert.rejects(cache.get("C:/broken"), /temporary/)
+  fail = false
+  await cache.get("C:/broken")
+  assert.equal(calls, 3, "a rejected read must be evicted and retried")
+
+  for (const path of ["C:/a", "C:/b", "C:/c", "C:/d", "C:/e"]) await cache.get(path)
+  assert.ok(cache.size <= 4)
 })
 
 test("malformed input never throws", () => {

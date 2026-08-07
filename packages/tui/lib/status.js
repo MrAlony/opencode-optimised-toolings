@@ -141,9 +141,9 @@ export function indicatorFor(state, evidence = {}) {
     case "portable":
     case "unsupported-version":
       return {
-        level: "ok",
-        text: `Plugin active on OpenCode v${state.version ?? "?"}`,
-        detail: "Portable IDE features are available; optional host enhancements were safely skipped",
+        level: "warn",
+        text: `Plugin active in portable mode on OpenCode v${state.version ?? "?"}`,
+        detail: "Core IDE features are available, but this process lacks verified rich-renderer host capability",
       }
     case "error":
       return { level: "error", text: state.lastError ?? "Tooling self-patch failed" }
