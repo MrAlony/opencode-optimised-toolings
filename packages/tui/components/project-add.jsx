@@ -235,16 +235,16 @@ export function ProjectAdd(props) {
       overflow="hidden"
     >
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>{GLYPH.plus}</text>
-        <text fg={tokens().text} wrapMode="none" selectable={false}><b>Add folder</b></text>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>{compact() ? "" : "Choose where a new chat belongs"}</text>
+        <text fg={tokens().accent} wrapMode="none">{GLYPH.plus}</text>
+        <text fg={tokens().text} wrapMode="none"><b>Add folder</b></text>
+        <text fg={tokens().faint} wrapMode="none">{compact() ? "" : "Choose where a new chat belongs"}</text>
         <box flexGrow={1} />
         <Show when={loading() || busy()}><Spinner tokens={tokens()} tone="accent" /></Show>
       </box>
 
       <Show when={!compact() && shortcuts().length}>
         <box flexDirection="row" flexShrink={0} height={1} gap={1} overflow="hidden">
-          <text fg={tokens().faint} wrapMode="none" selectable={false}>QUICK</text>
+          <text fg={tokens().faint} wrapMode="none">QUICK</text>
           <For each={shortcuts()}>{(root) => (
             <Button tokens={tokens()} variant={directory() === root.path ? "secondary" : "ghost"} size="sm" onPress={() => enter(root.path)}>
               {root.name}
@@ -261,7 +261,7 @@ export function ProjectAdd(props) {
           {showHidden() ? "Hide system" : "Show hidden"}
         </Button>
         <box flexGrow={1} />
-        <text fg={tokens().muted} wrapMode="none" selectable={false}>{fitLeft(directory(), Math.max(12, width() - 40))}</text>
+        <text fg={tokens().muted} wrapMode="none">{fitLeft(directory(), Math.max(12, width() - 40))}</text>
       </box>
 
       <Show when={!compact()}>
@@ -288,7 +288,7 @@ export function ProjectAdd(props) {
 
       <Show when={currentListing().error || failure()}>
         <box flexDirection="row" flexShrink={0} height={1} gap={1}>
-          <text fg={tokens().error} wrapMode="none" selectable={false}>{fit(failure() || currentListing().error, width() - 12)}</text>
+          <text fg={tokens().error} wrapMode="none">{fit(failure() || currentListing().error, width() - 12)}</text>
           <Button tokens={tokens()} variant="secondary" size="sm" onPress={refresh}>Try again</Button>
         </box>
       </Show>
@@ -347,12 +347,12 @@ export function ProjectAdd(props) {
                     else handleKey(event)
                   }}
                 >
-                  <text fg={entry.added ? tokens().success : selected() ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+                  <text fg={entry.added ? tokens().success : selected() ? tokens().accent : tokens().faint} wrapMode="none">
                     {entry.added ? GLYPH.ok : GLYPH.caretRight}
                   </text>
-                  <text fg={tokens().text} wrapMode="none" selectable={false}>{fit(entry.name, width() - 23)}</text>
+                  <text fg={tokens().text} wrapMode="none">{fit(entry.name, width() - 23)}</text>
                   <box flexGrow={1} />
-                  <Show when={entry.added}><text fg={tokens().faint} wrapMode="none" selectable={false}>added</text></Show>
+                  <Show when={entry.added}><text fg={tokens().faint} wrapMode="none">added</text></Show>
                 </box>
               )
             }}</For>
@@ -373,10 +373,10 @@ export function ProjectAdd(props) {
         </Button>
         <Show when={!compact()}>
           <box flexDirection="column" flexGrow={1} minWidth={0}>
-            <text fg={model().isProject ? tokens().success : tokens().muted} wrapMode="none" selectable={false}>
+            <text fg={model().isProject ? tokens().success : tokens().muted} wrapMode="none">
               {model().isProject ? `${GLYPH.ok} Project files detected` : "Any folder can be used"}
             </text>
-            <text fg={tokens().faint} wrapMode="none" selectable={false}>The chat is created only after your first message.</text>
+            <text fg={tokens().faint} wrapMode="none">The chat is created only after your first message.</text>
           </box>
         </Show>
         <Button tokens={tokens()} variant="ghost" size={compact() ? "sm" : "md"} onPress={() => props.onClose?.()}>Cancel</Button>

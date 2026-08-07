@@ -46,14 +46,14 @@ function SessionRow(props) {
           <Show
             when={row().running}
             fallback={
-              <text fg={row().active ? props.tokens.success : props.tokens.borderFaint} wrapMode="none" selectable={false}>
+              <text fg={row().active ? props.tokens.success : props.tokens.borderFaint} wrapMode="none">
                 {row().active ? GLYPH.diamond : row().pinned ? GLYPH.ring : GLYPH.bullet}
               </text>
             }
           >
             <Spinner tokens={props.tokens} tone={row().state === "retry" ? "warning" : "accent"} />
           </Show>
-          <text fg={props.selected ? props.tokens.accent : props.tokens.faint} wrapMode="none" selectable={false}>
+          <text fg={props.selected ? props.tokens.accent : props.tokens.faint} wrapMode="none">
             {row().slot ? String(row().slot) : " "}
           </text>
         </box>
@@ -64,7 +64,6 @@ function SessionRow(props) {
         <text
           fg={row().untitled ? props.tokens.muted : props.selected ? props.tokens.text : props.tokens.text}
           wrapMode="none"
-          selectable={false}
         >
           {props.selected ? <b>{fit(row().title, props.width)}</b> : fit(row().title, props.width)}
         </text>
@@ -87,7 +86,7 @@ function Preview(props) {
       <Show when={row()} fallback={<EmptyState tokens={props.tokens} title="No session selected" />}>
         <box flexDirection="column">
           <SectionLabel tokens={props.tokens}>Session</SectionLabel>
-          <text fg={props.tokens.text} wrapMode="wrap" selectable={false}>
+          <text fg={props.tokens.text} wrapMode="wrap">
             <b>{fit(view().title, props.width * 2)}</b>
           </text>
         </box>
@@ -117,7 +116,7 @@ function Preview(props) {
         <Show when={view().directory}>
           <box flexDirection="column">
             <SectionLabel tokens={props.tokens}>Directory</SectionLabel>
-            <text fg={props.tokens.muted} wrapMode="none" selectable={false}>
+            <text fg={props.tokens.muted} wrapMode="none">
               {compactPath(view().directory, props.width - 1)}
             </text>
           </box>
@@ -240,10 +239,10 @@ export function SessionSwitcher(props) {
       gap={1}
     >
       <box flexDirection="row" gap={1} flexShrink={0} alignItems="center">
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
+        <text fg={tokens().accent} wrapMode="none">
           {GLYPH.diamond}
         </text>
-        <text fg={tokens().text} wrapMode="none" selectable={false}>
+        <text fg={tokens().text} wrapMode="none">
           <b>Open a chat</b>
         </text>
         <Badge tokens={tokens()} tone="neutral">

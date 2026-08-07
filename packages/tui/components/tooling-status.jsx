@@ -30,10 +30,10 @@ export function ToolingStatusView(props) {
   return (
     <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
       <box flexDirection="row" gap={1} alignItems="center" flexShrink={0}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
+        <text fg={tokens().accent} wrapMode="none">
           {GLYPH.diamond}
         </text>
-        <text fg={tokens().text} wrapMode="none" selectable={false}>
+        <text fg={tokens().text} wrapMode="none">
           <b>Alonix tooling</b>
         </text>
         <box flexGrow={1} />
@@ -44,7 +44,7 @@ export function ToolingStatusView(props) {
 
       <box flexDirection="row" gap={1} flexShrink={0}>
         <StatusDot tokens={tokens()} tone={toneFor(indicator().level)} pulse={indicator().level === "info"} />
-        <text fg={tokens().muted} wrapMode="wrap" selectable={false}>
+        <text fg={tokens().muted} wrapMode="wrap">
           {indicator().text}
         </text>
       </box>
@@ -52,7 +52,7 @@ export function ToolingStatusView(props) {
       <Show when={percent() !== null}>
         <box flexDirection="row" gap={1} flexShrink={0}>
           <Gauge tokens={tokens()} tone={toneFor(indicator().level)} percent={percent()} width={28} active />
-          <text fg={tokens().faint} wrapMode="none" selectable={false}>
+          <text fg={tokens().faint} wrapMode="none">
             {percent()}% {state().stepLabel ?? ""}
           </text>
         </box>
@@ -74,7 +74,7 @@ export function ToolingStatusView(props) {
 
       <Show when={state().lastError && indicator().level === "error"}>
         <Panel tokens={tokens()} title="Last error" glyph={GLYPH.fail} tone="error">
-          <text fg={tokens().error} wrapMode="wrap" selectable={false}>
+          <text fg={tokens().error} wrapMode="wrap">
             {String(state().lastError)}
           </text>
         </Panel>

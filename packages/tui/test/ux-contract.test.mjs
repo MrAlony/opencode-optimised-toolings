@@ -224,19 +224,23 @@ test("design tokens are theme-reactive rather than captured once at load", async
   assert.doesNotMatch(index, /const skin = \{ \.\.\.skinOf/)
 })
 
-test("the workbench center is a portfolio operations dashboard, not an empty session inspector", async () => {
+test("Delivery Hub and Mission Control have distinct product responsibilities", async () => {
   const workbench = await source("components/workbench.jsx")
   const operations = await source("components/operations.jsx")
+  const monitor = await source("components/monitor.jsx")
   assert.match(workbench, /OperationsWorkspace/)
   assert.doesNotMatch(workbench, /tabsWithSlots|ActivityPanel|SessionView|DetailPane/)
-  assert.match(operations, /SNAPSHOT_LIMIT = 60/, "live-state reads must stay bounded for large portfolios")
-  assert.match(operations, /if \(active\(\)/, "the selected chat must always be included in the live scope")
-  assert.match(operations, /sessions\(\)\.filter\(\(item\) => item\.running\)/)
-  assert.match(operations, /workspaceSnapshot\(props\.api, session\.id\)/)
-  assert.match(operations, /liveActivity\(props\.api, session\(\)\.id/)
-  assert.match(operations, /Needs you/)
-  assert.match(operations, /Working now/)
-  assert.match(operations, /Recent chats/)
+  assert.match(operations, /commandCenterModel/)
+  assert.match(operations, /\.tasks\.slice\(0, 20\)/)
+  assert.match(operations, /\.review\.slice\(0, 12\)/)
+  assert.match(operations, /\.unresolved\.slice\(0, 12\)/)
+  assert.match(operations, /Project Delivery Hub/)
+  assert.match(operations, /Decisions & memory/)
+  assert.doesNotMatch(operations, /liveActivity|useClock|Working now|Recent chats/)
+  assert.match(monitor, /missionControlModel/)
+  assert.match(monitor, /liveActivity/)
+  assert.match(monitor, /AgentTableRow/)
+  assert.doesNotMatch(monitor, /Review queue|Decisions & memory|Recent completed outcomes/)
 })
 
 test("animation runs on one shared clock that idles when unobserved", async () => {

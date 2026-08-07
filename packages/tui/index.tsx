@@ -308,6 +308,30 @@ const tui: TuiPlugin = async (api, options) => {
     }
   }
 
+  const addDeliveryDecision = (project?: { id?: string; stateKey?: string; name?: string }) => {
+    const selected = project ?? projects.projectRows().find((item) => item.current) ?? projects.projectRows()[0]
+    api.ui.dialog.setSize("medium")
+    api.ui.dialog.replace(() => (
+      <api.ui.DialogPrompt
+        title="Add project decision"
+        placeholder="Record a constraint, choice, or rule to remember"
+        description={() => <text fg={tokens().muted}>Saved by Alonix for {selected?.name ?? "the portfolio"}. User content and chat history are not modified.</text>}
+        onConfirm={(value) => {
+          const saved = projects.addDecision({
+            text: value,
+            projectID: selected?.id,
+            projectKey: selected?.stateKey,
+            projectName: selected?.name,
+            sourceSessionID: projects.activeSessionID(),
+          })
+          api.ui.dialog.clear()
+          if (saved) api.ui.toast({ variant: "success", title: "Decision saved", message: "The Delivery Hub will keep this project decision available." })
+        }}
+        onCancel={() => api.ui.dialog.clear()}
+      />
+    ))
+  }
+
   const openWorkbench = () => {
     try {
       api.route.navigate(WORKBENCH_ROUTE)
@@ -529,6 +553,7 @@ const tui: TuiPlugin = async (api, options) => {
               onNewSession={() => openPalette("#")}
               onChooseProject={() => openPalette("#")}
               onOpenChat={openChat}
+              onAddDecision={addDeliveryDecision}
               onExit={() => openChat(projects.workbench.activeID)}
             />
           </ClockProvider>

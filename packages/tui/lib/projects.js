@@ -199,6 +199,8 @@ export function buildProjectModel(input = {}) {
       changedFiles: Number(session.summary?.files ?? 0),
       additions: Number(session.summary?.additions ?? 0),
       deletions: Number(session.summary?.deletions ?? 0),
+      todos: Array.from(session.alonixTodos ?? []),
+      files: Array.from(session.alonixFiles ?? []),
     })
   }
 

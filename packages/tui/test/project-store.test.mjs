@@ -22,7 +22,7 @@ function createApi(overrides = {}) {
   const kv = new Map(Object.entries(overrides.kv ?? {}))
   const [kvReady, setKvReady] = createSignal(overrides.kvReady !== false)
   const listeners = new Map()
-  const calls = { projectList: 0, sessionList: 0, statusList: 0, messageList: 0 }
+  const calls = { projectList: 0, sessionList: 0, statusList: 0, messageList: 0, todoList: 0, diffList: 0 }
   const api = {
     calls,
     listeners,
@@ -61,6 +61,16 @@ function createApi(overrides = {}) {
         messages: async ({ sessionID }) => {
           calls.messageList += 1
           return { data: overrides.messages?.[sessionID] ?? [{ info: { role: "assistant", time: { completed: Date.now() } } }] }
+        },
+        todo: async ({ sessionID }) => {
+          calls.todoList += 1
+          if (overrides.failIntelligence) throw new Error("intelligence offline")
+          return { data: overrides.todos?.[sessionID] ?? [] }
+        },
+        diff: async ({ sessionID }) => {
+          calls.diffList += 1
+          if (overrides.failIntelligence) throw new Error("intelligence offline")
+          return { data: overrides.diffs?.[sessionID] ?? [] }
         },
       },
     },
@@ -581,6 +591,51 @@ test("tabs for deleted sessions are reconciled away once a listing arrives", asy
     await store.reload()
     await new Promise((resolve) => setTimeout(resolve, 10))
     assert.deepEqual(store.workbench.tabs.map((tab) => tab.id), ["s1"])
+  })
+})
+
+test("delivery intelligence loads persisted todos and files through a bounded SDK window", async () => {
+  const sessions = Array.from({ length: 40 }, (_, index) => ({ id: `delivery-${index}`, title: `Delivery ${index}`, projectID: "p1", directory: "C:/work/alpha", time: { updated: Date.now() - index } }))
+  const api = createApi({
+    sessions,
+    todos: { "delivery-0": [{ content: "Review architecture", status: "in_progress" }] },
+    diffs: { "delivery-0": [{ file: "src/architecture.ts", additions: 4, deletions: 1 }] },
+  })
+  await withStore(api, (store) => {
+    const row = store.sessionRows().find((item) => item.id === "delivery-0")
+    assert.deepEqual(row.todos, [{ content: "Review architecture", status: "in_progress" }])
+    assert.deepEqual(row.files, [{ file: "src/architecture.ts", additions: 4, deletions: 1 }])
+    assert.ok(api.calls.todoList <= 12, `todo fan-out must stay bounded, saw ${api.calls.todoList}`)
+    assert.ok(api.calls.diffList <= 12, `diff fan-out must stay bounded, saw ${api.calls.diffList}`)
+    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
+    assert.ok(snapshot.sessions.some((session) => session.id === "delivery-0" && session.alonixTodos?.length === 1))
+  })
+})
+
+test("delivery intelligence failures preserve cached todos and files", async () => {
+  const cached = [{ ...SESSIONS[0], alonixTodos: [{ content: "Keep me", status: "pending" }], alonixFiles: [{ file: "src/keep.ts" }] }]
+  const api = createApi({ kv: { alonix_portfolio_snapshot: { version: 1, savedAt: Date.now(), projects: PROJECTS, sessions: cached } }, sessions: [SESSIONS[0]], failIntelligence: true })
+  await withStore(api, (store) => {
+    const row = store.sessionRows().find((item) => item.id === "s1")
+    assert.equal(row.todos[0].content, "Keep me")
+    assert.equal(row.files[0].file, "src/keep.ts")
+  })
+})
+
+test("delivery review and decisions persist through KV including delayed hydration", async () => {
+  const api = createApi({ kvReady: false, kv: { alonix_delivery_state: { reviewed: ["saved"], decisions: [{ id: "d1", text: "Keep API stable", projectID: "p1", projectName: "Alpha", createdAt: 1 }] } } })
+  await withStore(api, async (store) => {
+    assert.deepEqual(store.delivery.reviewed, [])
+    api.setKvReady(true)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.deepEqual(store.delivery.reviewed, ["saved"])
+    assert.equal(store.delivery.decisions[0].text, "Keep API stable")
+    assert.equal(store.markReviewed("s1"), true)
+    assert.equal(store.markReviewed("s1"), false)
+    assert.equal(store.addDecision({ text: "Use one queue", projectID: "p1", projectName: "Alpha" }), true)
+    const persisted = api.kvStore.get("alonix_delivery_state")
+    assert.ok(persisted.decisions.some((item) => item.text === "Use one queue"))
+    assert.equal(store.removeDecision("d1"), true)
   })
 })
 

@@ -18,7 +18,7 @@ const PERMISSION_OPTIONS = [
 function ToggleRow(props) {
   return (
     <box flexDirection="row" flexShrink={0} height={1} gap={1} alignItems="center">
-      <text fg={props.tokens.text} wrapMode="none" selectable={false}><b>{props.label}</b></text>
+      <text fg={props.tokens.text} wrapMode="none"><b>{props.label}</b></text>
       <box flexGrow={1} />
       <SegmentedControl
         tokens={props.tokens}
@@ -33,7 +33,7 @@ function ToggleRow(props) {
 function PermissionRow(props) {
   return (
     <box flexDirection="row" flexShrink={0} minHeight={1} gap={1} alignItems="center">
-      <text fg={props.tokens.text} width={31} wrapMode="none" selectable={false}>{props.name}</text>
+      <text fg={props.tokens.text} width={31} wrapMode="none">{props.name}</text>
       <SegmentedControl tokens={props.tokens} value={props.value} onChange={props.onChange} items={PERMISSION_OPTIONS} />
     </box>
   )

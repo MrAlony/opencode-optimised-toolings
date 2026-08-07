@@ -45,8 +45,8 @@ export function Workbench(props) {
       onKeyDown={handleKey}
     >
       <Toolbar tokens={tokens()} height={3} gap={1}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>{GLYPH.diamond}</text>
-        <text fg={tokens().text} wrapMode="none" selectable={false}><b>Alonix</b></text>
+        <text fg={tokens().accent} wrapMode="none">{GLYPH.diamond}</text>
+        <text fg={tokens().text} wrapMode="none"><b>Alonix</b></text>
         <Button tokens={tokens()} variant="secondary" glyph={GLYPH.pointer} shortcut="^p" onPress={props.onPalette}>Search</Button>
         <Button tokens={tokens()} variant="primary" glyph={GLYPH.plus} shortcut="^n" onPress={props.onChooseProject}>New chat</Button>
         <Button tokens={tokens()} variant="secondary" glyph={GLYPH.square} onPress={props.onAddProject}>Add folder</Button>
@@ -56,13 +56,13 @@ export function Workbench(props) {
           value={props.mode?.() ?? "work"}
           onChange={props.onMode}
           items={[
-            { value: "work", label: "Operations" },
+            { value: "work", label: "Command center" },
             { value: "monitor", label: "Live agents", count: summary().running || undefined },
           ]}
         />
         <box flexGrow={1} />
-        <Show when={summary().running > 0}><text fg={tokens().accent} wrapMode="none" selectable={false}>{GLYPH.dot} {summary().running} working</text></Show>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>{summary().projects} folders · {store.ready ? `${summary().sessions} chats` : "loading chats"}</text>
+        <Show when={summary().running > 0}><text fg={tokens().accent} wrapMode="none">{GLYPH.dot} {summary().running} working</text></Show>
+        <text fg={tokens().faint} wrapMode="none">{summary().projects} folders · {store.ready ? `${summary().sessions} chats` : "loading chats"}</text>
         <Button tokens={tokens()} variant="secondary" onPress={props.onExit}>Back to chat</Button>
       </Toolbar>
 
@@ -73,12 +73,18 @@ export function Workbench(props) {
             api={props.api}
             tokens={tokens}
             sessions={sessions}
+            projects={() => store.projectRows()}
             ready={store.ready}
             activeID={activeID()}
+            selectedProjectID={store.selectedProjectID}
+            delivery={store.delivery}
             width={viewport().width - 2}
             height={viewport().height - 3}
-            onOpen={(session) => props.onOpenChat?.(session.id)}
+            onOpen={(sessionID) => props.onOpenChat?.(typeof sessionID === "string" ? sessionID : sessionID?.id)}
             onChooseProject={props.onChooseProject}
+            onReviewed={(sessionID) => store.markReviewed(sessionID)}
+            onAddDecision={props.onAddDecision}
+            onRemoveDecision={(decisionID) => store.removeDecision(decisionID)}
           />
         }
       >
@@ -86,6 +92,7 @@ export function Workbench(props) {
           api={props.api}
           tokens={tokens}
           sessions={sessions}
+          projects={() => store.projectRows()}
           ready={store.ready}
           width={viewport().width - 2}
           height={viewport().height - 3}

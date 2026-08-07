@@ -65,13 +65,15 @@ test("no component invokes the clock controller as a function", async () => {
   }
 })
 
-test("components read elapsed time through useClock", async () => {
-  // These surfaces animate or poll live state, so they must subscribe properly
-  // rather than receiving a tick through props.
-  for (const file of ["components/operations.jsx", "components/monitor.jsx", "components/session-rail.jsx"]) {
+test("live surfaces read elapsed time through useClock", async () => {
+  // Only real-time surfaces subscribe to motion. The command center is
+  // intentionally static so it cannot duplicate Live Agents telemetry.
+  for (const file of ["components/monitor.jsx", "components/session-rail.jsx"]) {
     const text = await source(file)
     assert.match(text, /useClock\(/, `${file} must subscribe through useClock`)
   }
+  const operations = await source("components/operations.jsx")
+  assert.doesNotMatch(operations, /useClock|liveActivity/, "the command center must remain planning-only")
 })
 
 test("the dock occupies a left layout column on every screen", async () => {
@@ -111,11 +113,11 @@ test("nullable async and selection state is never dereferenced behind only a vis
   assert.doesNotMatch(projectAdd, /listing\(\)\.error/)
   assert.match(palette, /EMPTY_PREVIEW_ACTION/)
   assert.match(switcher, /EMPTY_PREVIEW_ROW/)
-  assert.match(operations, /EMPTY_CURRENT_SESSION/)
-  for (const [name, text] of [["dock", await source("components/dock.jsx")], ["session rail", await source("components/session-rail.jsx")], ["operations", operations]]) {
+  assert.match(operations, /commandCenterModel/)
+  for (const [name, text] of [["dock", await source("components/dock.jsx")], ["session rail", await source("components/session-rail.jsx")]]) {
     assert.doesNotMatch(text, /activity\(\)\?\./, `${name} must use a stable activity view model`)
   }
-  assert.doesNotMatch(operations, /snapshot\(\)\?\./)
+  assert.doesNotMatch(operations, /activity\(\)|snapshot\(\)|liveActivity/, "the command center must not own live nullable state")
 })
 
 test("folder loading is bounded and exposes recovery instead of a permanent spinner", async () => {
@@ -284,15 +286,17 @@ test("every main surface offers a filled primary button", async () => {
   }
 })
 
-test("the operations workspace replaces the empty editor canvas", async () => {
+test("the Delivery Hub replaces the duplicate live operations canvas", async () => {
   const workbench = await source("components/workbench.jsx")
   const operations = await source("components/operations.jsx")
+  const monitor = await source("components/monitor.jsx")
   assert.match(workbench, /<OperationsWorkspace/)
   assert.doesNotMatch(workbench, /ActivityPanel|SessionView|DetailPane|<Tab/, "legacy inspector and fake editor tabs must be gone")
-  for (const title of ["Operations", "Current chat", "Needs you", "Working now", "Recent chats"]) {
-    assert.match(operations, new RegExp(title), `missing useful workspace section: ${title}`)
-  }
-  assert.match(operations, /<scrollbox flexGrow=\{1\}/, "the dashboard must fill and scroll the available viewport")
+  for (const title of ["Project Delivery Hub", "Unified project tasks", "Review queue", "Unresolved work", "Decisions & memory", "Cross-chat change overlaps", "Recent completed outcomes", "Project health"]) assert.match(operations, new RegExp(title), `missing Delivery Hub section: ${title}`)
+  assert.doesNotMatch(operations, /Working now|Recent chats|liveActivity|useClock/, "live supervision and sidebar recents must not be duplicated")
+  assert.match(operations, /<scrollbox flexGrow=\{1\}/, "the Delivery Hub must fill and scroll the available viewport")
+  assert.match(monitor, /Live Agents Mission Control/)
+  assert.match(monitor, /agentWindow/)
 })
 
 test("the folder picker offers one-click destinations", async () => {
@@ -407,11 +411,17 @@ test("the universal finder exposes plain-language mouse filters", async () => {
   assert.doesNotMatch(text, />·@·#/, "developer prefix syntax must not be the primary instruction")
 })
 
-test("monitor is automatic and explains what it shows", async () => {
+test("Live Agents Mission Control is automatic, filterable and focused on active intervention", async () => {
   const text = await source("components/monitor.jsx")
-  assert.match(text, /Updates automatically from every active chat/)
-  assert.match(text, /filter\(\(session\) => session\.running/)
-  assert.doesNotMatch(text, /props\.panes|onAutoFill|paneGrid/, "monitor state must not go stale behind manual panes")
+  assert.match(text, /Live Agents Mission Control/)
+  assert.match(text, /missionControlModel/)
+  assert.match(text, /agentWindow/)
+  assert.match(text, /Needs you/)
+  assert.match(text, /Stalled/)
+  assert.match(text, /Overlaps/)
+  assert.match(text, /FocusPanel/)
+  assert.match(text, /AgentTableRow/)
+  assert.doesNotMatch(text, /props\.panes|onAutoFill|paneGrid|Recent chats|Review queue/, "Mission Control must remain automatic and supervision-only")
 })
 
 test("a disabled button never looks pressable", async () => {

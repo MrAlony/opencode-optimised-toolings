@@ -1,15 +1,17 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { listDirectory, listMessages, listProjects, listSessions, listStatuses } from "../lib/sdk.js"
+import { listDiff, listDirectory, listMessages, listProjects, listSessions, listStatuses, listTodos } from "../lib/sdk.js"
 
 test("the adapter uses the generated v2 client's flat parameter contract", async () => {
-  const calls = { list: [], files: [], projects: [], statuses: [], messages: [] }
+  const calls = { list: [], files: [], projects: [], statuses: [], messages: [], todos: [], diffs: [] }
   const client = {
     project: { list: async (args) => (calls.projects.push(args), { data: [{ id: "p" }] }) },
     session: {
       list: async (args) => (calls.list.push(args), { data: [{ id: "s" }] }),
       status: async (args) => (calls.statuses.push(args), { data: { s: { type: "busy" } } }),
       messages: async (args) => (calls.messages.push(args), { data: [{ info: { role: "user" } }] }),
+      todo: async (args) => (calls.todos.push(args), { data: [{ content: "Ship", status: "pending" }] }),
+      diff: async (args) => (calls.diffs.push(args), { data: [{ file: "src/app.ts", additions: 1, deletions: 0 }] }),
     },
     file: { list: async (args) => (calls.files.push(args), { data: [{ name: "src", type: "directory" }] }) },
   }
@@ -19,12 +21,16 @@ test("the adapter uses the generated v2 client's flat parameter contract", async
   assert.deepEqual(await listDirectory(client, "C:/work/beta"), [{ name: "src", type: "directory" }])
   assert.deepEqual(await listStatuses(client, "C:/work/beta"), { s: { type: "busy" } })
   assert.deepEqual(await listMessages(client, { id: "s", directory: "C:/work/beta" }, 1), [{ info: { role: "user" } }])
+  assert.deepEqual(await listTodos(client, { id: "s", directory: "C:/work/beta" }), [{ content: "Ship", status: "pending" }])
+  assert.deepEqual(await listDiff(client, { id: "s", directory: "C:/work/beta" }), [{ file: "src/app.ts", additions: 1, deletions: 0 }])
 
   assert.deepEqual(calls.projects[0], {})
   assert.deepEqual(calls.list[0], { directory: "C:/work/beta", roots: true, limit: 25 })
   assert.deepEqual(calls.files[0], { path: "C:/work/beta", directory: "C:/work/beta" })
   assert.deepEqual(calls.statuses[0], { directory: "C:/work/beta" })
   assert.deepEqual(calls.messages[0], { sessionID: "s", directory: "C:/work/beta", limit: 1 })
+  assert.deepEqual(calls.todos[0], { sessionID: "s", directory: "C:/work/beta" })
+  assert.deepEqual(calls.diffs[0], { sessionID: "s", directory: "C:/work/beta" })
   for (const args of [...calls.list, ...calls.files]) {
     assert.equal("query" in args, false)
     assert.equal("body" in args, false)
@@ -45,6 +51,8 @@ test("SDK result errors become actionable exceptions", async () => {
       list: async () => ({ error: { message: "session failure" } }),
       status: async () => ({ error: { message: "status failure" } }),
       messages: async () => ({ error: { message: "message failure" } }),
+      todo: async () => ({ error: { message: "todo failure" } }),
+      diff: async () => ({ error: { message: "diff failure" } }),
     },
     file: { list: async () => ({ error: { message: "file failure" } }) },
   }
@@ -53,6 +61,8 @@ test("SDK result errors become actionable exceptions", async () => {
   await assert.rejects(() => listDirectory(client, "C:/work"), /file failure/)
   await assert.rejects(() => listStatuses(client), /status failure/)
   await assert.rejects(() => listMessages(client, "s"), /message failure/)
+  await assert.rejects(() => listTodos(client, "s"), /todo failure/)
+  await assert.rejects(() => listDiff(client, "s"), /diff failure/)
 })
 
 test("the TUI SDK adapter exposes no eager session creation helper", async () => {

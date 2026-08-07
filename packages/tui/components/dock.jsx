@@ -40,7 +40,7 @@ function SessionRow(props) {
   return (
     <box flexDirection="column" flexShrink={0}>
       <ClickRow width={props.width} tokens={tokens()} selected={session().active} onSelect={() => props.onOpen?.(session())}>
-        <text wrapMode="none" selectable={false}>
+        <text wrapMode="none">
           <span style={{ fg: tokens().borderFaint }}>{"  └ "}</span>
           <span style={{ fg: session().running ? tokens().accent : session().active ? tokens().success : tokens().faint }}>
             {glyph()}
@@ -51,7 +51,7 @@ function SessionRow(props) {
         </text>
       </ClickRow>
       <Show when={activity().busy}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
+        <text fg={tokens().accent} wrapMode="none">
           {"      "}{fit(activity().headline, Math.max(6, props.width - 8))}
         </text>
       </Show>
@@ -91,12 +91,12 @@ function ProjectCard(props) {
             props.onToggle?.()
           }}
         >
-          <text fg={tokens().faint} wrapMode="none" selectable={false}>
+          <text fg={tokens().faint} wrapMode="none">
             {" "}{props.collapsed ? GLYPH.caretRight : GLYPH.caretDown}
           </text>
         </box>
         <box flexGrow={1} minWidth={0}>
-          <text fg={project().openable ? (project().current ? tokens().success : tokens().text) : tokens().faint} wrapMode="none" selectable={false}>
+          <text fg={project().openable ? (project().current ? tokens().success : tokens().text) : tokens().faint} wrapMode="none">
             <b>{fit(project().name, Math.max(6, props.width - 14))}</b>
           </text>
         </box>
@@ -108,7 +108,7 @@ function ProjectCard(props) {
             props.onNew?.(project())
           } : undefined}
         >
-          <text fg={project().openable ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+          <text fg={project().openable ? tokens().accent : tokens().faint} wrapMode="none">
             {project().openable ? GLYPH.plus : " "}
           </text>
         </box>
@@ -120,13 +120,13 @@ function ProjectCard(props) {
             props.onHide?.(project())
           } : undefined}
         >
-          <text fg={tokens().faint} wrapMode="none" selectable={false}>
+          <text fg={tokens().faint} wrapMode="none">
             {project().worktree ? GLYPH.close : " "}
           </text>
         </box>
       </box>
       <box flexDirection="row" flexShrink={0} width={props.width} height={1} paddingLeft={3} paddingRight={1}>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>
+        <text fg={tokens().faint} wrapMode="none">
           {props.portfolioReady ? `${project().running > 0 ? `${project().running} working · ` : ""}${project().sessionCount} chat${project().sessionCount === 1 ? "" : "s"}` : "Loading chats…"}
         </text>
       </box>
@@ -150,14 +150,14 @@ function RecentChatRow(props) {
       selected={session().active}
       onSelect={() => props.onOpen?.(session())}
     >
-      <text fg={session().running ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+      <text fg={session().running ? tokens().accent : tokens().faint} wrapMode="none">
         {glyph()}
       </text>
-      <text fg={session().active ? tokens().text : tokens().muted} wrapMode="none" selectable={false}>
+      <text fg={session().active ? tokens().text : tokens().muted} wrapMode="none">
         {fit(session().title, Math.max(8, props.width - 15))}
       </text>
       <box flexGrow={1} />
-      <text fg={tokens().faint} wrapMode="none" selectable={false}>
+      <text fg={tokens().faint} wrapMode="none">
         {fit(session().projectName ?? "", 8)}
       </text>
     </ClickRow>
@@ -175,11 +175,11 @@ function ProjectSessions(props) {
       </For>
       <Show when={remaining() > 0}>
         <ClickRow width={props.width} tokens={props.tokens} onSelect={() => setLimit((value) => value + SESSION_PAGE_SIZE)}>
-          <text fg={props.tokens.accent} wrapMode="none" selectable={false}>
+          <text fg={props.tokens.accent} wrapMode="none">
             {"  └ "}{GLYPH.caretDown} Show {Math.min(SESSION_PAGE_SIZE, remaining())} more
           </text>
           <box flexGrow={1} />
-          <text fg={props.tokens.faint} wrapMode="none" selectable={false}>{remaining()} left</text>
+          <text fg={props.tokens.faint} wrapMode="none">{remaining()} left</text>
         </ClickRow>
       </Show>
     </>
@@ -192,7 +192,7 @@ function Rail(props) {
     <box width={DOCK_COLLAPSED} height={props.height} flexShrink={0} flexDirection="column" backgroundColor={tokens().panelOpaque ?? tokens().panel}>
       <Button tokens={tokens()} variant="ghost" size="sm" glyph={GLYPH.caretRight} onPress={() => props.onToggle?.()}>{""}</Button>
       <Show when={props.running > 0}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>{" "}{GLYPH.dot}</text>
+        <text fg={tokens().accent} wrapMode="none">{" "}{GLYPH.dot}</text>
       </Show>
       <box flexGrow={1} />
       <Button tokens={tokens()} variant="ghost" size="sm" glyph={GLYPH.square} onPress={() => props.onAddProject?.()}>{""}</Button>
@@ -218,8 +218,8 @@ export function Dock(props) {
         <box flexDirection="column" width={width()} height={height()} backgroundColor={tokens().panelOpaque ?? tokens().panel}>
           <box flexDirection="row" flexShrink={0} height={3} paddingLeft={1} paddingRight={1} alignItems="center" backgroundColor={tokens().surface}>
             <box flexDirection="column" flexGrow={1} minWidth={0}>
-              <text fg={tokens().text} wrapMode="none" selectable={false}><b>Workspaces</b></text>
-              <text fg={tokens().faint} wrapMode="none" selectable={false}>
+              <text fg={tokens().text} wrapMode="none"><b>Workspaces</b></text>
+              <text fg={tokens().faint} wrapMode="none">
                 {summary().projects} folders · {summary().running} working
               </text>
             </box>
@@ -240,9 +240,9 @@ export function Dock(props) {
           <scrollbox flexGrow={1} stickyScroll={false} paddingTop={1}>
             <Show when={recentChats().length}>
               <box flexDirection="row" flexShrink={0} width={width()} paddingLeft={1} paddingRight={1}>
-                <text fg={tokens().muted} wrapMode="none" selectable={false}><b>RECENT CHATS</b></text>
+                <text fg={tokens().muted} wrapMode="none"><b>RECENT CHATS</b></text>
                 <box flexGrow={1} />
-                <text fg={tokens().faint} wrapMode="none" selectable={false}>active + latest</text>
+                <text fg={tokens().faint} wrapMode="none">active + latest</text>
               </box>
               <For each={recentChats()}>
                 {(session) => (
@@ -261,16 +261,16 @@ export function Dock(props) {
             </Show>
 
             <box flexDirection="row" flexShrink={0} width={width()} paddingLeft={1} paddingRight={1}>
-              <text fg={tokens().muted} wrapMode="none" selectable={false}><b>YOUR FOLDERS</b></text>
+              <text fg={tokens().muted} wrapMode="none"><b>YOUR FOLDERS</b></text>
               <box flexGrow={1} />
-              <text fg={tokens().faint} wrapMode="none" selectable={false}>+ new · × hide</text>
+              <text fg={tokens().faint} wrapMode="none">+ new · × hide</text>
             </box>
 
             <Show
               when={projects().length}
               fallback={
                 <box flexDirection="column" paddingLeft={1} paddingRight={1} gap={1}>
-                  <text fg={store.error ? tokens().warning : tokens().muted} wrapMode="wrap" selectable={false}>
+                  <text fg={store.error ? tokens().warning : tokens().muted} wrapMode="wrap">
                     {store.loading ? "Loading folders…" : store.error ? "Folders could not be refreshed." : "No folders yet. Add one to start working."}
                   </text>
                   <Show when={!store.loading && store.error}>
@@ -312,11 +312,11 @@ export function Dock(props) {
                       />
                       <Show when={store.ready && project.sessionCount === 0 && project.openable}>
                         <ClickRow width={width()} tokens={tokens()} onSelect={() => props.onNewSessionIn?.(project)}>
-                          <text fg={tokens().muted} wrapMode="none" selectable={false}>{"  └ "}{GLYPH.plus} new chat here</text>
+                          <text fg={tokens().muted} wrapMode="none">{"  └ "}{GLYPH.plus} new chat here</text>
                         </ClickRow>
                       </Show>
                       <Show when={!project.openable}>
-                        <text fg={tokens().faint} wrapMode="none" selectable={false}>{"  └ directory unavailable"}</text>
+                        <text fg={tokens().faint} wrapMode="none">{"  └ directory unavailable"}</text>
                       </Show>
                     </Show>
                   </box>

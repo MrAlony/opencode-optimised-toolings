@@ -58,16 +58,16 @@ export function Button(props) {
     >
       <box flexDirection="row" flexShrink={0} height={1} gap={1} alignItems="center">
         <Show when={props.glyph}>
-          <text fg={surface().foreground} wrapMode="none" selectable={false}>
+          <text fg={surface().foreground} wrapMode="none">
             {props.glyph}
           </text>
         </Show>
-        <text fg={surface().foreground} wrapMode="none" selectable={false}>
+        <text fg={surface().foreground} wrapMode="none">
           {variant() === "primary" || variant() === "danger" ? <b>{props.children}</b> : props.children}
         </text>
         <Show when={props.shortcut && !disabled()}>
           <box flexGrow={1} />
-          <text fg={surface().hint} wrapMode="none" selectable={false}>
+          <text fg={surface().hint} wrapMode="none">
             {props.shortcut}
           </text>
         </Show>
@@ -100,7 +100,7 @@ export function TextInput(props) {
   return (
     <box flexDirection="column" flexShrink={0} gap={props.label ? 1 : 0}>
       <Show when={props.label}>
-        <text fg={tokens().muted} wrapMode="none" selectable={false}>
+        <text fg={tokens().muted} wrapMode="none">
           {props.label}
         </text>
       </Show>
@@ -113,7 +113,7 @@ export function TextInput(props) {
         backgroundColor={tokens().raised}
       >
         <Show when={props.glyph}>
-          <text fg={tokens().accent} wrapMode="none" selectable={false}>
+          <text fg={tokens().accent} wrapMode="none">
             {props.glyph}{" "}
           </text>
         </Show>
@@ -145,7 +145,7 @@ export function TextInput(props) {
         />
       </box>
       <Show when={props.hint}>
-        <text fg={tokens().faint} wrapMode="wrap" selectable={false}>
+        <text fg={tokens().faint} wrapMode="wrap">
           {props.hint}
         </text>
       </Show>
@@ -180,21 +180,21 @@ export function Tab(props) {
       }}
       onMouseUp={() => props.onSelect?.()}
     >
-      <text fg={props.running || props.active ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+      <text fg={props.running || props.active ? tokens().accent : tokens().faint} wrapMode="none">
         {glyph()}
       </text>
-      <text fg={props.active ? tokens().text : tokens().muted} wrapMode="none" selectable={false}>
+      <text fg={props.active ? tokens().text : tokens().muted} wrapMode="none">
         {props.active ? <b>{fit(props.title, props.width ?? 18)}</b> : fit(props.title, props.width ?? 18)}
       </text>
       <Show when={props.attention}>
-        <text fg={tokens().warning} wrapMode="none" selectable={false}>
+        <text fg={tokens().warning} wrapMode="none">
           {GLYPH.diamond}
         </text>
       </Show>
       <Show
         when={!props.pinned}
         fallback={
-          <text fg={tokens().panel} wrapMode="none" selectable={false}>
+          <text fg={tokens().panel} wrapMode="none">
             {" "}
           </text>
         }
@@ -206,7 +206,7 @@ export function Tab(props) {
             props.onClose?.()
           }}
         >
-          <text fg={props.active ? tokens().error : tokens().faint} wrapMode="none" selectable={false}>
+          <text fg={props.active ? tokens().error : tokens().faint} wrapMode="none">
             {GLYPH.close}
           </text>
         </box>
@@ -256,11 +256,11 @@ export function SegmentedControl(props) {
               }}
               onMouseUp={() => props.onChange?.(item.value)}
             >
-              <text fg={active() ? tokens().text : tokens().muted} wrapMode="none" selectable={false}>
+              <text fg={active() ? tokens().text : tokens().muted} wrapMode="none">
                 {active() ? <b>{item.label}</b> : item.label}
               </text>
               <Show when={item.count !== undefined && item.count !== null}>
-                <text fg={active() ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+                <text fg={active() ? tokens().accent : tokens().faint} wrapMode="none">
                   {" "}{item.count}
                 </text>
               </Show>
@@ -294,7 +294,7 @@ export function ClickRow(props) {
         props.onSelect?.()
       }}
     >
-      <text fg={props.selected ? tokens().accent : tokens().borderFaint} wrapMode="none" selectable={false}>
+      <text fg={props.selected ? tokens().accent : tokens().borderFaint} wrapMode="none">
         {props.selected ? GLYPH.pointer : " "}
       </text>
       {props.children}
@@ -307,10 +307,10 @@ export function ActivityLine(props) {
   const clock = useClock(() => props.busy === true && tokens().motion !== false)
   return (
     <box flexDirection="row" flexShrink={0} gap={1} height={1}>
-      <text fg={props.busy ? tokens().accent : tokens().faint} wrapMode="none" selectable={false}>
+      <text fg={props.busy ? tokens().accent : tokens().faint} wrapMode="none">
         {props.busy ? spinnerFrame(clock(), undefined, 90, tokens().motion !== false) : GLYPH.bullet}
       </text>
-      <text fg={props.busy ? tokens().text : tokens().muted} wrapMode="none" selectable={false}>
+      <text fg={props.busy ? tokens().text : tokens().muted} wrapMode="none">
         {fit(props.children ?? "", props.width ?? 48)}
       </text>
     </box>

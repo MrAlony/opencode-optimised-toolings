@@ -55,30 +55,30 @@ function RailRow(props) {
       onMouseUp={() => props.onOpen(session())}
     >
       <box flexDirection="row" flexShrink={0} height={1} gap={1}>
-        <text fg={glyphColor()} wrapMode="none" selectable={false}>
+        <text fg={glyphColor()} wrapMode="none">
           {glyph()}
         </text>
-        <text fg={session().active ? tokens().text : tokens().muted} wrapMode="none" selectable={false}>
+        <text fg={session().active ? tokens().text : tokens().muted} wrapMode="none">
           {session().active ? <b>{fit(session().title, width())}</b> : fit(session().title, width())}
         </text>
       </box>
 
       <Show when={props.showProject !== false && session().projectName}>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>
+        <text fg={tokens().faint} wrapMode="none">
           {"  "}
           {fit(session().projectName, width() - 2)}
         </text>
       </Show>
 
       <Show when={activity().busy}>
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
+        <text fg={tokens().accent} wrapMode="none">
           {"  "}
           {fit(activity().headline, width() - 2)}
         </text>
       </Show>
 
       <Show when={!activity().busy && session().changedFiles > 0}>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>
+        <text fg={tokens().faint} wrapMode="none">
           {"  "}
           {session().changedFiles} changed
         </text>
@@ -112,12 +112,12 @@ export function SessionRail(props) {
   return (
     <box flexDirection="column" width={width()} flexShrink={0} backgroundColor={props.background}>
       <box flexDirection="row" flexShrink={0} height={1} gap={1} paddingLeft={1} paddingRight={1}>
-        <text fg={tokens().faint} wrapMode="none" selectable={false}>
+        <text fg={tokens().faint} wrapMode="none">
           <b>SESSIONS</b>
         </text>
         <box flexGrow={1} />
         <Show when={runningCount() > 0}>
-          <text fg={tokens().accent} wrapMode="none" selectable={false}>
+          <text fg={tokens().accent} wrapMode="none">
             {GLYPH.dot} {runningCount()}
           </text>
         </Show>
@@ -127,7 +127,7 @@ export function SessionRail(props) {
         when={sessions().length}
         fallback={
           <box paddingLeft={1} paddingTop={1}>
-            <text fg={tokens().faint} wrapMode="none" selectable={false}>
+            <text fg={tokens().faint} wrapMode="none">
               No sessions yet
             </text>
           </box>

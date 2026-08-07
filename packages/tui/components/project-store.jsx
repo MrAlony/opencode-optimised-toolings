@@ -15,8 +15,9 @@ import {
   recentSessions,
   summarizeProjects,
 } from "../lib/projects.js"
-import { listMessages, listProjects, listSessions, listStatuses } from "../lib/sdk.js"
+import { listDiff, listMessages, listProjects, listSessions, listStatuses, listTodos } from "../lib/sdk.js"
 import { durableStatus, mergeStatus } from "../lib/presence.js"
+import { decisionRecord, normalizeDeliveryState } from "../lib/command-center.js"
 import {
   activateSlot,
   activateTab,
@@ -52,6 +53,7 @@ const PINNED_PROJECTS_KEY = "alonix_pinned_projects"
 const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
 const SELECTED_PROJECT_KEY = "alonix_selected_project"
 const PORTFOLIO_SNAPSHOT_KEY = "alonix_portfolio_snapshot"
+const DELIVERY_STATE_KEY = "alonix_delivery_state"
 const PORTFOLIO_SNAPSHOT_VERSION = 1
 const PORTFOLIO_SNAPSHOT_SESSION_LIMIT = 1_000
 const REFRESH_DEBOUNCE_MS = 250
@@ -61,6 +63,8 @@ const PRESENCE_EVENT_DEBOUNCE_MS = 250
 const SDK_CONCURRENCY = 4
 const PRESENCE_RECENT_LIMIT = 12
 const PRESENCE_ROTATING_LIMIT = 8
+const DELIVERY_RECENT_LIMIT = 8
+const DELIVERY_ROTATING_LIMIT = 4
 const SESSION_LIMIT = 400
 const SDK_REQUEST_TIMEOUT_MS = 6_000
 const SDK_REQUEST_TIMEOUT_MIN_MS = 100
@@ -202,7 +206,7 @@ function mergeProjects(serverProjects, registeredDirectories) {
   return rows
 }
 
-async function loadPortfolio(api, registeredDirectories = [], activeSessionID = null) {
+async function loadPortfolio(api, registeredDirectories = [], activeSessionID = null, previousSessions = [], intelligenceOffset = 0) {
   const client = api?.client
   if (!client) return { projects: [], sessions: [], errors: [] }
 
@@ -290,10 +294,62 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   const statuses = {}
   for (const session of sessions ?? []) statuses[session.id] = mergeStatus(liveStatuses[session.id], durableStatuses[session.id])
 
+  // Persisted delivery intelligence is loaded through a bounded rolling window.
+  // Active/running/recent chats lead; older chats rotate across structural
+  // refreshes. Previous values survive transient failures and are stored in the
+  // portfolio snapshot, so warm starts do not wait for the same SDK calls.
+  let enrichedSessions = sessions
+  if (sessions) {
+    const previous = new Map(Array.from(previousSessions ?? []).map((session) => [session?.id, session]))
+    enrichedSessions = sessions.map((session) => ({
+      ...session,
+      alonixTodos: Array.from(previous.get(session.id)?.alonixTodos ?? []),
+      alonixFiles: Array.from(previous.get(session.id)?.alonixFiles ?? []),
+    }))
+    const candidates = []
+    const seen = new Set()
+    const add = (session) => {
+      if (!session?.id || seen.has(session.id)) return
+      seen.add(session.id)
+      candidates.push(session)
+    }
+    add(enrichedSessions.find((session) => session.id === activeSessionID))
+    for (const session of enrichedSessions) {
+      const type = statuses[session.id]?.type
+      if (type === "busy" || type === "retry" || Number(session.summary?.files ?? 0) > 0) add(session)
+      if (candidates.length >= DELIVERY_RECENT_LIMIT) break
+    }
+    const recent = enrichedSessions.toSorted((a, b) => Number(b?.time?.updated ?? 0) - Number(a?.time?.updated ?? 0))
+    for (const session of recent) {
+      add(session)
+      if (candidates.length >= DELIVERY_RECENT_LIMIT) break
+    }
+    const remaining = recent.filter((session) => !seen.has(session.id))
+    if (remaining.length) {
+      const start = Math.abs(Number(intelligenceOffset) || 0) % remaining.length
+      for (let index = 0; index < Math.min(DELIVERY_ROTATING_LIMIT, remaining.length); index += 1) add(remaining[(start + index) % remaining.length])
+    }
+    const intelligence = await mapSettledBounded(candidates, async (session) => {
+      const [todos, files] = await Promise.all([
+        withDeadline(() => listTodos(client, session), `Delivery tasks (${session.id})`),
+        withDeadline(() => listDiff(client, session), `Delivery changes (${session.id})`),
+      ])
+      return { id: session.id, todos, files }
+    })
+    const byID = new Map(enrichedSessions.map((session) => [session.id, session]))
+    intelligence.forEach((result) => {
+      if (result.status !== "fulfilled") return
+      const session = byID.get(result.value.id)
+      if (!session) return
+      session.alonixTodos = result.value.todos
+      session.alonixFiles = result.value.files
+    })
+  }
+
   return {
     projects,
     // `undefined` means "nothing loaded", which preserves the previous list.
-    sessions,
+    sessions: enrichedSessions,
     statuses,
     errors,
   }
@@ -372,6 +428,7 @@ export function createProjectStore(api) {
   const initialRegisteredProjects = normalizeDirectories(initialRead(REGISTERED_PROJECTS_KEY, []))
   const initialSelection = initialRead(SELECTED_PROJECT_KEY, {})
   const initialSnapshot = normalizePortfolioSnapshot(initialRead(PORTFOLIO_SNAPSHOT_KEY, null))
+  const initialDelivery = normalizeDeliveryState(initialRead(DELIVERY_STATE_KEY, {}))
   const [store, setStore] = createStore({
     // Registered folders are durable local state. Render them immediately while
     // the authoritative SDK refresh runs, rather than showing an empty spinner.
@@ -385,6 +442,7 @@ export function createProjectStore(api) {
     hiddenProjects: normalizeIds(initialRead(HIDDEN_PROJECTS_KEY, []), 200),
     workbench: createWorkbench(initialRead(WORKBENCH_KEY, {})),
     panes: createPanes(initialRead(PANES_KEY, {})),
+    delivery: initialDelivery,
     loading: true,
     phase: initialSnapshot ? "cached" : "loading",
     error: "",
@@ -398,6 +456,7 @@ export function createProjectStore(api) {
   let presenceQueued = false
   let presenceDebounce = null
   let presenceRotation = 0
+  let intelligenceRotation = 0
   let disposed = false
   let persistenceHydrated = initiallyHydrated
   const pendingPersistence = new Map()
@@ -433,6 +492,7 @@ export function createProjectStore(api) {
     if (!pending.has(HIDDEN_PROJECTS_KEY)) setStore("hiddenProjects", normalizeIds(readKv(api, HIDDEN_PROJECTS_KEY, []), 200))
     if (!pending.has(WORKBENCH_KEY)) setStore("workbench", createWorkbench(readKv(api, WORKBENCH_KEY, {})))
     if (!pending.has(PANES_KEY)) setStore("panes", createPanes(readKv(api, PANES_KEY, {})))
+    if (!pending.has(DELIVERY_STATE_KEY)) setStore("delivery", normalizeDeliveryState(readKv(api, DELIVERY_STATE_KEY, {})))
     if (!pending.has(SELECTED_PROJECT_KEY)) {
       const selected = readKv(api, SELECTED_PROJECT_KEY, {})
       setStore("selectedProjectID", typeof selected?.id === "string" ? selected.id : null)
@@ -483,7 +543,8 @@ export function createProjectStore(api) {
     setStore("loading", true)
     if (!store.loadedAt) setStore("phase", "loading")
     try {
-      const { projects, sessions, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID())
+      const { projects, sessions, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID(), store.sessions, intelligenceRotation)
+      intelligenceRotation = (intelligenceRotation + DELIVERY_ROTATING_LIMIT) % Math.max(1, sessions?.length ?? store.sessions.length)
       if (disposed) return
       // Only overwrite a list that actually loaded, so a partial failure keeps
       // the last good data instead of emptying the workbench.
@@ -749,6 +810,12 @@ export function createProjectStore(api) {
     get selectedProjectID() {
       return store.selectedProjectID
     },
+    get selectedProjectDirectory() {
+      return store.selectedProjectDirectory
+    },
+    get delivery() {
+      return store.delivery
+    },
     projectRows,
     sessionRows,
     recentSessionRows,
@@ -779,6 +846,35 @@ export function createProjectStore(api) {
       setStore("selectedProjectID", id)
       if (directory) setStore("selectedProjectDirectory", directory)
       persist(SELECTED_PROJECT_KEY, { id, directory: directory || store.selectedProjectDirectory })
+    },
+    markReviewed(sessionID) {
+      const id = String(sessionID ?? "").trim()
+      if (!id) return false
+      const marking = !store.delivery.reviewed.includes(id)
+      const reviewed = marking
+        ? [id, ...store.delivery.reviewed].slice(0, 500)
+        : store.delivery.reviewed.filter((item) => item !== id)
+      const next = { ...store.delivery, reviewed }
+      setStore("delivery", next)
+      persist(DELIVERY_STATE_KEY, next)
+      return marking
+    },
+    addDecision(input) {
+      const decision = decisionRecord(input)
+      if (!decision) return false
+      const next = normalizeDeliveryState({ ...store.delivery, decisions: [decision, ...store.delivery.decisions.filter((item) => item.id !== decision.id)] })
+      setStore("delivery", next)
+      persist(DELIVERY_STATE_KEY, next)
+      return true
+    },
+    removeDecision(id) {
+      const target = String(id ?? "")
+      const decisions = store.delivery.decisions.filter((item) => item.id !== target)
+      if (decisions.length === store.delivery.decisions.length) return false
+      const next = { ...store.delivery, decisions }
+      setStore("delivery", next)
+      persist(DELIVERY_STATE_KEY, next)
+      return true
     },
     addProject(directory) {
       const target = normalizeDirectories([directory])[0]

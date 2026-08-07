@@ -31,7 +31,7 @@ export function Rule(props) {
 /** Uppercase section label with an optional trailing count. */
 export function SectionLabel(props) {
   return (
-    <text fg={props.color ?? props.tokens.faint} wrapMode="none" selectable={false}>
+    <text fg={props.color ?? props.tokens.faint} wrapMode="none">
       <b>{String(props.children ?? "").toUpperCase()}</b>
       <Show when={props.meta}>
         <span style={{ fg: props.tokens.faint }}>{"  "}{props.meta}</span>
@@ -50,7 +50,7 @@ export function Badge(props) {
       paddingRight={1}
       backgroundColor={props.solid ? palette().fg : palette().surface}
     >
-      <text fg={props.solid ? props.tokens.inverse : palette().on} wrapMode="none" selectable={false}>
+      <text fg={props.solid ? props.tokens.inverse : palette().on} wrapMode="none">
         {props.children}
       </text>
     </box>
@@ -68,7 +68,7 @@ export function StatusDot(props) {
     return spinnerFrame(clock(), ["●", "◉", "◎", "◉"], 260, true)
   })
   return (
-    <text fg={tones(props).fg} wrapMode="none" selectable={false}>
+    <text fg={tones(props).fg} wrapMode="none">
       {glyph()}
     </text>
   )
@@ -78,7 +78,7 @@ export function StatusDot(props) {
 export function Spinner(props) {
   const clock = useClock(() => props.tokens.motion !== false)
   return (
-    <text fg={tones(props).fg} wrapMode="none" selectable={false}>
+    <text fg={tones(props).fg} wrapMode="none">
       {spinnerFrame(clock(), props.frames, props.interval ?? 90, props.tokens.motion !== false)}
     </text>
   )
@@ -97,7 +97,7 @@ export function Gauge(props) {
     return sweepBar(clock(), width(), props.tokens.motion !== false)
   })
   return (
-    <text fg={tones(props).fg} wrapMode="none" selectable={false}>
+    <text fg={tones(props).fg} wrapMode="none">
       {bar()}
     </text>
   )
@@ -106,7 +106,7 @@ export function Gauge(props) {
 /** Compact bar sparkline for trend data. */
 export function Sparkline(props) {
   return (
-    <text fg={tones(props).fg} wrapMode="none" selectable={false}>
+    <text fg={tones(props).fg} wrapMode="none">
       {sparkline(props.values, props.width ?? 12)}
     </text>
   )
@@ -122,7 +122,7 @@ export function ScrollingLabel(props) {
     marquee(props.children ?? "", props.width ?? 24, clock(), props.active === true && props.tokens.motion !== false),
   )
   return (
-    <text fg={props.color ?? props.tokens.text} wrapMode="none" selectable={false}>
+    <text fg={props.color ?? props.tokens.text} wrapMode="none">
       {props.bold ? <b>{text()}</b> : text()}
     </text>
   )
@@ -147,10 +147,10 @@ export function StatLine(props) {
   })
   return (
     <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0} height={1}>
-      <text fg={props.tokens.muted} wrapMode="none" selectable={false}>
+      <text fg={props.tokens.muted} wrapMode="none">
         {label()}
       </text>
-      <text fg={props.color ?? props.tokens.text} wrapMode="none" selectable={false}>
+      <text fg={props.color ?? props.tokens.text} wrapMode="none">
         {props.children}
       </text>
     </box>
@@ -178,7 +178,7 @@ export function Panel(props) {
           paddingRight={1}
           backgroundColor={props.tokens.surface}
         >
-          <text fg={palette().fg} wrapMode="none" selectable={false}>
+          <text fg={palette().fg} wrapMode="none">
             {props.glyph ?? GLYPH.square}
           </text>
           <SectionLabel tokens={props.tokens} meta={props.meta} color={props.tokens.text}>
@@ -232,7 +232,7 @@ export function Row(props) {
       onMouseUp={props.onSelect}
       onMouseOver={props.onHover}
     >
-      <text fg={props.selected ? props.tokens.accent : props.tokens.borderFaint} wrapMode="none" selectable={false}>
+      <text fg={props.selected ? props.tokens.accent : props.tokens.borderFaint} wrapMode="none">
         {props.selected ? GLYPH.blockHalf : " "}
       </text>
       <Show when={props.leading}>{props.leading}</Show>
@@ -241,7 +241,7 @@ export function Row(props) {
       </box>
       <Show when={props.trailing}>{props.trailing}</Show>
       <Show when={props.meta}>
-        <text fg={props.selected ? palette().on : props.tokens.faint} wrapMode="none" selectable={false}>
+        <text fg={props.selected ? palette().on : props.tokens.faint} wrapMode="none">
           {props.meta}
         </text>
       </Show>
@@ -260,15 +260,15 @@ export function EmptyState(props) {
   return (
     <box flexDirection="column" flexShrink={0} paddingTop={1} paddingBottom={1} gap={0}>
       <box flexDirection="row" gap={1} flexShrink={0}>
-        <text fg={props.tokens.borderStrong} wrapMode="none" selectable={false}>
+        <text fg={props.tokens.borderStrong} wrapMode="none">
           {props.glyph ?? GLYPH.ring}
         </text>
-        <text fg={props.tokens.text} wrapMode="none" selectable={false}>
+        <text fg={props.tokens.text} wrapMode="none">
           {props.title}
         </text>
       </box>
       <Show when={props.hint}>
-        <text fg={props.tokens.muted} wrapMode="wrap" selectable={false}>
+        <text fg={props.tokens.muted} wrapMode="wrap">
           {"  "}
           {props.hint}
         </text>
@@ -284,7 +284,7 @@ export function KeyHints(props) {
     <box flexDirection="row" gap={2} flexShrink={0} flexWrap="wrap">
       <For each={items()}>
         {(hint) => (
-          <text fg={props.tokens.faint} wrapMode="none" selectable={false}>
+          <text fg={props.tokens.faint} wrapMode="none">
             <span style={{ fg: props.tokens.muted }}>{hint.key}</span> {hint.label}
           </text>
         )}
@@ -298,12 +298,12 @@ export function DiffStat(props) {
   return (
     <box flexDirection="row" gap={1} flexShrink={0}>
       <Show when={Number(props.additions) > 0}>
-        <text fg={props.tokens.success} wrapMode="none" selectable={false}>
+        <text fg={props.tokens.success} wrapMode="none">
           +{props.additions}
         </text>
       </Show>
       <Show when={Number(props.deletions) > 0}>
-        <text fg={props.tokens.error} wrapMode="none" selectable={false}>
+        <text fg={props.tokens.error} wrapMode="none">
           -{props.deletions}
         </text>
       </Show>
@@ -314,7 +314,7 @@ export function DiffStat(props) {
 /** Path shown as dim directory + bright filename. */
 export function PathLabel(props) {
   return (
-    <text fg={props.tokens.text} wrapMode="none" selectable={false}>
+    <text fg={props.tokens.text} wrapMode="none">
       <Show when={props.dir}>
         <span style={{ fg: props.tokens.faint }}>{fitLeft(props.dir, props.dirWidth ?? 18)}/</span>
       </Show>
@@ -328,10 +328,10 @@ export function MetricTile(props) {
   const palette = createMemo(() => tones(props))
   return (
     <box flexDirection="column" flexShrink={0} width={props.width ?? 12}>
-      <text fg={palette().fg} wrapMode="none" selectable={false}>
+      <text fg={palette().fg} wrapMode="none">
         <b>{pad(String(props.value), props.width ?? 12)}</b>
       </text>
-      <text fg={props.tokens.faint} wrapMode="none" selectable={false}>
+      <text fg={props.tokens.faint} wrapMode="none">
         {pad(props.label, props.width ?? 12)}
       </text>
     </box>

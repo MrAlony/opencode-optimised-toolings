@@ -81,7 +81,7 @@ function ActionRow(props) {
       onMouseMove={() => props.onHover(props.flatIndex)}
       onMouseDown={() => props.onHover(props.flatIndex)}
     >
-      <text wrapMode="none" selectable={false}>
+      <text wrapMode="none">
         <span style={{ fg: props.selected ? tokens().accent : tokens().borderFaint }}>
           {props.selected ? GLYPH.pointer : " "}
         </span>
@@ -145,7 +145,7 @@ function Preview(props) {
       <Show when={action()} fallback={<EmptyState tokens={tokens()} title="Nothing selected" />}>
         <box flexDirection="column">
           <SectionLabel tokens={tokens()}>{view().kind}</SectionLabel>
-          <text fg={tokens().text} wrapMode="wrap" selectable={false}>
+          <text fg={tokens().text} wrapMode="wrap">
             <b>{view().title}</b>
           </text>
         </box>
@@ -184,14 +184,14 @@ function Preview(props) {
         <Show when={view().subtitle}>
           <box flexDirection="column">
             <SectionLabel tokens={tokens()}>Location</SectionLabel>
-            <text fg={tokens().muted} wrapMode="wrap" selectable={false}>
+            <text fg={tokens().muted} wrapMode="wrap">
               {view().subtitle}
             </text>
           </box>
         </Show>
 
         <Show when={view().kind === "project"}>
-          <text fg={tokens().accent} wrapMode="wrap" selectable={false}>
+          <text fg={tokens().accent} wrapMode="wrap">
             {GLYPH.pointer} Prepares a new chat here; it is created after your first message
           </text>
         </Show>
@@ -317,20 +317,20 @@ export function Palette(props) {
       backgroundColor={tokens().panelOpaque ?? tokens().panel}
     >
       <box flexDirection="row" gap={1} flexShrink={0} alignItems="center">
-        <text fg={tokens().accent} wrapMode="none" selectable={false}>
+        <text fg={tokens().accent} wrapMode="none">
           {GLYPH.diamond}
         </text>
-        <text fg={tokens().text} wrapMode="none" selectable={false}>
+        <text fg={tokens().text} wrapMode="none">
           <b>Find anything</b>
         </text>
-        <text fg={tokens().muted} wrapMode="none" selectable={false}>
+        <text fg={tokens().muted} wrapMode="none">
           chats, folders and things you can do
         </text>
         <box flexGrow={1} />
         <Show when={props.loading?.()}>
           <Spinner tokens={tokens()} tone="accent" />
         </Show>
-        <text fg={tokens().muted} wrapMode="none" selectable={false}>
+        <text fg={tokens().muted} wrapMode="none">
           {actions().length} found
         </text>
       </box>
