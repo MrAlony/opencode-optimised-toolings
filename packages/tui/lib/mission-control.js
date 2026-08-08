@@ -67,18 +67,20 @@ export function missionScrollIndex(current, total, direction, step = 1) {
 
 export function missionControlModel(input = {}) {
   const now = number(input.now) || Date.now()
-  const filter = ["all", "attention", "working", "stalled", "collisions"].includes(input.filter) ? input.filter : "all"
+  const filter = ["all", "attention", "errors", "working", "stalled", "collisions"].includes(input.filter) ? input.filter : "all"
   const project = String(input.project ?? "")
   const agents = rows(input.agents).map((agent) => {
     const updated = number(agent.updated)
     const age = Math.max(0, now - updated)
     const attention = number(agent.attention)
     const failed = number(agent.failedCount)
-    // A remote process may own the live transcript, so `busy:false` in this
-    // process is not stall evidence. Only elapsed inactivity or repeated
-    // failures may classify an otherwise-running agent as stalled.
-    const stalled = agent.running === true && attention === 0 && (age >= MISSION_STALL_MS || failed >= 2)
-    return { ...agent, updated, age, attention, failed, stalled, needsAttention: attention > 0 || failed > 0 }
+    const hasError = agent.latestToolFailed === true
+    // Historical tool failures remain visible in the activity feed, but they do
+    // not describe current health. A newer queued, running, or successful tool
+    // clears `latestToolFailed`. Stalls are based only on durable inactivity;
+    // failure history must never make progressing work look abandoned.
+    const stalled = agent.running === true && attention === 0 && age >= MISSION_STALL_MS
+    return { ...agent, updated, age, attention, failed, hasError, stalled, needsAttention: attention > 0 }
   })
 
   const fileOwners = new Map()
@@ -102,14 +104,16 @@ export function missionControlModel(input = {}) {
   const filtered = enriched.filter((agent) => {
     if (project && agent.projectID !== project && agent.projectKey !== project) return false
     if (filter === "attention") return agent.needsAttention
-    if (filter === "working") return agent.running && !agent.stalled && !agent.needsAttention
+    if (filter === "errors") return agent.hasError
+    if (filter === "working") return agent.running && !agent.stalled && !agent.needsAttention && !agent.hasError
     if (filter === "stalled") return agent.stalled
     if (filter === "collisions") return agent.collision
-    return agent.running || agent.needsAttention
+    return agent.running || agent.needsAttention || agent.hasError
   }).sort((a, b) => {
     if (a.needsAttention !== b.needsAttention) return a.needsAttention ? -1 : 1
-    if (a.collision !== b.collision) return a.collision ? -1 : 1
+    if (a.hasError !== b.hasError) return a.hasError ? -1 : 1
     if (a.stalled !== b.stalled) return a.stalled ? -1 : 1
+    if (a.collision !== b.collision) return a.collision ? -1 : 1
     return b.updated - a.updated
   })
 
@@ -119,9 +123,10 @@ export function missionControlModel(input = {}) {
     agents: filtered,
     collisions,
     stats: {
-      total: enriched.filter((agent) => agent.running || agent.needsAttention).length,
+      total: enriched.filter((agent) => agent.running || agent.needsAttention || agent.hasError).length,
       attention: enriched.filter((agent) => agent.needsAttention).length,
-      working: enriched.filter((agent) => agent.running && !agent.stalled && !agent.needsAttention).length,
+      errors: enriched.filter((agent) => agent.hasError).length,
+      working: enriched.filter((agent) => agent.running && !agent.stalled && !agent.needsAttention && !agent.hasError).length,
       stalled: enriched.filter((agent) => agent.stalled).length,
       collisions: collisions.length,
     },

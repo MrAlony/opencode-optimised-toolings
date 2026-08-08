@@ -17,6 +17,7 @@ import {
 } from "../lib/projects.js"
 import { listDiff, listMessages, listProjects, listSessions, listStatuses, listTodos } from "../lib/sdk.js"
 import { durableStatus, mergeStatus } from "../lib/presence.js"
+import { clearPresenceLease, publishPresenceLease, readPresenceLeases, readPresenceSnapshot } from "../lib/presence-lease.js"
 import { decisionRecord, normalizeDeliveryState } from "../lib/command-center.js"
 import {
   activateSlot,
@@ -54,12 +55,14 @@ const REGISTERED_PROJECTS_KEY = "alonix_registered_projects"
 const SELECTED_PROJECT_KEY = "alonix_selected_project"
 const PORTFOLIO_SNAPSHOT_KEY = "alonix_portfolio_snapshot"
 const DELIVERY_STATE_KEY = "alonix_delivery_state"
-const PORTFOLIO_SNAPSHOT_VERSION = 1
+const PORTFOLIO_SNAPSHOT_VERSION = 2
 const PORTFOLIO_SNAPSHOT_SESSION_LIMIT = 1_000
-const REFRESH_DEBOUNCE_MS = 250
-const STRUCTURAL_RECONCILE_INTERVAL_MS = 30_000
-const PRESENCE_RECONCILE_INTERVAL_MS = 8_000
-const PRESENCE_EVENT_DEBOUNCE_MS = 250
+const PRESENCE_LEASE_MS = 20_000
+const PRESENCE_CACHE_LIMIT = 200
+const REFRESH_DEBOUNCE_MS = 60
+const STRUCTURAL_RECONCILE_INTERVAL_MS = 45_000
+const PRESENCE_RECONCILE_INTERVAL_MS = 10_000
+const PRESENCE_EVENT_DEBOUNCE_MS = 40
 const SDK_CONCURRENCY = 4
 const PRESENCE_RECENT_LIMIT = 12
 const PRESENCE_ROTATING_LIMIT = 8
@@ -123,22 +126,89 @@ function directoryKey(value) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized
 }
 
+function normalizeCachedStatuses(value, now = Date.now()) {
+  const source = value && typeof value === "object" ? value : {}
+  const statuses = {}
+  for (const [id, entry] of Object.entries(source).slice(0, PRESENCE_CACHE_LIMIT)) {
+    const type = String(entry?.type ?? "")
+    const observedAt = Number(entry?.observedAt)
+    if (!id || !["busy", "retry", "compacting"].includes(type)) continue
+    if (!Number.isFinite(observedAt) || now - observedAt > PRESENCE_LEASE_MS) continue
+    statuses[id] = { type, source: "shared-presence", observedAt }
+  }
+  return statuses
+}
+
 function normalizePortfolioSnapshot(value) {
-  if (!value || value.version !== PORTFOLIO_SNAPSHOT_VERSION) return null
+  if (!value || ![1, PORTFOLIO_SNAPSHOT_VERSION].includes(value.version)) return null
   const projects = Array.isArray(value.projects) ? value.projects.filter((item) => item && typeof item === "object").slice(0, 200) : []
   const sessions = Array.isArray(value.sessions) ? value.sessions.filter((item) => item?.id && typeof item === "object").slice(0, PORTFOLIO_SNAPSHOT_SESSION_LIMIT) : []
   const savedAt = Number(value.savedAt)
   if (!projects.length && !sessions.length) return null
-  return { version: PORTFOLIO_SNAPSHOT_VERSION, savedAt: Number.isFinite(savedAt) && savedAt > 0 ? savedAt : Date.now(), projects, sessions }
-}
-
-function portfolioSnapshot(projects, sessions) {
   return {
     version: PORTFOLIO_SNAPSHOT_VERSION,
-    savedAt: Date.now(),
+    savedAt: Number.isFinite(savedAt) && savedAt > 0 ? savedAt : Date.now(),
+    projects,
+    sessions,
+    statuses: normalizeCachedStatuses(value.statuses),
+  }
+}
+
+function sharedPresence(statuses, now = Date.now()) {
+  const out = {}
+  for (const [id, status] of Object.entries(statuses ?? {})) {
+    const type = String(status?.type ?? status ?? "")
+    if (!["busy", "retry", "compacting"].includes(type)) continue
+    const observedAt = status?.source === "shared-presence" && Number.isFinite(Number(status?.observedAt))
+      ? Number(status.observedAt)
+      : now
+    if (now - observedAt > PRESENCE_LEASE_MS) continue
+    out[id] = { type, observedAt }
+    if (Object.keys(out).length >= PRESENCE_CACHE_LIMIT) break
+  }
+  return out
+}
+
+function portfolioSnapshot(projects, sessions, statuses = {}, now = Date.now()) {
+  return {
+    version: PORTFOLIO_SNAPSHOT_VERSION,
+    savedAt: now,
     projects: Array.from(projects ?? []).slice(0, 200),
     sessions: Array.from(sessions ?? []).slice(0, PORTFOLIO_SNAPSHOT_SESSION_LIMIT),
+    statuses: sharedPresence(statuses, now),
   }
+}
+
+function statusEventPayload(event) {
+  const properties = event?.properties ?? event?.payload?.properties
+  const sessionID = String(properties?.sessionID ?? "").trim()
+  const status = properties?.status
+  const type = String(status?.type ?? "")
+  return sessionID && type ? { sessionID, status, type } : null
+}
+
+function mergePresenceSessions(current, incoming) {
+  const byID = new Map(Array.from(current ?? []).filter((session) => session?.id).map((session) => [session.id, session]))
+  for (const session of incoming ?? []) {
+    if (!session?.id || byID.has(session.id)) continue
+    byID.set(session.id, session)
+  }
+  return [...byID.values()]
+}
+
+function mergePresenceStatuses(current, incoming, now = Date.now()) {
+  const merged = {}
+  for (const [id, status] of Object.entries(current ?? {})) {
+    const type = String(status?.type ?? status ?? "")
+    if (!["busy", "retry", "compacting"].includes(type)) continue
+    if (status?.source === "shared-presence" && now - Number(status?.observedAt ?? 0) > PRESENCE_LEASE_MS) continue
+    merged[id] = status
+  }
+  for (const [id, status] of Object.entries(incoming ?? {})) {
+    const type = String(status?.type ?? status ?? "")
+    if (["busy", "retry", "compacting"].includes(type)) merged[id] = status
+  }
+  return merged
 }
 
 function normalizeDirectories(value, limit = 200) {
@@ -163,11 +233,15 @@ function sdkRequestTimeoutMs() {
 
 async function withDeadline(operation, label, timeoutMs = sdkRequestTimeoutMs()) {
   let timer
+  const controller = new AbortController()
   try {
     return await Promise.race([
-      Promise.resolve().then(operation),
+      Promise.resolve().then(() => operation(controller.signal)),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+        timer = setTimeout(() => {
+          controller.abort(new Error(`${label} timed out after ${timeoutMs}ms`))
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`))
+        }, timeoutMs)
         timer?.unref?.()
       }),
     ])
@@ -206,7 +280,7 @@ function mergeProjects(serverProjects, registeredDirectories) {
   return rows
 }
 
-async function loadPortfolio(api, registeredDirectories = [], activeSessionID = null, previousSessions = [], intelligenceOffset = 0) {
+async function loadPortfolio(api, registeredDirectories = [], activeSessionID = null, previousSessions = [], intelligenceOffset = 0, onCore = null) {
   const client = api?.client
   if (!client) return { projects: [], sessions: [], errors: [] }
 
@@ -219,32 +293,70 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
     return Array.isArray(settled.value) ? settled.value : undefined
   }
 
-  const projectSettled = await Promise.allSettled([
-    withDeadline(() => listProjects(client), "Project listing"),
-  ])
-  const serverProjects = unwrap(projectSettled[0], "projects")
-  const projects = mergeProjects(serverProjects, registeredDirectories)
-
-  // Always include the launch directory: it answers before any project record
-  // exists and covers sessions whose project is not yet registered.
-  const directories = new Set([""])
-  for (const project of projects ?? []) {
-    const worktree = String(project?.worktree ?? "").trim()
-    if (worktree) directories.add(worktree)
-  }
-
-  const targets = [...directories]
   const directoryLabel = (directory) => directory || "current directory"
-  const [settled, statusSettled] = await Promise.all([
-    mapSettledBounded(targets, (directory) => withDeadline(
-      () => listSessions(client, { directory, roots: true, limit: SESSION_LIMIT }),
+  const knownDirectories = normalizeDirectories([
+    ...registeredDirectories,
+    ...Array.from(previousSessions ?? []).map((session) => session?.directory),
+  ])
+  const earlyTargets = ["", ...knownDirectories]
+  const projectRequest = Promise.allSettled([
+    withDeadline((signal) => listProjects(client, { signal }), "Project listing"),
+  ])
+
+  // Probe every directory already known locally immediately. This runs in
+  // parallel with project enumeration, so a slow global endpoint cannot delay
+  // an existing remote run from appearing as working after a fresh TUI launch.
+  const [earlySettled, earlyStatusSettled] = await Promise.all([
+    mapSettledBounded(earlyTargets, (directory) => withDeadline(
+      (signal) => listSessions(client, { directory, roots: true, limit: SESSION_LIMIT }, { signal }),
       `Chat listing (${directoryLabel(directory)})`,
     )),
-    mapSettledBounded(targets, (directory) => withDeadline(
-      () => listStatuses(client, directory),
+    mapSettledBounded(earlyTargets, (directory) => withDeadline(
+      (signal) => listStatuses(client, directory, { signal }),
       `Chat status (${directoryLabel(directory)})`,
     )),
   ])
+
+  const earlyByID = new Map()
+  let earlyAnySucceeded = false
+  earlySettled.forEach((result, index) => {
+    const rows = unwrap(result, `sessions (${directoryLabel(earlyTargets[index])})`)
+    if (!rows) return
+    earlyAnySucceeded = true
+    for (const session of rows) if (session?.id && !earlyByID.has(session.id)) earlyByID.set(session.id, session)
+  })
+  const earlyStatuses = {}
+  for (const result of earlyStatusSettled) if (result.status === "fulfilled") Object.assign(earlyStatuses, result.value ?? {})
+  if (typeof onCore === "function") {
+    try { onCore({ projects: mergeProjects([], registeredDirectories), sessions: earlyAnySucceeded ? [...earlyByID.values()] : undefined, statuses: earlyStatuses, errors: [...errors] }) } catch {}
+  }
+
+  const projectSettled = await projectRequest
+  const serverProjects = unwrap(projectSettled[0], "projects")
+  const projects = mergeProjects(serverProjects, registeredDirectories)
+  const earlyKeys = new Set(earlyTargets.map(directoryKey))
+  const lateTargets = []
+  for (const project of projects ?? []) {
+    const worktree = String(project?.worktree ?? "").trim()
+    const key = directoryKey(worktree)
+    if (worktree && !earlyKeys.has(key)) {
+      earlyKeys.add(key)
+      lateTargets.push(worktree)
+    }
+  }
+  const [lateSettled, lateStatusSettled] = await Promise.all([
+    mapSettledBounded(lateTargets, (directory) => withDeadline(
+      (signal) => listSessions(client, { directory, roots: true, limit: SESSION_LIMIT }, { signal }),
+      `Chat listing (${directoryLabel(directory)})`,
+    )),
+    mapSettledBounded(lateTargets, (directory) => withDeadline(
+      (signal) => listStatuses(client, directory, { signal }),
+      `Chat status (${directoryLabel(directory)})`,
+    )),
+  ])
+  const targets = [...earlyTargets, ...lateTargets]
+  const settled = [...earlySettled, ...lateSettled]
+  const statusSettled = [...earlyStatusSettled, ...lateStatusSettled]
 
   // Merge and de-duplicate: a session reachable from two directories is one
   // session, and the first (most specific) answer wins.
@@ -267,6 +379,14 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   })
 
   const sessions = anySucceeded ? [...byID.values()] : undefined
+
+  // Publish structural data and live server status before transcript and
+  // delivery enrichment. Those secondary reads can be slow or unavailable, but
+  // must never delay an already-running session appearing in the dock/overview.
+  if (typeof onCore === "function") {
+    try { onCore({ projects, sessions, statuses: liveStatuses, errors: [...errors] }) } catch {}
+  }
+
   const durableStatuses = {}
   if (sessions) {
     const candidates = []
@@ -280,7 +400,7 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
       if (candidates.length >= PRESENCE_RECENT_LIMIT) break
     }
     const messageResults = await mapSettledBounded(candidates, (session) => withDeadline(
-      () => listMessages(client, session, 1),
+      (signal) => listMessages(client, session, 1, { signal }),
       `Recent activity (${session.id})`,
     ))
     messageResults.forEach((result, index) => {
@@ -331,8 +451,8 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
     }
     const intelligence = await mapSettledBounded(candidates, async (session) => {
       const [todos, files] = await Promise.all([
-        withDeadline(() => listTodos(client, session), `Delivery tasks (${session.id})`),
-        withDeadline(() => listDiff(client, session), `Delivery changes (${session.id})`),
+        withDeadline((signal) => listTodos(client, session, { signal }), `Delivery tasks (${session.id})`),
+        withDeadline((signal) => listDiff(client, session, { signal }), `Delivery changes (${session.id})`),
       ])
       return { id: session.id, todos, files }
     })
@@ -355,7 +475,7 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   }
 }
 
-async function loadPresence(api, projects, sessions, activeSessionID = null, rotationOffset = 0) {
+async function loadPresence(api, projects, sessions, activeSessionID = null, rotationOffset = 0, onLive = null) {
   const client = api?.client
   if (!client || !sessions?.length) return {}
 
@@ -366,12 +486,15 @@ async function loadPresence(api, projects, sessions, activeSessionID = null, rot
   }
 
   const statusResults = await mapSettledBounded([...directories], (directory) => withDeadline(
-    () => listStatuses(client, directory),
+    (signal) => listStatuses(client, directory, { signal }),
     `Presence status (${directory || "current directory"})`,
   ))
   const live = {}
   for (const result of statusResults) {
     if (result.status === "fulfilled") Object.assign(live, result.value ?? {})
+  }
+  if (typeof onLive === "function" && Object.keys(live).length) {
+    try { onLive(live) } catch {}
   }
 
   const candidates = []
@@ -398,7 +521,7 @@ async function loadPresence(api, projects, sessions, activeSessionID = null, rot
 
   const durable = {}
   const messageResults = await mapSettledBounded(candidates, (session) => withDeadline(
-    () => listMessages(client, session, 1),
+    (signal) => listMessages(client, session, 1, { signal }),
     `Presence activity (${session.id})`,
   ))
   messageResults.forEach((result, index) => {
@@ -428,13 +551,14 @@ export function createProjectStore(api) {
   const initialRegisteredProjects = normalizeDirectories(initialRead(REGISTERED_PROJECTS_KEY, []))
   const initialSelection = initialRead(SELECTED_PROJECT_KEY, {})
   const initialSnapshot = normalizePortfolioSnapshot(initialRead(PORTFOLIO_SNAPSHOT_KEY, null))
+  const initialPresence = readPresenceSnapshot(api)
   const initialDelivery = normalizeDeliveryState(initialRead(DELIVERY_STATE_KEY, {}))
   const [store, setStore] = createStore({
     // Registered folders are durable local state. Render them immediately while
     // the authoritative SDK refresh runs, rather than showing an empty spinner.
     projects: mergeProjects(initialSnapshot?.projects ?? [], initialRegisteredProjects),
-    sessions: initialSnapshot?.sessions ?? [],
-    statuses: {},
+    sessions: mergePresenceSessions(initialSnapshot?.sessions ?? [], initialPresence.sessions),
+    statuses: mergePresenceStatuses(initialSnapshot?.statuses ?? {}, initialPresence.statuses),
     registeredProjects: initialRegisteredProjects,
     selectedProjectID: typeof initialSelection?.id === "string" ? initialSelection.id : null,
     selectedProjectDirectory: typeof initialSelection?.directory === "string" ? initialSelection.directory : "",
@@ -480,6 +604,17 @@ export function createProjectStore(api) {
     writeKv(api, key, value)
   }
 
+  function persistPortfolio(projects, sessions, statuses = {}, removedStatusIDs = []) {
+    const persisted = normalizePortfolioSnapshot(readKv(api, PORTFOLIO_SNAPSHOT_KEY, null))
+    const mergedStatuses = { ...(persisted?.statuses ?? {}) }
+    for (const [id, status] of Object.entries(statuses ?? {})) {
+      const type = String(status?.type ?? status ?? "")
+      if (["busy", "retry", "compacting"].includes(type)) mergedStatuses[id] = status
+    }
+    for (const id of removedStatusIDs) delete mergedStatuses[id]
+    persist(PORTFOLIO_SNAPSHOT_KEY, portfolioSnapshot(projects, sessions, mergedStatuses))
+  }
+
   // OpenCode hydrates kv.json asynchronously. Plugin callbacks are outside the
   // component render graph, so relying on a Solid effect here is host-build
   // dependent. A tiny bounded watcher observes the authoritative readiness flag
@@ -502,7 +637,9 @@ export function createProjectStore(api) {
       const snapshot = normalizePortfolioSnapshot(readKv(api, PORTFOLIO_SNAPSHOT_KEY, null))
       if (snapshot) {
         setStore("projects", reconcile(mergeProjects(snapshot.projects, store.registeredProjects), { key: "id" }))
-        setStore("sessions", reconcile(snapshot.sessions, { key: "id" }))
+        const presence = readPresenceSnapshot(api)
+        setStore("sessions", reconcile(mergePresenceSessions(snapshot.sessions, presence.sessions), { key: "id" }))
+        setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, { ...snapshot.statuses, ...presence.statuses })))
         setStore("loadedAt", snapshot.savedAt)
         setStore("phase", "cached")
         settleInitialLoad()
@@ -543,14 +680,33 @@ export function createProjectStore(api) {
     setStore("loading", true)
     if (!store.loadedAt) setStore("phase", "loading")
     try {
-      const { projects, sessions, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID(), store.sessions, intelligenceRotation)
+      const applyCore = ({ projects, sessions, statuses, errors }) => {
+        if (disposed) return
+        if (projects) setStore("projects", reconcile(projects, { key: "id" }))
+        if (sessions) {
+          const previous = new Map(store.sessions.map((session) => [session?.id, session]))
+          const carried = sessions.map((session) => ({
+            ...session,
+            alonixTodos: Array.from(previous.get(session.id)?.alonixTodos ?? []),
+            alonixFiles: Array.from(previous.get(session.id)?.alonixFiles ?? []),
+          }))
+          setStore("sessions", reconcile(carried, { key: "id" }))
+          publishHostPresence()
+          setStore("loadedAt", Date.now())
+          setStore("phase", "ready")
+        }
+        if (statuses) setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, statuses)))
+        if (errors?.length) setStore("error", errors.join("; "))
+        settleInitialLoad()
+      }
+      const { projects, sessions, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID(), store.sessions, intelligenceRotation, applyCore)
       intelligenceRotation = (intelligenceRotation + DELIVERY_ROTATING_LIMIT) % Math.max(1, sessions?.length ?? store.sessions.length)
       if (disposed) return
       // Only overwrite a list that actually loaded, so a partial failure keeps
       // the last good data instead of emptying the workbench.
       if (projects) setStore("projects", reconcile(projects, { key: "id" }))
       if (sessions) setStore("sessions", reconcile(sessions, { key: "id" }))
-      if (statuses) setStore("statuses", reconcile(statuses))
+      if (statuses) setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, statuses)))
       setStore("error", errors.length ? errors.join("; ") : "")
       // Folder metadata can arrive before any chat listing. Only an actual
       // session-list result (including a legitimate empty array) makes zero
@@ -559,7 +715,7 @@ export function createProjectStore(api) {
         const authoritativeProjects = projects ?? store.projects
         setStore("loadedAt", Date.now())
         setStore("phase", "ready")
-        persist(PORTFOLIO_SNAPSHOT_KEY, portfolioSnapshot(authoritativeProjects, sessions))
+        persistPortfolio(authoritativeProjects, sessions, statuses ?? store.statuses)
       } else if (!store.loadedAt) {
         setStore("phase", "error")
       }
@@ -577,6 +733,9 @@ export function createProjectStore(api) {
       if (queued && !disposed) {
         queued = false
         void load()
+      } else if (presenceQueued && !disposed) {
+        presenceQueued = false
+        schedulePresence()
       }
     }
   }
@@ -590,8 +749,56 @@ export function createProjectStore(api) {
     }, REFRESH_DEBOUNCE_MS)
   }
 
-  function schedulePresence() {
+  function publishHostPresence() {
+    if (disposed || !store.sessions.length) return false
+    const local = {}
+    for (const session of store.sessions) {
+      if (!session?.id) continue
+      try {
+        const status = api?.state?.session?.status?.(session.id)
+        const type = String(status?.type ?? "")
+        if (["busy", "retry", "compacting"].includes(type)) {
+          local[session.id] = status
+          publishPresenceLease(api, session.id, status, { session })
+        }
+      } catch {}
+    }
+    if (!Object.keys(local).length) return false
+    const merged = mergePresenceStatuses(store.statuses, local)
+    setStore("statuses", reconcile(merged))
+    persistPortfolio(store.projects, store.sessions, merged)
+    return true
+  }
+
+  function applyStatusEvent(event) {
+    if (disposed) return false
+    const payload = statusEventPayload(event)
+    if (!payload) return publishHostPresence()
+    const next = { ...store.statuses }
+    if (["busy", "retry", "compacting"].includes(payload.type)) {
+      const session = store.sessions.find((item) => item?.id === payload.sessionID)
+      publishPresenceLease(api, payload.sessionID, payload.status, { session })
+      next[payload.sessionID] = payload.status
+      setStore("statuses", reconcile(next))
+      persistPortfolio(store.projects, store.sessions, { [payload.sessionID]: payload.status })
+      return true
+    }
+    if (payload.type === "idle") {
+      clearPresenceLease(api, payload.sessionID)
+      delete next[payload.sessionID]
+      setStore("statuses", reconcile(next))
+      persistPortfolio(store.projects, store.sessions, next, [payload.sessionID])
+      return true
+    }
+    return publishHostPresence()
+  }
+
+  function schedulePresence(event) {
     if (disposed) return
+    // The process that owns the run has authoritative reactive status already.
+    // Publish it to the shared lease synchronously; the debounced SDK pass only
+    // verifies cross-process state and fills gaps.
+    if (!statusEventPayload(event)) publishHostPresence()
     if (presenceDebounce) clearTimeout(presenceDebounce)
     presenceDebounce = setTimeout(() => {
       presenceDebounce = null
@@ -601,16 +808,28 @@ export function createProjectStore(api) {
 
   async function refreshPresence() {
     if (disposed || !store.sessions.length) return
+    if (inFlight) {
+      presenceQueued = true
+      return
+    }
     if (presenceInFlight) {
       presenceQueued = true
       return
     }
     presenceInFlight = true
     try {
-      const next = await loadPresence(api, store.projects, store.sessions, activeSessionID(), presenceRotation)
+      const publishLive = (live) => {
+        if (disposed) return
+        const merged = mergePresenceStatuses(store.statuses, live)
+        setStore("statuses", reconcile(merged))
+        persistPortfolio(store.projects, store.sessions, merged)
+      }
+      const next = await loadPresence(api, store.projects, store.sessions, activeSessionID(), presenceRotation, publishLive)
       presenceRotation = (presenceRotation + PRESENCE_ROTATING_LIMIT) % Math.max(1, store.sessions.length)
       if (disposed || !Object.keys(next).length) return
-      setStore("statuses", reconcile({ ...store.statuses, ...next }))
+      const merged = mergePresenceStatuses(store.statuses, next)
+      setStore("statuses", reconcile(merged))
+      persistPortfolio(store.projects, store.sessions, merged)
     } catch {
       // Presence is advisory. Keep the last known state on a transient failure.
     } finally {
@@ -633,7 +852,7 @@ export function createProjectStore(api) {
     "project.updated",
     "project.directories.updated",
   ]
-  const PRESENCE_EVENTS = ["session.idle", "session.status", "session.error", "session.diff"]
+  const PRESENCE_EVENTS = ["session.idle", "session.error", "session.diff"]
 
   const offs = []
   for (const event of STRUCTURAL_EVENTS) {
@@ -643,6 +862,18 @@ export function createProjectStore(api) {
     } catch {
       // Unknown event names are ignored; periodic reconciliation still covers them.
     }
+  }
+  try {
+    const off = api?.event?.on?.("session.status", (event) => {
+      // The event payload is authoritative and arrives at the same boundary as
+      // the host reducer. Sampling reactive state here races reducer ordering in
+      // real OpenCode builds, which left the cross-window lease empty.
+      applyStatusEvent(event)
+      schedulePresence(event)
+    })
+    if (typeof off === "function") offs.push(off)
+  } catch {
+    // Local reactive state and periodic reconciliation remain available.
   }
   for (const event of PRESENCE_EVENTS) {
     try {
@@ -659,9 +890,14 @@ export function createProjectStore(api) {
   const structuralTimer = setInterval(() => {
     if (!disposed) void load()
   }, STRUCTURAL_RECONCILE_INTERVAL_MS)
+  structuralTimer?.unref?.()
   const presenceTimer = setInterval(() => {
-    if (!disposed) void refreshPresence()
+    if (!disposed) {
+      publishHostPresence()
+      void refreshPresence()
+    }
   }, PRESENCE_RECONCILE_INTERVAL_MS)
+  presenceTimer?.unref?.()
 
   onCleanup(() => {
     disposed = true
@@ -680,7 +916,7 @@ export function createProjectStore(api) {
   })
 
   const statuses = () => {
-    const map = { ...store.statuses }
+    const map = mergePresenceStatuses(readPresenceLeases(api), store.statuses)
     for (const session of store.sessions) {
       if (!session?.id) continue
       try {
@@ -725,7 +961,13 @@ export function createProjectStore(api) {
     }),
   )
 
-  if (persistenceHydrated) void load()
+  if (persistenceHydrated) {
+    // Start authoritative discovery without delaying plugin registration. A
+    // cached session list gets an immediate lightweight presence probe in
+    // parallel so work owned by another OpenCode process is marked promptly.
+    void load()
+    if (store.sessions.length) void refreshPresence()
+  }
 
   const sessionRows = createMemo(() => flattenProjectSessions(projectRows()))
   const recentSessionRows = createMemo(() => recentSessions(projectRows(), 5))

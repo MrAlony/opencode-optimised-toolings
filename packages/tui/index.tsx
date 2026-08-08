@@ -57,15 +57,6 @@ function kvReady(api: TuiPluginApi): boolean {
   }
 }
 
-async function awaitKvReady(api: TuiPluginApi, timeoutMs = 5_000): Promise<boolean> {
-  if (kvReady(api)) return true
-  const deadline = Date.now() + timeoutMs
-  while (!kvReady(api) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-  return kvReady(api)
-}
-
 type RenderProps = {
   input: Record<string, unknown>
   metadata: Record<string, unknown>
@@ -150,8 +141,12 @@ const tui: TuiPlugin = async (api, options) => {
     throw new Error("Alonix refused a drifted TUI generation")
   }
 
-  const persistedStateReady = await awaitKvReady(api)
-  record(persistedStateReady ? "initializing" : "degraded", persistedStateReady ? "kv-ready" : "kv-timeout")
+  // KV and portfolio hydration are background concerns. Blocking plugin
+  // registration here delayed every native/custom surface and made a slow SDK
+  // endpoint look like a frozen TUI. Render immediately from safe defaults or a
+  // cached snapshot; the shared store reconciles authoritative state in place.
+  const persistedStateReady = kvReady(api)
+  record("initializing", persistedStateReady ? "kv-ready" : "kv-hydrating")
 
   const registration: RendererRegistration = {
     available: false,
@@ -246,14 +241,12 @@ const tui: TuiPlugin = async (api, options) => {
   const { workbenchView, setWorkbenchView, workbenchMode, setWorkbenchMode, dockOpen, setDockOpen } = scope
   record("initializing", "reactive-scope-ready")
 
-  // Do not expose a partially hydrated Alonix shell. The host's native UI stays
-  // visible while the first authoritative portfolio cycle runs; routes and
-  // slots are registered only after that cycle settles. This removes the
-  // checkout-vs-installed first-frame race instead of hiding it with a delay.
-  const portfolioStartup = await projects.waitForInitialLoad()
-  record(portfolioStartup.ready ? "initializing" : "degraded", portfolioStartup.ready ? "portfolio-ready" : "portfolio-unavailable", {
-    portfolioPhase: portfolioStartup.phase,
-    portfolioError: portfolioStartup.error || null,
+  // Register routes and slots immediately. Cached portfolio state is already
+  // available synchronously when present, while authoritative discovery and
+  // cross-process presence continue in the background without holding up the
+  // host's own TUI startup.
+  record("initializing", projects.ready ? "portfolio-cached" : "portfolio-hydrating", {
+    portfolioPhase: projects.phase,
   })
 
   const toggleDock = () => {

@@ -16,34 +16,34 @@ function resultError(result, action) {
   return new Error(`${action}: ${detail}`)
 }
 
-export async function listProjects(client) {
-  const result = await client?.project?.list?.({})
+export async function listProjects(client, request = undefined) {
+  const result = await client?.project?.list?.({}, request)
   const error = resultError(result, "Could not list projects")
   if (error) throw error
   return Array.isArray(result?.data) ? result.data : []
 }
 
-export async function listSessions(client, options = {}) {
+export async function listSessions(client, options = {}, request = undefined) {
   const directory = text(options.directory)
   const result = await client?.session?.list?.({
     roots: options.roots !== false,
     limit: Number.isFinite(options.limit) ? options.limit : 400,
     ...(directory ? { directory } : {}),
-  })
+  }, request)
   const error = resultError(result, `Could not list chats${directory ? ` in ${directory}` : ""}`)
   if (error) throw error
   return Array.isArray(result?.data) ? result.data : []
 }
 
-export async function listStatuses(client, directory = "") {
+export async function listStatuses(client, directory = "", request = undefined) {
   const target = text(directory)
-  const result = await client?.session?.status?.(target ? { directory: target } : {})
+  const result = await client?.session?.status?.(target ? { directory: target } : {}, request)
   const error = resultError(result, `Could not read chat status${target ? ` in ${target}` : ""}`)
   if (error) throw error
   return result?.data && typeof result.data === "object" ? result.data : {}
 }
 
-export async function listMessages(client, session, limit = 2) {
+export async function listMessages(client, session, limit = 2, request = undefined) {
   const sessionID = text(session?.id ?? session)
   if (!sessionID) return []
   const directory = text(session?.directory)
@@ -51,36 +51,36 @@ export async function listMessages(client, session, limit = 2) {
     sessionID,
     limit: Math.max(1, Math.floor(Number(limit) || 2)),
     ...(directory ? { directory } : {}),
-  })
+  }, request)
   const error = resultError(result, `Could not read recent activity for ${sessionID}`)
   if (error) throw error
   return Array.isArray(result?.data) ? result.data : []
 }
 
-export async function listTodos(client, session) {
+export async function listTodos(client, session, request = undefined) {
   const sessionID = text(session?.id ?? session)
   if (!sessionID) return []
   const directory = text(session?.directory)
-  const result = await client?.session?.todo?.({ sessionID, ...(directory ? { directory } : {}) })
+  const result = await client?.session?.todo?.({ sessionID, ...(directory ? { directory } : {}) }, request)
   const error = resultError(result, `Could not read tasks for ${sessionID}`)
   if (error) throw error
   return Array.isArray(result?.data) ? result.data : []
 }
 
-export async function listDiff(client, session) {
+export async function listDiff(client, session, request = undefined) {
   const sessionID = text(session?.id ?? session)
   if (!sessionID) return []
   const directory = text(session?.directory)
-  const result = await client?.session?.diff?.({ sessionID, ...(directory ? { directory } : {}) })
+  const result = await client?.session?.diff?.({ sessionID, ...(directory ? { directory } : {}) }, request)
   const error = resultError(result, `Could not read changed files for ${sessionID}`)
   if (error) throw error
   return Array.isArray(result?.data) ? result.data : []
 }
 
-export async function listDirectory(client, directory) {
+export async function listDirectory(client, directory, request = undefined) {
   const target = text(directory)
   if (!target) return []
-  const result = await client?.file?.list?.({ path: target, directory: target })
+  const result = await client?.file?.list?.({ path: target, directory: target }, request)
   const error = resultError(result, `Could not read folder ${target}`)
   if (error) throw error
   return Array.isArray(result?.data) ? result.data : []

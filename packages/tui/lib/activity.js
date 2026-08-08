@@ -128,12 +128,15 @@ export function sessionActivity(input = {}) {
   // Newest first, stable for equal timestamps.
   const ordered = events.slice().reverse()
   const running = ordered.filter((event) => event.running)
+  const latestTool = ordered[0] ?? null
 
   return {
     events: ordered.slice(0, limit),
     running,
     runningCount: running.length,
     failedCount: ordered.filter((event) => event.failed).length,
+    latestTool,
+    latestToolFailed: latestTool?.failed === true,
     // The single line that answers "what is happening right now".
     headline: headlineFor({ running, events: ordered, assistantText, busy: input.busy === true, lastRole }),
     assistantText,
@@ -147,8 +150,8 @@ function headlineFor({ running, events, assistantText, busy, lastRole }) {
     // Busy with no tool running means the model is composing a reply.
     return lastRole === "user" ? "Thinking" : "Responding"
   }
-  const failed = events.find((event) => event.failed)
-  if (failed) return `${failed.label} failed`
+  const latest = events[0]
+  if (latest?.failed) return `${latest.label} failed`
   if (assistantText) return firstLine(assistantText, 80)
   if (events.length) return "Waiting for you"
   return "Idle"
@@ -174,6 +177,8 @@ export function liveActivity(api, sessionID, options = {}) {
     running: [],
     runningCount: 0,
     failedCount: 0,
+    latestTool: null,
+    latestToolFailed: false,
     headline: "Idle",
     assistantText: "",
     busy: false,

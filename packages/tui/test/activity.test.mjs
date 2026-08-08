@@ -73,6 +73,48 @@ test("failures surface in the headline and are counted", () => {
   assert.match(activity.headline, /failed$/)
 })
 
+test("a newer successful tool clears an older failure from current health", () => {
+  const activity = sessionActivity({
+    messages: [{ id: "m1", role: "assistant" }],
+    getParts: () => [
+      toolPart("failed", "edit", { filePath: "broken.ts" }, "error", 1),
+      toolPart("recovered", "edit", { filePath: "fixed.ts" }, "completed", 2),
+    ],
+  })
+  assert.equal(activity.failedCount, 1, "history still records the failed call")
+  assert.equal(activity.latestTool.id, "recovered")
+  assert.equal(activity.latestToolFailed, false)
+  assert.equal(activity.headline, "Waiting for you", "an old failure must not become the current headline")
+})
+
+test("a newer running or queued tool clears an older failure while work continues", () => {
+  for (const status of ["pending", "running"]) {
+    const activity = sessionActivity({
+      messages: [{ id: "m1", role: "assistant" }],
+      busy: true,
+      getParts: () => [
+        toolPart("failed", "edit", {}, "error", 1),
+        toolPart("next", "read", {}, status, 2),
+      ],
+    })
+    assert.equal(activity.latestTool.id, "next")
+    assert.equal(activity.latestToolFailed, false)
+  }
+})
+
+test("the newest failed tool remains an unresolved current error", () => {
+  const activity = sessionActivity({
+    messages: [{ id: "m1", role: "assistant" }],
+    getParts: () => [
+      toolPart("success", "read", {}, "completed", 1),
+      toolPart("failed", "edit", {}, "error", 2),
+    ],
+  })
+  assert.equal(activity.latestTool.id, "failed")
+  assert.equal(activity.latestToolFailed, true)
+  assert.match(activity.headline, /failed$/)
+})
+
 test("an idle session falls back to the assistant's last words", () => {
   const activity = sessionActivity({
     messages: [{ id: "m1", role: "assistant" }],
@@ -137,6 +179,7 @@ test("liveActivity reads host state and degrades safely", () => {
   const activity = liveActivity(api, "s1")
   assert.equal(activity.busy, true)
   assert.equal(activity.headline, "Editing main.rs")
+  assert.equal(activity.latestToolFailed, false)
 
   // Missing api, missing session, and throwing host state all degrade to idle.
   assert.equal(liveActivity(null, "s1").headline, "Idle")

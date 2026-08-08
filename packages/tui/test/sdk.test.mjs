@@ -37,6 +37,26 @@ test("the adapter uses the generated v2 client's flat parameter contract", async
   }
 })
 
+test("request options propagate cancellation to every generated SDK call", async () => {
+  const signal = new AbortController().signal
+  const seen = []
+  const capture = async (_args, request) => { seen.push(request); return { data: [] } }
+  const client = {
+    project: { list: capture },
+    session: { list: capture, status: capture, messages: capture, todo: capture, diff: capture },
+    file: { list: capture },
+  }
+  await listProjects(client, { signal })
+  await listSessions(client, {}, { signal })
+  await listStatuses(client, "", { signal })
+  await listMessages(client, "s", 1, { signal })
+  await listTodos(client, "s", { signal })
+  await listDiff(client, "s", { signal })
+  await listDirectory(client, "C:/work", { signal })
+  assert.equal(seen.length, 7)
+  assert.ok(seen.every((request) => request?.signal === signal))
+})
+
 test("listing without a directory leaves the generated client on its launch scope", async () => {
   let args
   const client = { session: { list: async (input) => ((args = input), { data: [] }) } }

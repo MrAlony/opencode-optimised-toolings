@@ -40,7 +40,7 @@ function createApi(overrides = {}) {
       },
     },
     route: { current: { name: "session", params: { sessionID: "s1" } } },
-    state: { path: { directory: "C:/work/alpha" }, session: { status: () => undefined } },
+    state: { path: { state: overrides.statePath ?? "", directory: "C:/work/alpha" }, session: { status: () => undefined } },
     client: {
       project: {
         list: async () => {
@@ -106,7 +106,7 @@ test("a persisted portfolio snapshot makes the first frame complete before netwo
   const api = createApi({
     kv: {
       alonix_registered_projects: ["C:/work/alpha", "C:/work/beta"],
-      alonix_portfolio_snapshot: { version: 1, savedAt, projects: PROJECTS, sessions: SESSIONS },
+      alonix_portfolio_snapshot: { version: 2, savedAt, projects: PROJECTS, sessions: SESSIONS },
     },
   })
   api.client.project.list = async () => new Promise(() => {})
@@ -128,36 +128,31 @@ test("successful portfolio loading refreshes the durable first-frame snapshot", 
   const api = createApi()
   await withStore(api, (store) => {
     const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
-    assert.equal(snapshot.version, 1)
+    assert.equal(snapshot.version, 2)
     assert.equal(snapshot.projects.length, 2)
     assert.equal(snapshot.sessions.length, 2)
     assert.equal(store.ready, true)
   })
 })
 
-test("the initial readiness barrier resolves only after an authoritative portfolio cycle", async () => {
+test("the initial readiness barrier resolves from an authoritative launch-directory listing", async () => {
   const api = createApi()
-  let releaseProjects
-  api.client.project.list = async () => new Promise((resolve) => { releaseProjects = () => resolve({ data: PROJECTS }) })
+  api.client.project.list = async () => new Promise(() => {})
   let dispose
   const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
   try {
-    let settled = false
-    const barrier = store.waitForInitialLoad().then((value) => { settled = true; return value })
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    assert.equal(settled, false)
-    assert.equal(store.ready, false)
-    releaseProjects()
-    const result = await barrier
+    const result = await store.waitForInitialLoad(100)
     assert.equal(result.ready, true)
     assert.equal(store.ready, true)
     assert.ok(store.loadedAt > 0)
+    assert.equal(store.sessions.length, 2)
   } finally { dispose() }
 })
 
-test("the initial readiness barrier is bounded when authoritative loading never settles", async () => {
+test("the initial readiness barrier is bounded when project and session discovery never settle", async () => {
   const api = createApi()
   api.client.project.list = async () => new Promise(() => {})
+  api.client.session.list = async () => new Promise(() => {})
   let dispose
   const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
   try {
@@ -236,6 +231,7 @@ test("Windows rooted-slash persisted folders recover the current drive identity"
 test("registered folders render immediately but chat counts stay non-authoritative until loading finishes", async () => {
   const api = createApi({ kv: { alonix_registered_projects: ["C:/work/saved"] } })
   api.client.project.list = async () => new Promise(() => {})
+  api.client.session.list = async () => new Promise(() => {})
   const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
   process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = "100"
   try {
@@ -449,6 +445,209 @@ test("historical unfinished transcripts stay idle when rotation eventually reach
   })
 })
 
+test("a fresh window paints a valid shared working lease before any SDK request settles", async () => {
+  const observedAt = Date.now()
+  const api = createApi({
+    kv: {
+      alonix_portfolio_snapshot: {
+        version: 2,
+        savedAt: observedAt,
+        projects: PROJECTS,
+        sessions: SESSIONS,
+        statuses: { s1: { type: "busy", observedAt } },
+      },
+    },
+  })
+  api.client.project.list = async () => new Promise(() => {})
+  api.client.session.list = async () => new Promise(() => {})
+  api.client.session.status = async () => new Promise(() => {})
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, true)
+  } finally { dispose() }
+})
+
+test("a cold window with no portfolio KV paints an active remote lease on its first model computation", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const os = await import("node:os")
+  const path = await import("node:path")
+  const { publishPresenceLease } = await import("../lib/presence-lease.js")
+  const statePath = mkdtempSync(path.join(os.tmpdir(), "alonix-cold-presence-"))
+  const api = createApi({ statePath, kv: {}, projects: [], sessions: [] })
+  publishPresenceLease(api, "remote-active", { type: "busy" }, {
+    session: { id: "remote-active", title: "Remote active work", directory: "C:/work/remote", projectID: "remote-project", time: { updated: Date.now() } },
+  })
+  api.client.project.list = async () => new Promise(() => {})
+  api.client.session.list = async () => new Promise(() => {})
+  api.client.session.status = async () => new Promise(() => {})
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    const row = store.sessionRows().find((item) => item.id === "remote-active")
+    assert.equal(row?.title, "Remote active work")
+    assert.equal(row?.directory, "C:/work/remote")
+    assert.equal(row?.running, true)
+  } finally {
+    dispose()
+    rmSync(statePath, { recursive: true, force: true })
+  }
+})
+
+test("expired shared working leases never resurrect crashed sessions", async () => {
+  const observedAt = Date.now() - 60_000
+  const api = createApi({
+    kv: {
+      alonix_portfolio_snapshot: {
+        version: 2,
+        savedAt: observedAt,
+        projects: PROJECTS,
+        sessions: SESSIONS,
+        statuses: { s1: { type: "busy", observedAt } },
+      },
+    },
+  })
+  api.client.project.list = async () => new Promise(() => {})
+  api.client.session.list = async () => new Promise(() => {})
+  api.client.session.status = async () => new Promise(() => {})
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, false)
+  } finally { dispose() }
+})
+
+test("a local status event publishes its payload before host reactive state catches up", async () => {
+  const api = createApi()
+  api.state.session.status = () => undefined
+  await withStore(api, async (store) => {
+    const handler = api.listeners.get("session.status")
+    assert.ok(handler)
+    handler({ properties: { sessionID: "s1", status: { type: "busy" } } })
+    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
+    assert.equal(snapshot.statuses.s1.type, "busy")
+    assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, true)
+  })
+})
+
+test("an unrelated structural snapshot write preserves another window's fresh working lease", async () => {
+  const observedAt = Date.now()
+  const api = createApi({
+    kv: {
+      alonix_portfolio_snapshot: {
+        version: 2,
+        savedAt: observedAt,
+        projects: PROJECTS,
+        sessions: SESSIONS,
+        statuses: { s2: { type: "busy", observedAt } },
+      },
+    },
+    statuses: {},
+  })
+  await withStore(api, async (store) => {
+    await store.reload()
+    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
+    assert.equal(snapshot.statuses.s2.type, "busy")
+    assert.equal(snapshot.statuses.s2.observedAt, observedAt, "preserving a lease must not renew its TTL")
+  })
+})
+
+test("an authoritative idle event removes the shared working lease immediately", async () => {
+  const observedAt = Date.now()
+  const api = createApi({
+    kv: {
+      alonix_portfolio_snapshot: {
+        version: 2,
+        savedAt: observedAt,
+        projects: PROJECTS,
+        sessions: SESSIONS,
+        statuses: { s1: { type: "busy", observedAt } },
+      },
+    },
+  })
+  await withStore(api, async (store) => {
+    assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, true)
+    api.listeners.get("session.status")?.({ properties: { sessionID: "s1", status: { type: "idle" } } })
+    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
+    assert.equal(snapshot.statuses.s1, undefined)
+    assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, false)
+  })
+})
+
+test("presence reconciliation persists a bounded shared working lease", async () => {
+  const api = createApi({ statuses: { s1: { type: "busy" } } })
+  await withStore(api, async (store) => {
+    await store.refreshPresence()
+    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
+    assert.equal(snapshot.version, 2)
+    assert.equal(snapshot.statuses.s1.type, "busy")
+    assert.ok(Date.now() - snapshot.statuses.s1.observedAt < 1_000)
+  })
+})
+
+test("known directories publish working sessions before slow project discovery", async () => {
+  const api = createApi({
+    kv: { alonix_registered_projects: ["C:/work/alpha"] },
+    sessions: [SESSIONS[0]],
+    statuses: { s1: { type: "busy" } },
+  })
+  api.client.project.list = async () => new Promise(() => {})
+  const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+  process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = "100"
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, true)
+    assert.equal(store.ready, true, "known-directory discovery is authoritative without global project enumeration")
+  } finally {
+    dispose()
+    if (previous === undefined) delete process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+    else process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = previous
+  }
+})
+
+test("live status publishes before slow transcript and delivery enrichment", async () => {
+  const api = createApi({ statuses: { s1: { type: "busy" } } })
+  api.client.session.messages = async () => new Promise(() => {})
+  api.client.session.todo = async () => new Promise(() => {})
+  api.client.session.diff = async () => new Promise(() => {})
+  const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+  process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = "100"
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const row = store.sessionRows().find((item) => item.id === "s1")
+    assert.ok(row, "structural session data must render before enrichment settles")
+    assert.equal(row.running, true, "live server status must be visible immediately")
+    assert.equal(store.ready, true, "core discovery, not secondary intelligence, defines readiness")
+  } finally {
+    dispose()
+    if (previous === undefined) delete process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+    else process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = previous
+  }
+})
+
+test("deadline aborts hung SDK work instead of only abandoning its promise", async () => {
+  const api = createApi({ kv: { alonix_registered_projects: ["C:/work/saved"] } })
+  let aborted = false
+  api.client.project.list = async (_args, request) => new Promise((_resolve, reject) => {
+    request?.signal?.addEventListener("abort", () => { aborted = true; reject(request.signal.reason) }, { once: true })
+  })
+  const previous = process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+  process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = "100"
+  try {
+    await withStore(api, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 130))
+      assert.equal(aborted, true)
+    })
+  } finally {
+    if (previous === undefined) delete process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS
+    else process.env.ALONIX_PORTFOLIO_REQUEST_TIMEOUT_MS = previous
+  }
+})
+
 test("durable transcript state repairs false idle status from another process", async () => {
   const api = createApi({
     statuses: { s1: { type: "idle" } },
@@ -614,7 +813,7 @@ test("delivery intelligence loads persisted todos and files through a bounded SD
 
 test("delivery intelligence failures preserve cached todos and files", async () => {
   const cached = [{ ...SESSIONS[0], alonixTodos: [{ content: "Keep me", status: "pending" }], alonixFiles: [{ file: "src/keep.ts" }] }]
-  const api = createApi({ kv: { alonix_portfolio_snapshot: { version: 1, savedAt: Date.now(), projects: PROJECTS, sessions: cached } }, sessions: [SESSIONS[0]], failIntelligence: true })
+  const api = createApi({ kv: { alonix_portfolio_snapshot: { version: 2, savedAt: Date.now(), projects: PROJECTS, sessions: cached } }, sessions: [SESSIONS[0]], failIntelligence: true })
   await withStore(api, (store) => {
     const row = store.sessionRows().find((item) => item.id === "s1")
     assert.equal(row.todos[0].content, "Keep me")
