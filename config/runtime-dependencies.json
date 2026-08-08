@@ -1,12 +1,11 @@
 {
   "schemaVersion": 1,
-  "fingerprint": "dfab0380e3a4c4729cf812b9f0464a2f6d60eca0ce76dc667f3efb75a87fcda0",
+  "fingerprint": "25a44df40d9323a8dfc0f60ef0eb84233f999b5a7336f6de357b112fa1bf5998",
   "graph": [
     "@ai-sdk/provider@3.0.8",
-    "@ampproject/remapping@2.3.0",
     "@babel/code-frame@7.29.7",
     "@babel/compat-data@7.29.7",
-    "@babel/core@7.28.0",
+    "@babel/core@7.29.7",
     "@babel/generator@7.29.8",
     "@babel/helper-annotate-as-pure@7.29.7",
     "@babel/helper-compilation-targets@7.29.7",
@@ -35,6 +34,7 @@
     "@babel/types@7.29.8",
     "@isaacs/fs-minipass@4.0.1",
     "@jridgewell/gen-mapping@0.3.13",
+    "@jridgewell/remapping@2.3.5",
     "@jridgewell/resolve-uri@3.1.2",
     "@jridgewell/sourcemap-codec@1.5.5",
     "@jridgewell/trace-mapping@0.3.31",

@@ -37,6 +37,13 @@ test("createClock exposes a controller object, not a callable tick", async () =>
   }
 })
 
+test("dock interactions preserve toggle intent across delayed KV hydration", async () => {
+  const entry = await source("index.tsx")
+  assert.match(entry, /scope\.hydrateDock\(\)[\s\S]*const next = !dockOpen\(\)/)
+  assert.match(entry, /dockTogglesBeforeHydration % 2 === 0 \? restored : !restored/)
+  assert.match(entry, /scope\.queueDockToggle\(\)/)
+})
+
 test("persisted state hydrates safely without blocking TUI startup", async () => {
   const entry = await source("index.tsx")
   const store = await source("components/project-store.jsx")

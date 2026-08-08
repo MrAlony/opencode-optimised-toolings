@@ -4,9 +4,11 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import os from "node:os"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { clearPresenceLease, publishPresenceLease, readPresenceLeases } from "../lib/presence-lease.js"
+
+const modulePath = fileURLToPath(new URL("../lib/presence-lease.js", import.meta.url))
 
 function fixture() {
   const state = mkdtempSync(path.join(os.tmpdir(), "alonix-presence-"))
@@ -16,7 +18,7 @@ function fixture() {
 test("independent processes publish without overwriting each other", () => {
   const fx = fixture()
   try {
-    const moduleUrl = pathToFileURL(path.resolve("packages/tui/lib/presence-lease.js")).href
+    const moduleUrl = pathToFileURL(modulePath).href
     for (const [sessionID, type] of [["session-a", "busy"], ["session-b", "retry"]]) {
       const script = `import { publishPresenceLease } from ${JSON.stringify(moduleUrl)}; const ok=publishPresenceLease({state:{path:{state:${JSON.stringify(fx.state)}}}},${JSON.stringify(sessionID)},{type:${JSON.stringify(type)}}); process.exit(ok?0:1)`
       const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" })

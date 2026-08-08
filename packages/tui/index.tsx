@@ -186,14 +186,16 @@ const tui: TuiPlugin = async (api, options) => {
     const dockInitiallyHydrated = kvReady(api)
     const [dockOpen, setDockOpen] = createSignal<boolean>(dockInitiallyHydrated ? readDockPreference(api) : true)
     let dockHydrated = dockInitiallyHydrated
-    let dockChangedBeforeHydration = false
+    let dockTogglesBeforeHydration = 0
     const hydrateDock = () => {
       if (dockHydrated || !kvReady(api)) return false
-      if (!dockChangedBeforeHydration) setDockOpen(readDockPreference(api))
+      const restored = readDockPreference(api)
+      const resolved = dockTogglesBeforeHydration % 2 === 0 ? restored : !restored
+      setDockOpen(resolved)
       dockHydrated = true
       try { api.kv.set("generic_tool_output_visibility", true) } catch {}
-      if (dockChangedBeforeHydration) {
-        try { api.kv.set(DOCK_KEY, dockOpen()) } catch {}
+      if (dockTogglesBeforeHydration > 0) {
+        try { api.kv.set(DOCK_KEY, resolved) } catch {}
       }
       return true
     }
@@ -223,8 +225,8 @@ const tui: TuiPlugin = async (api, options) => {
       setWorkbenchMode,
       dockOpen,
       setDockOpen,
-      get dockChangedBeforeHydration() { return dockChangedBeforeHydration },
-      set dockChangedBeforeHydration(value: boolean) { dockChangedBeforeHydration = value },
+      hydrateDock,
+      queueDockToggle() { dockTogglesBeforeHydration += 1 },
       stopDockHydration() {
         if (dockHydrationTimer) clearInterval(dockHydrationTimer)
         dockHydrationTimer = null
@@ -250,10 +252,14 @@ const tui: TuiPlugin = async (api, options) => {
   })
 
   const toggleDock = () => {
+    // KV can become ready between scope creation and the first interaction.
+    // Reconcile the persisted value before computing the toggle so a command
+    // cannot invert the temporary default and then be overwritten by hydration.
+    scope.hydrateDock()
     const next = !dockOpen()
     setDockOpen(next)
     if (!kvReady(api)) {
-      scope.dockChangedBeforeHydration = true
+      scope.queueDockToggle()
       return
     }
     try {
