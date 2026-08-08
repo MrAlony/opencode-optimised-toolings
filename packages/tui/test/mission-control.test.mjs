@@ -51,6 +51,14 @@ test("card capacity counts every column and never overflows the padded viewport"
   assert.equal(threeColumns.columns, 3)
   assert.equal(threeColumns.visibleRows, 2)
   assert.equal(threeColumns.capacity, 6, "two three-column rows must mount six agents, not two")
+
+  const conservativeHostHeight = missionControlLayout({ width: 150, height: 18 }, "cards")
+  assert.equal(conservativeHostHeight.columns, 3)
+  assert.equal(conservativeHostHeight.visibleRows, 2)
+  assert.equal(conservativeHostHeight.capacity, 6, "a conservative route height must not hide the fourth active agent")
+  const fourAgents = agentWindow(Array.from({ length: 4 }, (_, id) => ({ id })), 0, conservativeHostHeight.capacity)
+  assert.equal(fourAgents.rows.length, 4)
+  assert.equal(fourAgents.after, 0)
 })
 
 test("arbitrary agent counts remain reachable one visual row at a time", () => {

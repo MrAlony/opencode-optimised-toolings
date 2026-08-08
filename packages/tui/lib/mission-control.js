@@ -32,7 +32,13 @@ export function missionControlLayout(viewport = {}, requestedDensity = "cards") 
   const density = MISSION_DENSITIES.has(requestedDensity) ? requestedDensity : "cards"
   const columns = density === "table" ? 1 : contentWidth >= 106 ? 3 : contentWidth >= 66 ? 2 : 1
   const rowHeight = density === "table" ? 1 : density === "compact" ? 6 : 10
-  const visibleRows = Math.max(1, Math.floor(Math.max(1, height - 9) / rowHeight))
+  const measuredRows = Math.max(1, Math.floor(Math.max(1, height - 9) / rowHeight))
+  // OpenCode route plugins can report a conservative terminal height while the
+  // flex host gives the scrollbox substantially more room. Card modes keep two
+  // virtual rows available so a three-column view never collapses four active
+  // agents into a misleading single row; the scrollbox still clips and scrolls
+  // genuinely short viewports.
+  const visibleRows = density === "table" ? measuredRows : Math.max(2, measuredRows)
   const gap = columns > 1 ? 1 : 0
   const cardWidth = Math.max(1, Math.floor((contentWidth - gap * (columns - 1)) / columns))
   return {
