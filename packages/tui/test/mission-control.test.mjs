@@ -4,10 +4,11 @@ import { agentWindow, missionControlLayout, missionControlModel, missionScrollIn
 
 const now = 1_000_000
 const agents = [
-  { id: "attention", projectID: "p1", running: true, busy: true, attention: 1, failedCount: 0, latestToolFailed: false, updated: now, files: [{ file: "src/shared.ts" }] },
-  { id: "working", projectID: "p1", running: true, busy: true, attention: 0, failedCount: 0, latestToolFailed: false, updated: now - 100, files: [{ file: "src/shared.ts" }] },
-  { id: "remote", projectID: "p2", running: true, busy: false, attention: 0, failedCount: 0, latestToolFailed: false, updated: now - 100, files: [] },
-  { id: "stalled", projectID: "p2", running: true, busy: false, attention: 0, failedCount: 0, latestToolFailed: false, updated: now - MISSION_STALL_MS - 1, files: [] },
+  { id: "attention", projectID: "p1", running: true, busy: true, hydrated: true, progressAt: now, inFlight: true, attention: 1, failedCount: 0, latestToolFailed: false, updated: now, files: [{ file: "src/shared.ts" }] },
+  { id: "working", projectID: "p1", running: true, busy: true, hydrated: true, progressAt: now, inFlight: true, attention: 0, failedCount: 0, latestToolFailed: false, updated: now - 100, files: [{ file: "src/shared.ts" }] },
+  { id: "remote", projectID: "p2", running: true, busy: false, hydrated: false, progressAt: 0, inFlight: false, attention: 0, failedCount: 0, latestToolFailed: false, updated: now - 100, files: [] },
+  { id: "stalled", projectID: "p2", running: true, busy: false, hydrated: true, runningCount: 1, progressAt: now - MISSION_STALL_MS - 1, inFlight: true, attention: 0, failedCount: 0, latestToolFailed: false, updated: now - MISSION_STALL_MS - 1, files: [] },
+  { id: "completed", projectID: "p2", running: false, busy: false, hydrated: true, completed: true, completedAt: now, attention: 0, failedCount: 0, latestToolFailed: false, updated: now, files: [] },
   { id: "idle", projectID: "p2", running: false, busy: false, attention: 0, failedCount: 0, latestToolFailed: false, updated: now, files: [] },
 ]
 
@@ -20,6 +21,8 @@ test("mission control orders attention, collisions and stalls before ordinary wo
   assert.equal(model.agents.find((item) => item.id === "remote")?.stalled, false, "remote live work must not stall merely because this process lacks its transcript")
   assert.equal(model.stats.collisions, 1)
   assert.equal(model.agents.some((item) => item.id === "idle"), false)
+  assert.equal(model.agents.find((item) => item.id === "completed")?.tone, "success")
+  assert.equal(model.stats.completed, 1)
 })
 
 test("current errors, user blockers, and stalls remain separate", () => {
@@ -27,9 +30,9 @@ test("current errors, user blockers, and stalls remain separate", () => {
     now,
     agents: [
       { id: "recovered", running: true, attention: 0, failedCount: 3, latestToolFailed: false, updated: now - 10, files: [] },
-      { id: "failed", running: true, attention: 0, failedCount: 1, latestToolFailed: true, updated: now - 20, files: [] },
+      { id: "failed", running: true, hydrated: true, progressAt: now - 20, inFlight: false, attention: 0, failedCount: 1, latestToolFailed: true, updated: now - 20, files: [] },
       { id: "blocked", running: true, attention: 1, failedCount: 0, latestToolFailed: false, updated: now - 30, files: [] },
-      { id: "inactive", running: true, attention: 0, failedCount: 2, latestToolFailed: false, updated: now - MISSION_STALL_MS - 1, files: [] },
+      { id: "inactive", running: true, hydrated: true, runningCount: 1, progressAt: now - MISSION_STALL_MS - 1, inFlight: true, attention: 0, failedCount: 2, latestToolFailed: false, updated: now - MISSION_STALL_MS - 1, files: [] },
     ],
   })
   const recovered = model.agents.find((item) => item.id === "recovered")
@@ -49,8 +52,9 @@ test("current errors, user blockers, and stalls remain separate", () => {
 test("filters and folder scope remain distinct and deterministic", () => {
   assert.deepEqual(missionControlModel({ agents, now, filter: "attention" }).agents.map((item) => item.id), ["attention"])
   assert.deepEqual(missionControlModel({ agents, now, filter: "stalled" }).agents.map((item) => item.id), ["stalled"])
+  assert.deepEqual(missionControlModel({ agents, now, filter: "completed" }).agents.map((item) => item.id), ["completed"])
   assert.deepEqual(missionControlModel({ agents, now, filter: "collisions" }).agents.map((item) => item.id), ["attention", "working"])
-  assert.deepEqual(missionControlModel({ agents, now, project: "p2" }).agents.map((item) => item.id), ["stalled", "remote"])
+  assert.deepEqual(missionControlModel({ agents, now, project: "p2" }).agents.map((item) => item.id), ["stalled", "completed", "remote"])
 })
 
 test("agent window mounts only the bounded visible range", () => {

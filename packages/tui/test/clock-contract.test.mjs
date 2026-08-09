@@ -37,6 +37,17 @@ test("createClock exposes a controller object, not a callable tick", async () =>
   }
 })
 
+test("Windows focus-in restores terminal modes without consuming native input", async () => {
+  const entry = await source("index.tsx")
+  const recovery = await source("lib/terminal-recovery.js")
+  assert.match(entry, /installTerminalModeRecovery\(api\.renderer\)/)
+  assert.match(entry, /api\.lifecycle\.onDispose\(disposeTerminalRecovery\)/)
+  assert.match(recovery, /prependInputHandler\(handler\)/)
+  assert.match(recovery, /sequence === FOCUS_IN/)
+  assert.match(recovery, /return false/, "recovery must preserve native focus and input dispatch")
+  assert.match(recovery, /removeInputHandler/)
+})
+
 test("dock interactions preserve toggle intent across delayed KV hydration", async () => {
   const entry = await source("index.tsx")
   assert.match(entry, /scope\.hydrateDock\(\)[\s\S]*const next = !dockOpen\(\)/)
@@ -65,6 +76,16 @@ test("persisted state hydrates safely without blocking TUI startup", async () =>
   assert.match(store, /setInterval\(\(\) => \{\s*if \(hydratePersistence\(\)/)
 })
 
+test("transcript status animation uses the one shared clock instead of one interval per tool", async () => {
+  const kit = await source("components/kit.jsx")
+  const index = await source("index.tsx")
+  const statusGlyph = kit.slice(kit.indexOf("export function StatusGlyph"), kit.indexOf("function isToggleKey"))
+  assert.match(statusGlyph, /useClock/)
+  assert.doesNotMatch(statusGlyph, /setInterval|setTimeout/)
+  assert.match(index, /registry\.register\([\s\S]*?<ClockProvider clock=\{clock\}>/)
+  assert.match(index, /fingerprint !== toolingStateFingerprint/)
+})
+
 test("no component invokes the clock controller as a function", async () => {
   for (const file of COMPONENTS) {
     const text = await source(file)
@@ -76,15 +97,24 @@ test("no component invokes the clock controller as a function", async () => {
   }
 })
 
-test("live surfaces read elapsed time through useClock", async () => {
-  // Only real-time surfaces subscribe to motion. The command center is
-  // intentionally static so it cannot duplicate Live Agents telemetry.
-  for (const file of ["components/monitor.jsx", "components/session-rail.jsx"]) {
-    const text = await source(file)
-    assert.match(text, /useClock\(/, `${file} must subscribe through useClock`)
-  }
+test("live animation stays leaf-scoped instead of rebuilding the full Mission Control model", async () => {
+  const monitor = await source("components/monitor.jsx")
+  const kit = await source("components/ide-kit.jsx")
+  const rail = await source("components/session-rail.jsx")
+  assert.doesNotMatch(monitor, /useClock\(/, "the full agent inventory must never recompute on animation frames")
+  assert.match(kit, /export function StatusDot[\s\S]*useClock\(/, "visible status glyphs own bounded animation")
+  assert.match(rail, /useClock\(/, "the bounded session rail may animate its visible rows")
+  const dock = await source("components/dock.jsx")
+  assert.doesNotMatch(dock, /void clock\(\)[\s\S]*liveActivity/, "dock animation frames must not rebuild transcript activity")
   const operations = await source("components/operations.jsx")
   assert.doesNotMatch(operations, /useClock|liveActivity/, "the command center must remain planning-only")
+})
+
+test("opening a completed session acknowledges its lifecycle receipt", async () => {
+  const entry = await source("index.tsx")
+  assert.match(entry, /openSessionTab[\s\S]*projects\.acknowledgeCompletion\(sessionID\)/)
+  assert.match(entry, /openChat[\s\S]*openSessionTab\(sessionID\)/)
+  assert.match(entry, /openSessionTab[\s\S]*openSession\(api, sessionID\)[\s\S]*queueMicrotask[\s\S]*projects\.acknowledgeCompletion\(sessionID\)/, "routing must paint before deferred lifecycle bookkeeping")
 })
 
 test("the dock occupies a left layout column on every screen", async () => {
@@ -434,6 +464,14 @@ test("the universal finder exposes plain-language mouse filters", async () => {
   assert.match(text, /<SegmentedControl/, "filters must be visible click targets")
   assert.match(text, /Open selected/, "opening the current choice must not require enter")
   assert.doesNotMatch(text, />·@·#/, "developer prefix syntax must not be the primary instruction")
+})
+
+test("Live Agents data reconciliation is event-driven rather than animation-frame driven", async () => {
+  const monitor = await source("components/monitor.jsx")
+  const enriched = monitor.slice(monitor.indexOf("const enriched ="), monitor.indexOf("const projects =", monitor.indexOf("const enriched =")))
+  assert.doesNotMatch(enriched, /useClock|void clock/)
+  assert.match(enriched, /createMemo/)
+  assert.match(enriched, /filter\(missionEligible\)\.map/, "historical chats must be filtered before expensive host enrichment")
 })
 
 test("Live Agents Mission Control is automatic, filterable and focused on active intervention", async () => {

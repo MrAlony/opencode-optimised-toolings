@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   buildProjectModel,
+  canonicalProjectInventory,
   containsDirectory,
   flattenProjectSessions,
   projectForSession,
@@ -38,6 +39,24 @@ test("project labels prefer an explicit name and fall back to the directory", ()
   assert.equal(projectLabel(PROJECTS[1]), "beta")
   assert.equal(projectLabel({ worktree: "C:/work/gamma/" }), "gamma")
   assert.equal(projectLabel({}), "untitled")
+})
+
+test("home identity ignores unstable server placeholder names and uses the account name", () => {
+  assert.equal(projectLabel({ name: "untitled", worktree: "C:/Users/dell" }), "dell")
+  assert.equal(projectLabel({ name: "home", worktree: "C:/Users/dell" }), "dell")
+  assert.equal(projectLabel({ name: "dell", worktree: "C:/Users/dell" }), "dell")
+  assert.equal(projectLabel({ name: "untitled", worktree: "/work/real" }), "real")
+})
+
+test("canonical inventory merges aliases monotonically by directory", () => {
+  const cached = [{ id: "alonix:c:/work/alpha", worktree: "C:/work/alpha", name: "alpha", manual: true }]
+  const provisional = []
+  const server = [{ id: "p1", worktree: "C:\\work\\alpha\\", name: "untitled" }]
+  assert.equal(canonicalProjectInventory(cached, provisional).length, 1, "empty provisional refresh cannot erase inventory")
+  const merged = canonicalProjectInventory(cached, server)
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].id, "p1")
+  assert.equal(merged[0].name, "alpha")
 })
 
 test("generic directory names keep their parent so projects stay distinguishable", () => {
@@ -128,7 +147,7 @@ test("child sessions never appear in the project model", () => {
   assert.equal(rows.find((row) => row.id === "p_alpha").sessionCount, 1)
 })
 
-test("ordering puts the current project first, then pinned, running, and recency", () => {
+test("folder order is stable across current, running, and recency refreshes", () => {
   const rows = buildProjectModel({
     now: NOW,
     activeDirectory: "C:/work/beta/src",
@@ -142,10 +161,20 @@ test("ordering puts the current project first, then pinned, running, and recency
       session("d", { projectID: "p_delta", directory: "C:/work/delta", time: { updated: NOW - 7 * DAY } }),
     ],
   })
-  assert.deepEqual(rows.map((row) => row.id), ["p_beta", "p_gamma", "p_delta", "p_alpha"])
-  assert.equal(rows[0].current, true)
-  assert.equal(rows[1].pinned, true)
-  assert.equal(rows[2].running, 1)
+  assert.deepEqual(rows.map((row) => row.id), ["p_beta", "p_gamma", "p_alpha", "p_delta"], "the selected session's project leads, then stable pinned/name order")
+  assert.equal(rows.find((row) => row.id === "p_beta").current, true)
+  assert.equal(rows.find((row) => row.id === "p_gamma").pinned, true)
+  assert.equal(rows.find((row) => row.id === "p_delta").running, 1)
+
+  const refreshed = buildProjectModel({
+    now: NOW + DAY,
+    activeDirectory: "C:/work/alpha",
+    pinnedProjects: ["p_gamma"],
+    statuses: { a: { type: "busy" } },
+    projects: [...PROJECTS, { id: "p_gamma", worktree: "C:/work/gamma" }, { id: "p_delta", worktree: "C:/work/delta" }],
+    sessions: [session("a", { time: { updated: NOW + DAY } })],
+  })
+  assert.deepEqual(refreshed.map((row) => row.id), ["p_alpha", "p_gamma", "p_beta", "p_delta"], "only explicit selection may promote a project; background state cannot reorder the rest")
 })
 
 test("project-owned state uses directory identity across synthetic and server IDs", () => {
@@ -157,6 +186,19 @@ test("project-owned state uses directory identity across synthetic and server ID
     [projectStateKey(server)],
     "legacy synthetic/server IDs converge without duplicating state",
   )
+})
+
+test("the selected session's project is promoted to the top", () => {
+  const rows = buildProjectModel({
+    now: NOW,
+    selectedProjectID: "p_beta",
+    selectedProjectDirectory: "C:/work/beta",
+    activeSessionID: "beta-active",
+    projects: PROJECTS,
+    sessions: [session("beta-active", { projectID: "p_beta", directory: "C:/work/beta" })],
+  })
+  assert.equal(rows[0].id, "p_beta")
+  assert.equal(rows[0].current, true)
 })
 
 test("explicit project selection overrides the launch directory and survives id replacement", () => {
@@ -172,7 +214,7 @@ test("explicit project selection overrides the launch directory and survives id 
   assert.equal(selected.find((row) => row.id === "p_alpha").current, false)
 })
 
-test("within a project the active session leads, then running, then recency", () => {
+test("within a project session order stays stable while state changes", () => {
   const rows = buildProjectModel({
     now: NOW,
     projects: PROJECTS,
@@ -184,7 +226,7 @@ test("within a project the active session leads, then running, then recency", ()
       session("c", { time: { updated: NOW - 9 * DAY } }),
     ],
   })
-  assert.deepEqual(rows.find((row) => row.id === "p_alpha").sessions.map((s) => s.id), ["c", "b", "a"])
+  assert.deepEqual(rows.find((row) => row.id === "p_alpha").sessions.map((s) => s.id), ["a", "b", "c"])
 })
 
 test("aggregates and flattening expose portfolio-wide totals", () => {

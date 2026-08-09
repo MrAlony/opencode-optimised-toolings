@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { createEffect, createMemo, createSignal } from "solid-js"
 import { diagnosticEvidenceLines } from "../lib/evidence.js"
+import { useClock } from "./runtime.jsx"
 
 export function displayPath(path, max = 64) {
   const text = String(path ?? "")
@@ -51,15 +52,11 @@ export function statusSurface(status, skin, active = false) {
 
 export function StatusGlyph(props) {
   const frames = ["◌", "◔", "◑", "◕"]
-  const [frame, setFrame] = createSignal(0)
-  createEffect(() => {
-    if (!props.pending || props.skin.motion === false) return
-    const timer = setInterval(() => setFrame((value) => (value + 1) % frames.length), 140)
-    onCleanup(() => clearInterval(timer))
-  })
+  const clock = useClock(() => props.pending === true && props.skin.motion !== false)
+  const frame = () => frames[Math.floor(clock() / 140) % frames.length]
   return (
     <text fg={statusTone(props.status, props.skin)}>
-      {props.pending ? (props.skin.motion === false ? frames[0] : frames[frame()]) : props.status === "SUCCESS" ? "✓" : props.status === "FAILED" ? "✕" : "◐"}
+      {props.pending ? (props.skin.motion === false ? frames[0] : frame()) : props.status === "SUCCESS" ? "✓" : props.status === "FAILED" ? "✕" : "◐"}
     </text>
   )
 }
@@ -87,15 +84,10 @@ export function Activity(props) {
   const expandable = createMemo(() => typeof props.details === "function")
   const [open, setOpen] = createSignal(Boolean(props.openDefault))
   const [active, setActive] = createSignal(false)
-  let failureOpened = false
   let defaultOpened = Boolean(props.openDefault)
   createEffect(() => {
     if (props.openDefault && !defaultOpened) {
       defaultOpened = true
-      setOpen(true)
-    }
-    if (props.status === "FAILED" && !failureOpened) {
-      failureOpened = true
       setOpen(true)
     }
   })

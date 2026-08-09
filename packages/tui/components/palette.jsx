@@ -12,10 +12,11 @@
 
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { GLYPH } from "../lib/design.js"
-import { classifyKey, moveIndex, scrollWindow } from "../lib/keys.js"
+import { classifyKey, moveIndex } from "../lib/keys.js"
 import { fit, fitLeft, pad, paletteLayout } from "../lib/layout.js"
 import { spinnerFrame, stagger } from "../lib/motion.js"
 import { MODES, buildActions, groupActions, parseQuery } from "../lib/command-registry.js"
+import { paletteDisplayRows, paletteWindow, preservePaletteSelection } from "../lib/palette-model.js"
 import { EmptyState, KeyHints, SectionLabel, Spinner, StatLine } from "./ide-kit.jsx"
 import { Button, SegmentedControl, TextInput } from "./controls.jsx"
 import { useClock } from "./runtime.jsx"
@@ -76,12 +77,14 @@ function ActionRow(props) {
       flexDirection="row"
       flexShrink={0}
       height={1}
+      width={props.width}
+      overflow="hidden"
       backgroundColor={props.selected ? tokens().selectionStrong : tokens().panel}
       onMouseUp={() => props.onRun(action())}
       onMouseMove={() => props.onHover(props.flatIndex)}
       onMouseDown={() => props.onHover(props.flatIndex)}
     >
-      <text wrapMode="none">
+      <text wrapMode="none" width={props.width}>
         <span style={{ fg: props.selected ? tokens().accent : tokens().borderFaint }}>
           {props.selected ? GLYPH.pointer : " "}
         </span>
@@ -203,17 +206,20 @@ function Preview(props) {
 export function Palette(props) {
   const tokens = props.tokens
   const [query, setQuery] = createSignal(props.initialQuery ?? "")
-  const [index, setIndex] = createSignal(0)
+  const [selectedID, setSelectedID] = createSignal("")
   const [offset, setOffset] = createSignal(0)
   const clock = useClock(() => tokens().motion !== false)
 
-  // Sized against the host dialog panel, not the terminal.
+  const parsed = createMemo(() => parseQuery(query()))
+  // Folder selection is a destination chooser, not an inspector. Its path and
+  // chat count are already in the row, so reclaim the preview column to keep the
+  // entire project list readable and non-overlapping. Other finder modes retain
+  // the panel-aware preview when the host dialog can afford it.
   const layout = createMemo(() => {
     const dimensions = props.dimensions?.() ?? { width: 120, height: 40 }
-    return paletteLayout({ size: props.size ?? "xlarge", width: dimensions.width, height: dimensions.height })
+    return paletteLayout({ size: props.size ?? "xlarge", width: dimensions.width, height: dimensions.height, preview: parsed().mode !== "project" })
   })
 
-  const parsed = createMemo(() => parseQuery(query()))
   const actions = createMemo(() =>
     buildActions({
       query: query(),
@@ -224,17 +230,20 @@ export function Palette(props) {
     }),
   )
   const groups = createMemo(() => groupActions(actions()))
-  const selected = createMemo(() => actions()[Math.min(index(), Math.max(0, actions().length - 1))] ?? null)
+  const displayRows = createMemo(() => paletteDisplayRows(groups()))
+  const selection = createMemo(() => preservePaletteSelection(actions(), selectedID(), 0))
+  const selected = createMemo(() => actions()[selection().index] ?? null)
 
   createEffect(() => {
-    const size = actions().length
-    if (index() > Math.max(0, size - 1)) setIndex(Math.max(0, size - 1))
+    const next = selection().id
+    if (next !== selectedID()) setSelectedID(next)
   })
   // Filters and the large action button consume rows that used to belong to
   // the result list. Budget them explicitly so the fixed-size host dialog can
   // never overflow vertically.
-  const resultRows = createMemo(() => Math.max(3, layout().rows - 4))
-  createEffect(() => setOffset((current) => scrollWindow(current, index(), resultRows(), actions().length)))
+  const resultRows = createMemo(() => Math.max(3, layout().rows))
+  const windowed = createMemo(() => paletteWindow(displayRows(), selectedID(), offset(), resultRows()))
+  createEffect(() => setOffset(windowed().start))
 
   const run = (action) => {
     if (!action) return
@@ -253,7 +262,8 @@ export function Palette(props) {
       return
     }
     if (["up", "down", "page-up", "page-down", "first", "last"].includes(action)) {
-      setIndex((current) => moveIndex(current, actions().length, action, layout().rows))
+      const next = moveIndex(selection().index, actions().length, action, resultRows())
+      setSelectedID(actions()[next]?.id ?? "")
       return
     }
 
@@ -272,7 +282,7 @@ export function Palette(props) {
   const setMode = (mode) => {
     const prefix = MODES[mode]?.prefix ?? ""
     setQuery(`${prefix}${parsed().term}`)
-    setIndex(0)
+    setSelectedID("")
     setOffset(0)
   }
 
@@ -284,48 +294,31 @@ export function Palette(props) {
     return "Run this action"
   })
 
-  // Flatten groups to rows, then window the rows while keeping the header that
-  // introduces each visible run.
-  const visible = createMemo(() => {
-    const start = offset()
-    const end = start + resultRows()
-    const out = []
-    let flat = 0
-    for (const group of groups()) {
-      let headerEmitted = false
-      for (const row of group.rows) {
-        const current = flat
-        flat += 1
-        if (current < start || current >= end) continue
-        if (!headerEmitted) {
-          out.push({ kind: "group", label: group.label, count: group.rows.length, key: `g:${group.kind}` })
-          headerEmitted = true
-        }
-        out.push({ kind: "row", action: row, flatIndex: current, key: row.id })
-      }
-    }
-    return out
-  })
 
   return (
     <box
       flexDirection="column"
+      width="100%"
+      maxWidth={layout().outer}
+      height={layout().panelHeight}
+      flexShrink={0}
+      overflow="hidden"
       paddingLeft={2}
       paddingRight={2}
       paddingBottom={1}
       gap={1}
       backgroundColor={tokens().panelOpaque ?? tokens().panel}
     >
-      <box flexDirection="row" gap={1} flexShrink={0} alignItems="center">
+      <box flexDirection="row" gap={1} flexShrink={0} alignItems="center" width={layout().inner} overflow="hidden">
         <text fg={tokens().accent} wrapMode="none">
           {GLYPH.diamond}
         </text>
         <text fg={tokens().text} wrapMode="none">
           <b>Find anything</b>
         </text>
-        <text fg={tokens().muted} wrapMode="none">
-          chats, folders and things you can do
-        </text>
+        <box flexGrow={1} minWidth={0} overflow="hidden">
+          <text fg={tokens().muted} wrapMode="none">chats, folders and actions</text>
+        </box>
         <box flexGrow={1} />
         <Show when={props.loading?.()}>
           <Spinner tokens={tokens()} tone="accent" />
@@ -346,15 +339,15 @@ export function Palette(props) {
         onInput={(value) => {
           const prefix = MODES[parsed().mode]?.prefix ?? ""
           setQuery(`${prefix}${value}`)
-          setIndex(0)
+          setSelectedID("")
           setOffset(0)
         }}
         onSubmit={() => run(selected())}
         onKeyDown={handleKey}
       />
 
-      <box flexDirection="row" flexShrink={0}>
-        <box flexDirection="column" width={layout().list} flexShrink={0}>
+      <box flexDirection="row" flexShrink={0} width={layout().inner} height={resultRows()} gap={layout().gap} overflow="hidden">
+        <box flexDirection="column" width={layout().list} height={resultRows()} flexShrink={0} overflow="hidden">
           <Show
             when={actions().length}
             fallback={
@@ -365,7 +358,7 @@ export function Palette(props) {
               />
             }
           >
-            <For each={visible()}>
+            <For each={windowed().rows}>
               {(entry) => (
                 <Show
                   when={entry.kind === "row"}
@@ -381,11 +374,12 @@ export function Palette(props) {
                     tokens={tokens()}
                     columns={layout().columns}
                     action={entry.action}
-                    flatIndex={entry.flatIndex}
-                    selected={entry.flatIndex === index()}
-                    animateIndex={entry.flatIndex - offset()}
+                    width={layout().list}
+                    flatIndex={selection().index}
+                    selected={entry.actionID === selectedID()}
+                    animateIndex={Math.max(0, windowed().rows.indexOf(entry))}
                     onRun={run}
-                    onHover={setIndex}
+                    onHover={() => setSelectedID(entry.actionID)}
                   />
                 </Show>
               )}
@@ -394,11 +388,13 @@ export function Palette(props) {
         </box>
 
         <Show when={layout().showPreview}>
-          <Preview tokens={tokens()} action={selected()} width={layout().preview} />
+          <box width={layout().preview} height={resultRows()} flexShrink={0} overflow="hidden">
+            <Preview tokens={tokens()} action={selected()} width={layout().preview} />
+          </box>
         </Show>
       </box>
 
-      <box flexDirection="row" flexShrink={0} height={3} gap={2} alignItems="center">
+      <box flexDirection="row" flexShrink={0} width={layout().inner} height={3} gap={1} alignItems="center" overflow="hidden">
         <Button
           tokens={tokens()}
           variant="primary"
@@ -413,8 +409,10 @@ export function Palette(props) {
         <Button tokens={tokens()} variant="ghost" onPress={() => props.onClose?.()}>
           Cancel
         </Button>
-        <box flexGrow={1} />
-        <KeyHints tokens={tokens()} hints={HINTS} />
+        <box flexGrow={1} minWidth={0} />
+        <box flexShrink={0} overflow="hidden">
+          <KeyHints tokens={tokens()} hints={HINTS} />
+        </box>
       </box>
     </box>
   )

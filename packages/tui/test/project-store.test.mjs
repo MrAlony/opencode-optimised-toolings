@@ -40,7 +40,14 @@ function createApi(overrides = {}) {
       },
     },
     route: { current: { name: "session", params: { sessionID: "s1" } } },
-    state: { path: { state: overrides.statePath ?? "", directory: "C:/work/alpha" }, session: { status: () => undefined } },
+    state: {
+      path: { state: overrides.statePath ?? "", directory: "C:/work/alpha" },
+      session: {
+        status: (sessionID) => overrides.hostStatuses?.[sessionID],
+        messages: (sessionID) => overrides.hostMessages?.[sessionID] ?? [],
+      },
+      part: (messageID) => overrides.hostParts?.[messageID] ?? [],
+    },
     client: {
       project: {
         list: async () => {
@@ -121,6 +128,24 @@ test("a persisted portfolio snapshot makes the first frame complete before netwo
     assert.equal(store.summary().projects, 2)
     assert.equal(store.summary().sessions, 2)
     assert.equal(store.loadedAt, savedAt)
+  } finally { dispose() }
+})
+
+test("provisional empty project discovery cannot erase a valid cached folder inventory", async () => {
+  const savedAt = Date.now() - 1000
+  const api = createApi({
+    kv: { alonix_portfolio_snapshot: { version: 2, savedAt, projects: PROJECTS, sessions: SESSIONS } },
+  })
+  let resolveProjects
+  api.client.project.list = async () => new Promise((resolve) => { resolveProjects = resolve })
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(store.projectRows().length, 2, "early launch-directory publication must retain cached folders")
+    resolveProjects({ data: [] })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(store.projectRows().length, 2, "a later empty endpoint cannot make folders disappear")
   } finally { dispose() }
 })
 
@@ -326,19 +351,13 @@ test("concurrent refreshes collapse into a single in-flight request", async () =
   })
 })
 
-test("session events trigger a debounced refresh", async () => {
+test("prompt message updates never trigger a portfolio-wide refresh", async () => {
   const api = createApi()
-  await withStore(api, async (store) => {
-    // project.list runs exactly once per refresh cycle, so it is the reliable
-    // way to count reloads now that sessions are fetched per directory.
+  await withStore(api, async () => {
     const before = api.calls.projectList
-    const handler = api.listeners.get("session.updated")
-    assert.ok(handler, "the store must subscribe to session.updated")
-    handler()
-    handler()
-    handler()
-    await new Promise((resolve) => setTimeout(resolve, 320))
-    assert.equal(api.calls.projectList, before + 1, "a burst of events collapses into one reload")
+    assert.equal(api.listeners.has("session.updated"), false, "the host already updates session metadata reactively; prompt activity must not fan out across every folder")
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    assert.equal(api.calls.projectList, before)
   })
 })
 
@@ -524,9 +543,9 @@ test("a local status event publishes its payload before host reactive state catc
     const handler = api.listeners.get("session.status")
     assert.ok(handler)
     handler({ properties: { sessionID: "s1", status: { type: "busy" } } })
-    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
-    assert.equal(snapshot.statuses.s1.type, "busy")
     assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, true)
+    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
+    assert.equal(snapshot.statuses.s1, undefined, "live events must not synchronously rewrite the large portfolio snapshot")
   })
 })
 
@@ -543,6 +562,7 @@ test("an unrelated structural snapshot write preserves another window's fresh wo
       },
     },
     statuses: {},
+    messages: { s2: [{ info: { role: "user", time: { created: observedAt } } }] },
   })
   await withStore(api, async (store) => {
     await store.reload()
@@ -565,23 +585,227 @@ test("an authoritative idle event removes the shared working lease immediately",
       },
     },
   })
+  let completed = false
+  api.client.session.messages = async ({ sessionID }) => ({ data: sessionID === "s1" && !completed
+    ? [{ info: { role: "user", time: { created: observedAt } } }]
+    : [{ info: { role: "assistant", time: { created: observedAt, completed: Date.now() } } }] })
+  api.route.current = { name: "session", params: { sessionID: "other" } }
   await withStore(api, async (store) => {
     assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, true)
+    completed = true
     api.listeners.get("session.status")?.({ properties: { sessionID: "s1", status: { type: "idle" } } })
+    await new Promise((resolve) => setTimeout(resolve, 30))
     const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
-    assert.equal(snapshot.statuses.s1, undefined)
     assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, false)
+    assert.equal(store.completions.s1?.state, "completed")
+    assert.equal(snapshot.statuses.s1?.type, "busy", "the terminal receipt masks stale cached presence without an interaction-path KV rewrite")
   })
 })
 
-test("presence reconciliation persists a bounded shared working lease", async () => {
-  const api = createApi({ statuses: { s1: { type: "busy" } } })
+test("completion is emitted only for an observed working-to-idle lifecycle and opening acknowledges it", async () => {
+  const api = createApi()
   await withStore(api, async (store) => {
+    assert.deepEqual(store.completions, {}, "old assistant-ended sessions are not retroactively completed")
+    const status = api.listeners.get("session.status")
+    status?.({ properties: { sessionID: "s2", status: { type: "busy" } } })
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true)
+    status?.({ properties: { sessionID: "s2", status: { type: "idle" } } })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.ok(store.completions.s2?.completedAt > 0, "a completed assistant turn after observed work creates one receipt")
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.completed, true)
+    assert.equal(store.acknowledgeCompletion("s2"), true)
+    assert.equal(store.completions.s2?.state, "seen")
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.completed, false)
+  })
+})
+
+test("idle without an observed working lifecycle never creates completion", async () => {
+  const api = createApi()
+  await withStore(api, async (store) => {
+    api.listeners.get("session.status")?.({ properties: { sessionID: "s2", status: { type: "idle" } } })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(store.completions.s2, undefined)
+  })
+})
+
+test("opening active work does not create seen state or hide Working", async () => {
+  const now = Date.now()
+  const api = createApi({
+    hostStatuses: { s2: { type: "busy" } },
+    hostMessages: { s2: [{ id: "turn-active", info: { role: "user", time: { created: now } } }] },
+  })
+  await withStore(api, (store) => {
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true)
+    assert.equal(store.acknowledgeCompletion("s2"), false, "active work has no terminal receipt to acknowledge")
+    assert.equal(store.completions.s2, undefined)
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true)
+  })
+})
+
+test("opening an idle session without terminal state is a no-op", async () => {
+  const api = createApi()
+  await withStore(api, (store) => {
+    assert.equal(store.acknowledgeCompletion("s2"), false)
+    assert.equal(store.completions.s2, undefined)
+  })
+})
+
+test("fresh current-turn evidence repairs a stale terminal receipt before acknowledgement", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const os = await import("node:os")
+  const path = await import("node:path")
+  const { publishCompletionReceipt } = await import("../lib/completion-receipt.js")
+  const statePath = mkdtempSync(path.join(os.tmpdir(), "alonix-terminal-recovery-"))
+  const completedAt = Date.now() - 2_000
+  const progressAt = Date.now()
+  const api = createApi({
+    statePath,
+    hostStatuses: { s2: { type: "busy" } },
+    hostMessages: { s2: [{ id: "turn-new", info: { role: "user", time: { created: progressAt } } }] },
+  })
+  publishCompletionReceipt(api, "s2", { completedAt })
+  try {
+    await withStore(api, (store) => {
+      assert.equal(store.acknowledgeCompletion("s2"), false, "new work replaces stale terminal state instead of acknowledging it")
+      assert.equal(store.completions.s2, undefined)
+      assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true)
+    })
+  } finally { rmSync(statePath, { recursive: true, force: true }) }
+})
+
+test("stale host busy cannot resurrect a completed or historical turn", async () => {
+  const old = Date.now() - 30 * 60 * 1000
+  const api = createApi({
+    hostStatuses: { s2: { type: "busy" } },
+    hostMessages: { s2: [{ id: "turn-old", info: { role: "assistant", time: { created: old, completed: old + 1_000 } } }] },
+  })
+  await withStore(api, (store) => {
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, false)
+  })
+})
+
+test("stale SDK busy cannot erase terminal state but a new producer event can", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const os = await import("node:os")
+  const path = await import("node:path")
+  const { publishCompletionReceipt } = await import("../lib/completion-receipt.js")
+  const statePath = mkdtempSync(path.join(os.tmpdir(), "alonix-terminal-authority-"))
+  const api = createApi({ statePath, statuses: { s2: { type: "busy" } }, messages: { s2: [{ info: { role: "assistant", time: { created: 1, completed: 2 } } }] } })
+  publishCompletionReceipt(api, "s2", { completedAt: Date.now() })
+  try {
+    await withStore(api, async (store) => {
+      assert.equal(store.completions.s2?.state, "completed")
+      await store.refreshPresence()
+      assert.equal(store.completions.s2?.state, "completed", "polling replay cannot erase terminal authority")
+      assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, false)
+      api.listeners.get("session.status")?.({ properties: { sessionID: "s2", status: { type: "busy" } } })
+      assert.equal(store.completions.s2, undefined, "new producer work starts a new lifecycle")
+      assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true)
+    })
+  } finally { rmSync(statePath, { recursive: true, force: true }) }
+})
+
+test("starting new work invalidates an unacknowledged completion receipt", async () => {
+  const api = createApi()
+  await withStore(api, async (store) => {
+    const status = api.listeners.get("session.status")
+    status?.({ properties: { sessionID: "s2", status: { type: "busy" } } })
+    status?.({ properties: { sessionID: "s2", status: { type: "idle" } } })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.ok(store.completions.s2)
+    status?.({ properties: { sessionID: "s2", status: { type: "busy" } } })
+    assert.equal(store.completions.s2, undefined)
+  })
+})
+
+test("authoritative idle and completed lifecycle receipts retire stale busy caches", async () => {
+  const observedAt = Date.now()
+  const api = createApi({
+    kv: { alonix_portfolio_snapshot: { version: 2, savedAt: observedAt, projects: PROJECTS, sessions: SESSIONS, statuses: { s2: { type: "busy", observedAt } } } },
+  })
+  let completed = false
+  api.client.session.messages = async ({ sessionID }) => ({ data: sessionID === "s2" && !completed
+    ? [{ info: { role: "user", time: { created: observedAt } } }]
+    : [{ info: { role: "assistant", time: { created: observedAt, completed: Date.now() } } }] })
+  await withStore(api, async (store) => {
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true)
+    const status = api.listeners.get("session.status")
+    completed = true
+    status?.({ properties: { sessionID: "s2", status: { type: "idle" } } })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, false)
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.completed, true)
+    assert.equal(api.kvStore.get("alonix_portfolio_snapshot").statuses.s2?.type, "busy", "terminal receipt masks the cache until the next structural checkpoint")
+    // Even a stale host reducer saying busy cannot resurrect acknowledged work.
+    api.state.session.status = () => ({ type: "busy" })
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, false)
+  })
+})
+
+test("active status observations expire unless a producer renews them", async () => {
+  const old = Date.now() - 30_000
+  const api = createApi({
+    kv: { alonix_portfolio_snapshot: { version: 2, savedAt: old, projects: PROJECTS, sessions: SESSIONS, statuses: { s2: { type: "busy", observedAt: old } } } },
+  })
+  api.client.session.status = async () => ({ data: {} })
+  await withStore(api, async (store) => {
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, false)
+    api.listeners.get("session.status")?.({ properties: { sessionID: "s2", status: { type: "busy" } } })
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true, "a fresh producer event renews activity")
+  })
+})
+
+test("presence reconciliation stays in the lightweight lease transport", async () => {
+  const api = createApi({ statuses: { s1: { type: "busy" } }, messages: { s1: [{ info: { role: "user", time: { created: Date.now() } } }] } })
+  await withStore(api, async (store) => {
+    const before = JSON.stringify(api.kvStore.get("alonix_portfolio_snapshot"))
     await store.refreshPresence()
-    const snapshot = api.kvStore.get("alonix_portfolio_snapshot")
-    assert.equal(snapshot.version, 2)
-    assert.equal(snapshot.statuses.s1.type, "busy")
-    assert.ok(Date.now() - snapshot.statuses.s1.observedAt < 1_000)
+    assert.equal(store.sessionRows().find((item) => item.id === "s1")?.running, true)
+    assert.equal(JSON.stringify(api.kvStore.get("alonix_portfolio_snapshot")), before, "lightweight presence must not serialize the full portfolio on its hot path")
+  })
+})
+
+test("provisional known-directory publication never removes sessions from slower folders", async () => {
+  const savedAt = Date.now()
+  const api = createApi({
+    kv: { alonix_portfolio_snapshot: { version: 2, savedAt, projects: PROJECTS, sessions: SESSIONS, statuses: { s2: { type: "busy", observedAt: savedAt } } } },
+  })
+  let resolveProjects
+  api.client.project.list = async () => new Promise((resolve) => { resolveProjects = resolve })
+  api.client.session.list = async (args) => {
+    if (!args?.directory || args.directory === "C:/work/alpha") return { data: [SESSIONS[0]] }
+    if (args.directory === "C:/work/beta") return { data: [SESSIONS[1]] }
+    return { data: [] }
+  }
+  let dispose
+  const store = createRoot((d) => { dispose = d; return createProjectStore(api) })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(store.sessions.map((item) => item.id).toSorted(), ["s1", "s2"], "early subset must merge rather than replace")
+    assert.equal(store.sessionRows().find((item) => item.id === "s2")?.running, true, "Live Agents membership stays mounted")
+    resolveProjects({ data: PROJECTS })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.deepEqual(store.sessions.map((item) => item.id).toSorted(), ["s1", "s2"])
+  } finally { dispose() }
+})
+
+test("partial directory failure preserves sessions from the failed folder", async () => {
+  const api = createApi({ kv: { alonix_portfolio_snapshot: { version: 2, savedAt: Date.now(), projects: PROJECTS, sessions: SESSIONS } } })
+  api.client.session.list = async (args) => {
+    if (args?.directory === "C:/work/beta") throw new Error("beta temporarily unavailable")
+    return { data: args?.directory === "C:/work/alpha" ? [SESSIONS[0]] : [] }
+  }
+  await withStore(api, async (store) => {
+    assert.deepEqual(store.sessions.map((item) => item.id).toSorted(), ["s1", "s2"])
+    assert.match(store.error, /beta temporarily unavailable/)
+  })
+})
+
+test("complete directory coverage may remove a genuinely deleted session", async () => {
+  const api = createApi({ kv: { alonix_portfolio_snapshot: { version: 2, savedAt: Date.now(), projects: PROJECTS, sessions: SESSIONS } } })
+  api.client.session.list = async (args) => ({ data: args?.directory === "C:/work/alpha" ? [SESSIONS[0]] : [] })
+  await withStore(api, async (store) => {
+    assert.deepEqual(store.sessions.map((item) => item.id), ["s1"])
   })
 })
 
@@ -694,6 +918,7 @@ test("sidebar recents are global rather than inherited from selected-project ord
       { id: "other-working", title: "Other working", projectID: "p2", directory: "C:/work/beta", time: { updated: now - 20_000 } },
     ],
     statuses: { "other-working": { type: "busy" } },
+    messages: { "other-working": [{ info: { role: "user", time: { created: now - 20_000 } } }] },
   })
   await withStore(api, (store) => {
     store.selectProject(store.projectRows().find((row) => row.id === "p1"))
@@ -811,7 +1036,7 @@ test("delivery intelligence loads persisted todos and files through a bounded SD
   })
 })
 
-test("delivery intelligence failures preserve cached todos and files", async () => {
+test("delivery intelligence failures preserve cached todos and files across staged core publication", async () => {
   const cached = [{ ...SESSIONS[0], alonixTodos: [{ content: "Keep me", status: "pending" }], alonixFiles: [{ file: "src/keep.ts" }] }]
   const api = createApi({ kv: { alonix_portfolio_snapshot: { version: 2, savedAt: Date.now(), projects: PROJECTS, sessions: cached } }, sessions: [SESSIONS[0]], failIntelligence: true })
   await withStore(api, (store) => {

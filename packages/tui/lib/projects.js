@@ -68,28 +68,73 @@ export function normalizeProjectPreferenceKeys(values, rows, limit = 200) {
  */
 const GENERIC_SEGMENTS = new Set(["projects", "project", "src", "repos", "repo", "code", "work", "dev", "workspace"])
 
-/** A user home directory reads as "home", not as the account name. */
-function isHomeDirectory(worktree) {
-  return /^(?:[a-zA-Z]:)?\/(?:Users|home)\/[^/]+$/i.test(worktree)
+/** A user home directory uses the actual account segment as its stable label. */
+function homeAccount(worktree) {
+  const match = /^(?:[a-zA-Z]:)?\/(?:Users|home)\/([^/]+)$/i.exec(worktree)
+  return match?.[1] ?? ""
 }
 
 export function projectLabel(project) {
-  const explicit = String(project?.name ?? "").trim()
-  if (explicit) return explicit
   const worktree = normalizeDirectory(project?.worktree)
-  if (!worktree) return "untitled"
+  // Directory semantics outrank server placeholders. OpenCode may report the
+  // account root as `untitled` or as the account name while cached/manual rows
+  // call the same directory `home`; one canonical label prevents hydration
+  // flicker for the same folder.
+  if (worktree === "~") return "home"
+  const account = homeAccount(worktree)
+  if (account) return account
+  const explicit = String(project?.name ?? "").trim()
+  if (explicit && !/^(?:untitled|unknown|workspace)$/i.test(explicit)) return explicit
+  if (!worktree) return explicit || "untitled"
   if (worktree === "/" || /^[a-zA-Z]:$/.test(worktree)) return worktree
-  // `~` and the expanded home path are the same place and deserve a real name.
-  if (worktree === "~" || isHomeDirectory(worktree)) return "home"
   const parts = worktree.split("/").filter(Boolean)
   const leaf = parts[parts.length - 1]
   if (!leaf) return worktree
-  // A drive root ("C:") is not a name.
   if (/^[a-zA-Z]:$/.test(leaf)) return worktree
   if (GENERIC_SEGMENTS.has(leaf.toLowerCase()) && parts.length > 1) {
     return `${parts[parts.length - 2]}/${leaf}`
   }
   return leaf
+}
+
+function preferProjectID(current, incoming) {
+  const a = String(current ?? "")
+  const b = String(incoming ?? "")
+  if (!a) return b
+  if (!b) return a
+  if (a.startsWith("alonix:") && !b.startsWith("alonix:")) return b
+  return a
+}
+
+/**
+ * Merge every discovered representation of a folder by canonical directory.
+ * Inventory is monotonic: provisional/partial refreshes enrich known folders
+ * but never delete them. Removal is an explicit user action (hide), not an
+ * inference from a temporarily empty endpoint.
+ */
+export function canonicalProjectInventory(...sources) {
+  const buckets = new Map()
+  for (const source of sources) {
+    for (const project of Array.from(source ?? [])) {
+      if (!project || typeof project !== "object") continue
+      const worktree = normalizeDirectory(project.worktree)
+      const id = String(project.id ?? "").trim()
+      const key = worktree ? `directory:${directoryKey(worktree)}` : id ? `project:${id}` : ""
+      if (!key) continue
+      const current = buckets.get(key) ?? {}
+      const mergedWorktree = worktree || normalizeDirectory(current.worktree)
+      const merged = {
+        ...current,
+        ...project,
+        id: preferProjectID(current.id, id) || key,
+        worktree: mergedWorktree,
+      }
+      merged.name = projectLabel({ ...merged, worktree: mergedWorktree })
+      merged.manual = current.manual === true && project.manual !== false
+      buckets.set(key, merged)
+    }
+  }
+  return [...buckets.values()]
 }
 
 /** True when `directory` is inside (or equal to) `root`. */
@@ -136,6 +181,7 @@ function sessionActivity(session) {
 export function buildProjectModel(input = {}) {
   const now = Number(input.now) || Date.now()
   const statuses = input.statuses ?? {}
+  const completions = input.completions ?? {}
   const activeSessionID = input.activeSessionID ?? null
   const activeDirectory = normalizeDirectory(input.activeDirectory)
   const selectedProjectID = input.selectedProjectID ?? null
@@ -144,7 +190,7 @@ export function buildProjectModel(input = {}) {
   // Hiding removes a project from the list only. Its sessions are untouched and
   // the project reappears if it is added again, so this is never destructive.
   const hidden = new Set(Array.from(input.hiddenProjects ?? []).map((item) => directoryKey(item)))
-  const projects = Array.from(input.projects ?? []).filter((project) => project && typeof project === "object")
+  const projects = canonicalProjectInventory(input.projects)
   const sessions = Array.from(input.sessions ?? []).filter((session) => session && typeof session.id === "string")
 
   const buckets = new Map()
@@ -159,7 +205,8 @@ export function buildProjectModel(input = {}) {
 
   for (const project of projects) {
     const worktree = normalizeDirectory(project.worktree)
-    ensure(project.id ?? directoryKey(worktree), {
+    const key = projectStateKey(project) || `project:${project.id}`
+    ensure(key, {
       id: project.id ?? directoryKey(worktree),
       name: projectLabel(project),
       worktree,
@@ -175,7 +222,7 @@ export function buildProjectModel(input = {}) {
     // An incomplete project record must not erase the real directory carried by
     // its sessions. This is how synthetic home/account rows become actionable.
     const worktree = normalizeDirectory(project?.worktree) || normalizeDirectory(session.directory)
-    const key = project?.id ?? directoryKey(worktree)
+    const key = project ? (projectStateKey(project) || `project:${project.id}`) : `directory:${directoryKey(worktree)}`
     const bucket = ensure(key, {
       id: key,
       name: project ? projectLabel(project) : projectLabel({ worktree }),
@@ -189,11 +236,16 @@ export function buildProjectModel(input = {}) {
       id: session.id,
       title: sessionTitle(session),
       untitled: isDefaultTitle(session.title ?? ""),
+      created: Number(session?.time?.created ?? 0) || 0,
       updated: sessionActivity(session),
       relative: relativeTime(sessionActivity(session), now),
       directory: normalizeDirectory(session.directory),
       state,
-      running: state === "busy" || state === "retry",
+      running: state === "busy" || state === "retry" || state === "compacting",
+      terminalState: String(completions[session.id]?.state ?? (Number(completions[session.id]?.completedAt ?? 0) > 0 ? "completed" : "")),
+      terminalAt: Number(completions[session.id]?.occurredAt ?? completions[session.id]?.completedAt ?? 0) || 0,
+      completed: String(completions[session.id]?.state ?? (Number(completions[session.id]?.completedAt ?? 0) > 0 ? "completed" : "")) === "completed",
+      completedAt: Number(completions[session.id]?.occurredAt ?? completions[session.id]?.completedAt ?? 0) || 0,
       active: session.id === activeSessionID,
       cost: Number(session.cost ?? 0),
       changedFiles: Number(session.summary?.files ?? 0),
@@ -212,9 +264,8 @@ export function buildProjectModel(input = {}) {
 
   const rows = [...buckets.values()].map((bucket) => {
     bucket.sessions.sort((a, b) => {
-      if (a.active !== b.active) return a.active ? -1 : 1
-      if (a.running !== b.running) return a.running ? -1 : 1
-      return b.updated - a.updated
+      if (a.created !== b.created) return b.created - a.created
+      return a.id.localeCompare(b.id)
     })
     const updated = bucket.sessions.reduce((max, session) => Math.max(max, session.updated), 0)
     const stateKey = projectStateKey(bucket)
@@ -240,9 +291,9 @@ export function buildProjectModel(input = {}) {
   visible.sort((a, b) => {
     if (a.current !== b.current) return a.current ? -1 : 1
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
-    if (a.running !== b.running) return a.running > b.running ? -1 : 1
-    if (a.updated !== b.updated) return b.updated - a.updated
-    return a.name.localeCompare(b.name)
+    const name = a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    if (name) return name
+    return directoryKey(a.worktree).localeCompare(directoryKey(b.worktree))
   })
 
   return visible

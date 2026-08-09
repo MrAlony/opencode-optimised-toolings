@@ -83,9 +83,10 @@ export function paletteLayout(options = {}) {
   const outer = Math.max(24, Math.min(DIALOG_WIDTHS[size], terminalWidth - 2))
   const inner = Math.max(20, outer - PALETTE_PADDING * 2)
 
-  const showPreview = inner >= 92
+  const showPreview = options.preview !== false && inner >= 92
   const preview = showPreview ? Math.max(26, Math.min(38, Math.round(inner * 0.32))) : 0
-  const list = Math.max(18, inner - preview - (showPreview ? 2 : 0))
+  const gap = showPreview ? 1 : 0
+  const list = Math.max(18, inner - preview - gap)
 
   // Leading cells: selection bar, kind glyph, quick-jump slot, plus the single
   // space that separates each of them from the next.
@@ -98,14 +99,19 @@ export function paletteLayout(options = {}) {
   const subtitle = body >= 42 ? Math.round(body * 0.36) : 0
   const title = Math.max(6, body - subtitle - (subtitle ? 1 : 0))
 
+  const rows = Math.max(3, Math.min(16, terminalHeight - 14))
+  const panelHeight = rows + 10
+
   return {
     size,
     outer,
     inner,
     list,
     preview,
+    gap,
     showPreview,
-    rows: Math.max(3, Math.min(16, terminalHeight - 14)),
+    rows,
+    panelHeight,
     columns: { gutter, glyph, slot, gaps, meta, body, title, subtitle },
   }
 }

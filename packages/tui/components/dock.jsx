@@ -7,6 +7,8 @@ import { Button, ClickRow } from "./controls.jsx"
 import { GLYPH } from "../lib/design.js"
 import { liveActivity } from "../lib/activity.js"
 import { fit } from "../lib/layout.js"
+import { sessionHealth } from "../lib/session-health.js"
+import { workspaceSnapshot } from "../lib/workspace.js"
 import { spinnerFrame } from "../lib/motion.js"
 import { useClock } from "./runtime.jsx"
 
@@ -26,34 +28,34 @@ function SessionRow(props) {
   const tokens = () => props.tokens
   const session = () => props.session
   const clock = useClock(() => session().running === true && tokens().motion !== false)
-  const activity = createMemo(() => {
-    if (!props.api || !session().running) return { busy: false, headline: "", events: [] }
-    void clock()
-    return liveActivity(props.api, session().id, { limit: 1 }) ?? { busy: false, headline: "", events: [] }
-  })
-  const glyph = createMemo(() => {
-    if (session().running) return spinnerFrame(clock(), undefined, 90, tokens().motion !== false)
-    if (session().active) return GLYPH.diamond
-    return GLYPH.bullet
-  })
+  // Animation ticks must only update the glyph. Re-reading the transcript on
+  // every 80ms frame multiplied message allocations by every mounted row.
+  const activity = createMemo(() => liveActivity(props.api, session().id, { limit: 1 }))
+  const snapshot = createMemo(() => workspaceSnapshot(props.api, session().id))
+  const health = createMemo(() => sessionHealth({
+    activity: activity(),
+    attention: snapshot().attention,
+    running: session().running,
+    terminalState: session().terminalState,
+    completed: session().completed,
+    completedAt: session().completedAt,
+    now: Date.now(),
+  }))
+  const glyph = createMemo(() => health().pulse ? spinnerFrame(clock(), undefined, 90, tokens().motion !== false) : health().state === "completed" ? GLYPH.ok : health().state === "error" || health().state === "stalled" ? GLYPH.fail : health().state === "needs-input" ? GLYPH.pointer : session().active ? GLYPH.diamond : GLYPH.bullet)
+  const color = createMemo(() => health().tone === "warning" ? tokens().warning : health().tone === "error" ? tokens().error : health().tone === "success" ? tokens().success : health().tone === "accent" ? tokens().accent : tokens().faint)
+  const needsDetail = createMemo(() => health().state === "error" || health().state === "stalled" || health().state === "needs-input")
 
   return (
     <box flexDirection="column" flexShrink={0}>
       <ClickRow width={props.width} tokens={tokens()} selected={session().active} onSelect={() => props.onOpen?.(session())}>
         <text wrapMode="none">
           <span style={{ fg: tokens().borderFaint }}>{"  └ "}</span>
-          <span style={{ fg: session().running ? tokens().accent : session().active ? tokens().success : tokens().faint }}>
-            {glyph()}
-          </span>
-          <span style={{ fg: session().active ? tokens().text : tokens().muted }}>
-            {" "}{fit(session().title, Math.max(6, props.width - 11))}
-          </span>
+          <span style={{ fg: color() }}>{glyph()}</span>
+          <span style={{ fg: session().active ? tokens().text : tokens().muted }}>{" "}{fit(session().title, Math.max(6, props.width - 11))}</span>
         </text>
       </ClickRow>
-      <Show when={activity().busy}>
-        <text fg={tokens().accent} wrapMode="none">
-          {"      "}{fit(activity().headline, Math.max(6, props.width - 8))}
-        </text>
+      <Show when={needsDetail()}>
+        <text fg={color()} wrapMode="none">{"      "}{fit(health().detail, Math.max(6, props.width - 8))}</text>
       </Show>
     </box>
   )
@@ -138,11 +140,11 @@ function RecentChatRow(props) {
   const session = () => props.session
   const tokens = () => props.tokens
   const clock = useClock(() => session().running === true && tokens().motion !== false)
-  const glyph = createMemo(() => {
-    if (session().running) return spinnerFrame(clock(), undefined, 90, tokens().motion !== false)
-    if (session().active) return GLYPH.diamond
-    return GLYPH.bullet
-  })
+  const activity = createMemo(() => liveActivity(props.api, session().id, { limit: 1 }))
+  const snapshot = createMemo(() => workspaceSnapshot(props.api, session().id))
+  const health = createMemo(() => sessionHealth({ activity: activity(), attention: snapshot().attention, running: session().running, terminalState: session().terminalState, completed: session().completed, completedAt: session().completedAt, now: Date.now() }))
+  const glyph = createMemo(() => health().pulse ? spinnerFrame(clock(), undefined, 90, tokens().motion !== false) : health().state === "completed" ? GLYPH.ok : health().state === "error" || health().state === "stalled" ? GLYPH.fail : health().state === "needs-input" ? GLYPH.pointer : session().active ? GLYPH.diamond : GLYPH.bullet)
+  const color = createMemo(() => health().tone === "warning" ? tokens().warning : health().tone === "error" ? tokens().error : health().tone === "success" ? tokens().success : health().tone === "accent" ? tokens().accent : tokens().faint)
   return (
     <ClickRow
       width={props.width}
@@ -150,9 +152,7 @@ function RecentChatRow(props) {
       selected={session().active}
       onSelect={() => props.onOpen?.(session())}
     >
-      <text fg={session().running ? tokens().accent : tokens().faint} wrapMode="none">
-        {glyph()}
-      </text>
+      <text fg={color()} wrapMode="none">{glyph()}</text>
       <text fg={session().active ? tokens().text : tokens().muted} wrapMode="none">
         {fit(session().title, Math.max(8, props.width - 15))}
       </text>
@@ -247,6 +247,7 @@ export function Dock(props) {
               <For each={recentChats()}>
                 {(session) => (
                   <RecentChatRow
+                    api={props.api}
                     tokens={tokens()}
                     session={session}
                     width={width()}

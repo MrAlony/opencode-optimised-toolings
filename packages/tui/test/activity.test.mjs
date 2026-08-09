@@ -122,6 +122,36 @@ test("an idle session falls back to the assistant's last words", () => {
   })
   assert.equal(activity.headline, "All tests pass.", "the first meaningful line is used")
   assert.equal(activity.assistantText, "All tests pass.\nDetails follow.")
+  assert.equal(activity.assistantCompleted, false)
+})
+
+test("only the latest turn contributes completion, errors, and current activity", () => {
+  const activity = sessionActivity({
+    messages: [
+      { id: "old", info: { role: "assistant", time: { created: 1, completed: 2 } } },
+      { id: "current", info: { role: "user", time: { created: 3 } } },
+    ],
+    busy: true,
+    getParts: (id) => id === "old" ? [toolPart("old-failure", "edit", {}, "error", 2)] : [],
+  })
+  assert.equal(activity.assistantCompleted, false)
+  assert.equal(activity.latestTool, null, "an older turn cannot become the current error")
+  assert.equal(activity.latestToolFailed, false)
+  assert.equal(activity.currentTurnID, "current")
+  assert.equal(activity.inFlight, true)
+  assert.equal(activity.headline, "Thinking")
+})
+
+test("assistant completion is explicit current-turn evidence", () => {
+  const activity = sessionActivity({
+    messages: [{ id: "m1", info: { role: "assistant", time: { completed: 123 } } }],
+    getParts: () => [{ type: "text", text: "Done" }],
+  })
+  assert.equal(activity.assistantCompleted, true)
+  assert.equal(activity.lastRole, "assistant")
+  assert.equal(activity.currentTurnID, "m1")
+  assert.equal(activity.inFlight, false)
+  assert.equal(activity.hydrated, true)
 })
 
 test("a long assistant reply is truncated for the headline", () => {
@@ -166,6 +196,34 @@ test("malformed input never throws", () => {
   }
 })
 
+test("liveActivity bounds host transcript materialization to the latest twelve messages", () => {
+  const messages = Array.from({ length: 5_000 }, (_, index) => ({ id: `m${index}`, role: index === 4_999 ? "assistant" : "user" }))
+  let iterated = 0
+  const source = {
+    length: messages.length,
+    slice(start) {
+      assert.equal(start, -12)
+      return messages.slice(start)
+    },
+    [Symbol.iterator]() {
+      iterated += 1
+      return messages[Symbol.iterator]()
+    },
+  }
+  const api = {
+    state: {
+      session: {
+        messages: () => source,
+        status: () => ({ type: "busy" }),
+      },
+      part: () => [],
+    },
+  }
+  const activity = liveActivity(api, "s1")
+  assert.equal(activity.currentTurnID, "m4999")
+  assert.equal(iterated, 0, "array-like host state must not be copied in full")
+})
+
 test("liveActivity reads host state and degrades safely", () => {
   const api = {
     state: {
@@ -194,4 +252,5 @@ test("liveActivity reads host state and degrades safely", () => {
     },
   }
   assert.equal(liveActivity(broken, "s1").headline, "Idle")
+  assert.equal(liveActivity(broken, "s1").hydrated, false)
 })

@@ -65,9 +65,14 @@ export function contextUsage(api, sessionID) {
   const messages = list(() => api?.state?.session?.messages?.(sessionID))
   const session = safe(() => api?.state?.session?.get?.(sessionID), undefined)
   const cost = Number(session?.cost ?? 0)
-  const last = [...messages]
-    .reverse()
-    .find((item) => item?.role === "assistant" && Number(item?.tokens?.output ?? 0) > 0)
+  let last
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index]
+    if (item?.role === "assistant" && Number(item?.tokens?.output ?? 0) > 0) {
+      last = item
+      break
+    }
+  }
   if (!last) return { tokens: 0, percent: null, cost, model: "", provider: "" }
   const tokens =
     Number(last.tokens?.input ?? 0) +

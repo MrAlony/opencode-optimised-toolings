@@ -9,6 +9,7 @@ import { createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import {
   buildProjectModel,
+  canonicalProjectInventory,
   flattenProjectSessions,
   normalizeProjectPreferenceKeys,
   projectStateKey,
@@ -16,8 +17,10 @@ import {
   summarizeProjects,
 } from "../lib/projects.js"
 import { listDiff, listMessages, listProjects, listSessions, listStatuses, listTodos } from "../lib/sdk.js"
-import { durableStatus, mergeStatus } from "../lib/presence.js"
+import { DURABLE_BUSY_MAX_AGE_MS, durableStatus, mergeStatus } from "../lib/presence.js"
+import { liveActivity } from "../lib/activity.js"
 import { clearPresenceLease, publishPresenceLease, readPresenceLeases, readPresenceSnapshot } from "../lib/presence-lease.js"
+import { acknowledgeTerminalReceipt, clearCompletionReceipt, publishCompletionReceipt, publishTerminalReceipt, readCompletionReceipts } from "../lib/completion-receipt.js"
 import { decisionRecord, normalizeDeliveryState } from "../lib/command-center.js"
 import {
   activateSlot,
@@ -63,6 +66,8 @@ const REFRESH_DEBOUNCE_MS = 60
 const STRUCTURAL_RECONCILE_INTERVAL_MS = 45_000
 const PRESENCE_RECONCILE_INTERVAL_MS = 10_000
 const PRESENCE_EVENT_DEBOUNCE_MS = 40
+const COMPLETION_RECONCILE_INTERVAL_MS = 500
+const COMPLETION_CONFIRM_DELAYS_MS = [0, 80, 240, 720]
 const SDK_CONCURRENCY = 4
 const PRESENCE_RECENT_LIMIT = 12
 const PRESENCE_ROTATING_LIMIT = 8
@@ -159,8 +164,12 @@ function sharedPresence(statuses, now = Date.now()) {
   for (const [id, status] of Object.entries(statuses ?? {})) {
     const type = String(status?.type ?? status ?? "")
     if (!["busy", "retry", "compacting"].includes(type)) continue
-    const observedAt = status?.source === "shared-presence" && Number.isFinite(Number(status?.observedAt))
-      ? Number(status.observedAt)
+    // Persistence must preserve the producer/inference timestamp. Re-stamping a
+    // carried SDK, transcript, host, or lease observation during an unrelated
+    // structural write would silently extend stale-working authority.
+    const candidateObservedAt = Number(status?.observedAt)
+    const observedAt = Number.isFinite(candidateObservedAt) && candidateObservedAt > 0
+      ? candidateObservedAt
       : now
     if (now - observedAt > PRESENCE_LEASE_MS) continue
     out[id] = { type, observedAt }
@@ -179,6 +188,14 @@ function portfolioSnapshot(projects, sessions, statuses = {}, now = Date.now()) 
   }
 }
 
+function latestAssistantTurnCompleted(messages) {
+  const rows = Array.from(messages ?? []).filter(Boolean)
+  if (!rows.length) return false
+  const latest = rows.toSorted((a, b) => Number((a?.info ?? a)?.time?.created ?? 0) - Number((b?.info ?? b)?.time?.created ?? 0)).at(-1)
+  const info = latest?.info ?? latest
+  return String(info?.role ?? "") === "assistant" && Number(info?.time?.completed ?? 0) > 0
+}
+
 function statusEventPayload(event) {
   const properties = event?.properties ?? event?.payload?.properties
   const sessionID = String(properties?.sessionID ?? "").trim()
@@ -190,23 +207,52 @@ function statusEventPayload(event) {
 function mergePresenceSessions(current, incoming) {
   const byID = new Map(Array.from(current ?? []).filter((session) => session?.id).map((session) => [session.id, session]))
   for (const session of incoming ?? []) {
-    if (!session?.id || byID.has(session.id)) continue
-    byID.set(session.id, session)
+    if (!session?.id) continue
+    const previous = byID.get(session.id)
+    // Real SDK rows replace lease-only/cached metadata. Partial discovery still
+    // retains every session not covered by this response.
+    byID.set(session.id, previous ? { ...previous, ...session } : session)
   }
   return [...byID.values()]
 }
 
+function reconcileSessionInventory(current, incoming, complete) {
+  if (incoming === undefined) return Array.from(current ?? [])
+  return complete ? Array.from(incoming) : mergePresenceSessions(current, incoming)
+}
+
+function observedStatus(status, source, now = Date.now()) {
+  const type = String(status?.type ?? status ?? "")
+  if (!["busy", "retry", "compacting"].includes(type)) return { type: type || "idle", source, observedAt: now }
+  if (status && typeof status === "object") {
+    return { ...status, type, source: String(status.source ?? source), observedAt: Number(status.observedAt) || now }
+  }
+  return { type, source, observedAt: now }
+}
+
+function observedStatusMap(value, source, now = Date.now()) {
+  const out = {}
+  for (const [id, status] of Object.entries(value ?? {})) out[id] = observedStatus(status, source, now)
+  return out
+}
+
 function mergePresenceStatuses(current, incoming, now = Date.now()) {
   const merged = {}
-  for (const [id, status] of Object.entries(current ?? {})) {
-    const type = String(status?.type ?? status ?? "")
-    if (!["busy", "retry", "compacting"].includes(type)) continue
-    if (status?.source === "shared-presence" && now - Number(status?.observedAt ?? 0) > PRESENCE_LEASE_MS) continue
+  for (const [id, raw] of Object.entries(current ?? {})) {
+    const status = observedStatus(raw, String(raw?.source ?? "cache"), Number(raw?.observedAt) || 0)
+    if (!["busy", "retry", "compacting"].includes(status.type)) continue
+    if (!status.observedAt || now - status.observedAt > PRESENCE_LEASE_MS) continue
     merged[id] = status
   }
-  for (const [id, status] of Object.entries(incoming ?? {})) {
-    const type = String(status?.type ?? status ?? "")
-    if (["busy", "retry", "compacting"].includes(type)) merged[id] = status
+  for (const [id, raw] of Object.entries(incoming ?? {})) {
+    const type = String(raw?.type ?? raw ?? "")
+    if (type === "idle") {
+      delete merged[id]
+      continue
+    }
+    if (!["busy", "retry", "compacting"].includes(type)) continue
+    const status = observedStatus(raw, String(raw?.source ?? "live"), now)
+    if (now - status.observedAt <= PRESENCE_LEASE_MS) merged[id] = status
   }
   return merged
 }
@@ -268,22 +314,30 @@ async function mapSettledBounded(items, worker, concurrency = SDK_CONCURRENCY) {
   return results
 }
 
-function mergeProjects(serverProjects, registeredDirectories) {
-  const rows = Array.from(serverProjects ?? [])
-  const known = new Set(rows.map((project) => directoryKey(project?.worktree)).filter(Boolean))
-  for (const worktree of normalizeDirectories(registeredDirectories)) {
-    const key = directoryKey(worktree)
-    if (known.has(key)) continue
-    rows.push({ id: `alonix:${key}`, worktree, name: undefined, manual: true, time: { created: 0, updated: 0 }, sandboxes: [] })
-    known.add(key)
-  }
-  return rows
+function mergeProjects(serverProjects, registeredDirectories, previousProjects = []) {
+  const manual = normalizeDirectories(registeredDirectories).map((worktree) => ({
+    id: `alonix:${directoryKey(worktree)}`,
+    worktree,
+    name: undefined,
+    manual: true,
+    time: { created: 0, updated: 0 },
+    sandboxes: [],
+  }))
+  return canonicalProjectInventory(previousProjects, manual, serverProjects)
 }
 
 async function loadPortfolio(api, registeredDirectories = [], activeSessionID = null, previousSessions = [], intelligenceOffset = 0, onCore = null) {
   const client = api?.client
-  if (!client) return { projects: [], sessions: [], errors: [] }
+  if (!client) return { projects: [], sessions: [], sessionsComplete: false, errors: [] }
 
+  // Solid store arrays are live proxies. Capture immutable value snapshots before
+  // any awaited work or early `onCore` publication can reconcile the store and
+  // mutate the very fallback data this load still needs later.
+  const previousSessionSnapshot = Array.from(previousSessions ?? []).map((session) => ({
+    ...session,
+    alonixTodos: Array.from(session?.alonixTodos ?? []),
+    alonixFiles: Array.from(session?.alonixFiles ?? []),
+  }))
   const errors = []
   const unwrap = (settled, label) => {
     if (settled.status === "rejected") {
@@ -296,7 +350,7 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   const directoryLabel = (directory) => directory || "current directory"
   const knownDirectories = normalizeDirectories([
     ...registeredDirectories,
-    ...Array.from(previousSessions ?? []).map((session) => session?.directory),
+    ...previousSessionSnapshot.map((session) => session?.directory),
   ])
   const earlyTargets = ["", ...knownDirectories]
   const projectRequest = Promise.allSettled([
@@ -326,13 +380,14 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
     for (const session of rows) if (session?.id && !earlyByID.has(session.id)) earlyByID.set(session.id, session)
   })
   const earlyStatuses = {}
-  for (const result of earlyStatusSettled) if (result.status === "fulfilled") Object.assign(earlyStatuses, result.value ?? {})
+  for (const result of earlyStatusSettled) if (result.status === "fulfilled") Object.assign(earlyStatuses, observedStatusMap(result.value, "sdk"))
   if (typeof onCore === "function") {
-    try { onCore({ projects: mergeProjects([], registeredDirectories), sessions: earlyAnySucceeded ? [...earlyByID.values()] : undefined, statuses: earlyStatuses, errors: [...errors] }) } catch {}
+    try { onCore({ projects: mergeProjects([], registeredDirectories), sessions: earlyAnySucceeded ? [...earlyByID.values()] : undefined, sessionsComplete: false, statuses: earlyStatuses, errors: [...errors] }) } catch {}
   }
 
   const projectSettled = await projectRequest
   const serverProjects = unwrap(projectSettled[0], "projects")
+  const projectsComplete = serverProjects !== undefined
   const projects = mergeProjects(serverProjects, registeredDirectories)
   const earlyKeys = new Set(earlyTargets.map(directoryKey))
   const lateTargets = []
@@ -375,16 +430,17 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   const liveStatuses = {}
   statusSettled.forEach((result) => {
     if (result.status !== "fulfilled") return
-    Object.assign(liveStatuses, result.value ?? {})
+    Object.assign(liveStatuses, observedStatusMap(result.value, "sdk"))
   })
 
   const sessions = anySucceeded ? [...byID.values()] : undefined
+  const sessionsComplete = projectsComplete && settled.length > 0 && settled.every((result) => result.status === "fulfilled")
 
   // Publish structural data and live server status before transcript and
   // delivery enrichment. Those secondary reads can be slow or unavailable, but
   // must never delay an already-running session appearing in the dock/overview.
   if (typeof onCore === "function") {
-    try { onCore({ projects, sessions, statuses: liveStatuses, errors: [...errors] }) } catch {}
+    try { onCore({ projects, sessions, sessionsComplete, statuses: liveStatuses, errors: [...errors] }) } catch {}
   }
 
   const durableStatuses = {}
@@ -420,7 +476,7 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
   // portfolio snapshot, so warm starts do not wait for the same SDK calls.
   let enrichedSessions = sessions
   if (sessions) {
-    const previous = new Map(Array.from(previousSessions ?? []).map((session) => [session?.id, session]))
+    const previous = new Map(previousSessionSnapshot.map((session) => [session?.id, session]))
     enrichedSessions = sessions.map((session) => ({
       ...session,
       alonixTodos: Array.from(previous.get(session.id)?.alonixTodos ?? []),
@@ -470,6 +526,7 @@ async function loadPortfolio(api, registeredDirectories = [], activeSessionID = 
     projects,
     // `undefined` means "nothing loaded", which preserves the previous list.
     sessions: enrichedSessions,
+    sessionsComplete,
     statuses,
     errors,
   }
@@ -491,7 +548,7 @@ async function loadPresence(api, projects, sessions, activeSessionID = null, rot
   ))
   const live = {}
   for (const result of statusResults) {
-    if (result.status === "fulfilled") Object.assign(live, result.value ?? {})
+    if (result.status === "fulfilled") Object.assign(live, observedStatusMap(result.value, "sdk"))
   }
   if (typeof onLive === "function" && Object.keys(live).length) {
     try { onLive(live) } catch {}
@@ -559,6 +616,7 @@ export function createProjectStore(api) {
     projects: mergeProjects(initialSnapshot?.projects ?? [], initialRegisteredProjects),
     sessions: mergePresenceSessions(initialSnapshot?.sessions ?? [], initialPresence.sessions),
     statuses: mergePresenceStatuses(initialSnapshot?.statuses ?? {}, initialPresence.statuses),
+    completions: readCompletionReceipts(api),
     registeredProjects: initialRegisteredProjects,
     selectedProjectID: typeof initialSelection?.id === "string" ? initialSelection.id : null,
     selectedProjectDirectory: typeof initialSelection?.directory === "string" ? initialSelection.directory : "",
@@ -583,6 +641,12 @@ export function createProjectStore(api) {
   let intelligenceRotation = 0
   let disposed = false
   let persistenceHydrated = initiallyHydrated
+  const observedWorking = new Set()
+  const pendingCompletion = new Set()
+  const completionTimers = new Set()
+  for (const [id, status] of Object.entries(store.statuses)) {
+    if (["busy", "retry", "compacting"].includes(String(status?.type ?? status ?? ""))) observedWorking.add(id)
+  }
   const pendingPersistence = new Map()
   let initialSettled = Boolean(initialSnapshot)
   let resolveInitialLoad
@@ -604,12 +668,153 @@ export function createProjectStore(api) {
     writeKv(api, key, value)
   }
 
+  function currentTurnWorkEvidence(sessionID, now = Date.now()) {
+    const activity = liveActivity(api, sessionID)
+    const progressAt = Math.max(Number(activity.currentTurnStartedAt) || 0, Number(activity.progressAt) || 0)
+    if (!activity.hydrated || !activity.inFlight || activity.assistantCompleted || !progressAt) return null
+    if (now - progressAt > DURABLE_BUSY_MAX_AGE_MS) return null
+    return { activity, progressAt }
+  }
+
+  function activeStatusSignal(sessionID, now = Date.now()) {
+    const id = String(sessionID ?? "").trim()
+    if (!id) return null
+    const candidates = [store.statuses[id], readPresenceLeases(api)[id]]
+    try {
+      const host = api?.state?.session?.status?.(id)
+      if (["busy", "retry", "compacting"].includes(String(host?.type ?? ""))) candidates.push(observedStatus(host, "host-state", now))
+    } catch {}
+    return candidates
+      .filter((status) => ["busy", "retry", "compacting"].includes(String(status?.type ?? status ?? "")))
+      .map((status) => observedStatus(status, String(status?.source ?? "presence"), Number(status?.observedAt) || now))
+      .filter((status) => now - status.observedAt <= PRESENCE_LEASE_MS)
+      .toSorted((a, b) => b.observedAt - a.observedAt)[0] ?? null
+  }
+
+  function recoverTerminalWork(sessionID, receipt = store.completions[sessionID], now = Date.now()) {
+    const id = String(sessionID ?? "").trim()
+    if (!id || !receipt) return false
+    const evidence = currentTurnWorkEvidence(id, now)
+    const signal = activeStatusSignal(id, now)
+    const terminalAt = Number(receipt?.occurredAt ?? receipt?.completedAt ?? 0)
+    if (!evidence || !signal || evidence.progressAt <= terminalAt || signal.observedAt <= terminalAt) return false
+    clearCompletionReceipt(api, id)
+    const next = { ...store.completions }
+    delete next[id]
+    setStore("completions", reconcile(next))
+    observedWorking.add(id)
+    setStore("statuses", id, signal)
+    return true
+  }
+
+  function syncCompletionReceipts() {
+    const next = readCompletionReceipts(api)
+    for (const [id, receipt] of Object.entries(next)) {
+      if (recoverTerminalWork(id, receipt)) delete next[id]
+    }
+    if (JSON.stringify(next) !== JSON.stringify(store.completions)) setStore("completions", reconcile(next))
+    return next
+  }
+
+  function setTerminalState(sessionID, state, options = {}) {
+    const id = String(sessionID ?? "").trim()
+    if (!id) return false
+    pendingCompletion.delete(id)
+    const occurredAt = Number(options.occurredAt ?? Date.now())
+    publishTerminalReceipt(api, id, state, { occurredAt, detail: options.detail })
+    setStore("completions", id, {
+      state,
+      occurredAt,
+      completedAt: state === "completed" ? occurredAt : 0,
+      detail: String(options.detail ?? ""),
+      source: "terminal-receipt",
+    })
+    return true
+  }
+
+  function acknowledgeTerminal(sessionID) {
+    const id = String(sessionID ?? "").trim()
+    if (!id) return false
+    const receipt = store.completions[id] ?? readCompletionReceipts(api)[id]
+    if (!receipt || receipt.state === "seen") return false
+    if (recoverTerminalWork(id, receipt)) return false
+    if (!["completed", "error", "needs-input"].includes(String(receipt.state ?? ""))) return false
+    pendingCompletion.delete(id)
+    const occurredAt = Date.now()
+    acknowledgeTerminalReceipt(api, id, { seenAt: occurredAt })
+    setStore("completions", id, { state: "seen", occurredAt, completedAt: 0, detail: "", source: "terminal-receipt" })
+    return true
+  }
+
+  function markWorking(sessionID, options = {}) {
+    const id = String(sessionID ?? "").trim()
+    if (!id) return
+    observedWorking.add(id)
+    // SDK polls and host snapshots may replay the previous run. Only a producer
+    // event proves a new lifecycle and is allowed to replace terminal state.
+    if (options.authoritative !== true) return
+    clearCompletionReceipt(api, id)
+    if (store.completions[id]) {
+      const next = { ...store.completions }
+      delete next[id]
+      setStore("completions", reconcile(next))
+    }
+  }
+
+  function hostShowsCompletedTurn(sessionID) {
+    try {
+      return latestAssistantTurnCompleted(api?.state?.session?.messages?.(sessionID) ?? [])
+    } catch {
+      return false
+    }
+  }
+
+  async function confirmCompletion(sessionID, attempt = 0) {
+    const id = String(sessionID ?? "").trim()
+    if (!id || disposed || !pendingCompletion.has(id)) return false
+    if (activeSessionID() === id) {
+      pendingCompletion.delete(id)
+      return false
+    }
+    let completed = hostShowsCompletedTurn(id)
+    if (!completed) {
+      const session = store.sessions.find((item) => item?.id === id)
+      if (session) {
+        try {
+          const messages = await withDeadline((signal) => listMessages(api?.client, session, 1, { signal }), `Completion confirmation (${id})`)
+          completed = latestAssistantTurnCompleted(messages)
+        } catch {}
+      }
+    }
+    if (disposed || !pendingCompletion.has(id)) return false
+    if (completed) {
+      pendingCompletion.delete(id)
+      const completedAt = Date.now()
+      publishCompletionReceipt(api, id, { completedAt })
+      setStore("completions", id, { state: "completed", occurredAt: completedAt, completedAt, source: "terminal-receipt" })
+      return true
+    }
+    const nextAttempt = attempt + 1
+    if (nextAttempt >= COMPLETION_CONFIRM_DELAYS_MS.length) {
+      pendingCompletion.delete(id)
+      return false
+    }
+    const timer = setTimeout(() => {
+      completionTimers.delete(timer)
+      void confirmCompletion(id, nextAttempt)
+    }, COMPLETION_CONFIRM_DELAYS_MS[nextAttempt])
+    timer?.unref?.()
+    completionTimers.add(timer)
+    return false
+  }
+
   function persistPortfolio(projects, sessions, statuses = {}, removedStatusIDs = []) {
     const persisted = normalizePortfolioSnapshot(readKv(api, PORTFOLIO_SNAPSHOT_KEY, null))
     const mergedStatuses = { ...(persisted?.statuses ?? {}) }
     for (const [id, status] of Object.entries(statuses ?? {})) {
       const type = String(status?.type ?? status ?? "")
       if (["busy", "retry", "compacting"].includes(type)) mergedStatuses[id] = status
+      else if (type === "idle") delete mergedStatuses[id]
     }
     for (const id of removedStatusIDs) delete mergedStatuses[id]
     persist(PORTFOLIO_SNAPSHOT_KEY, portfolioSnapshot(projects, sessions, mergedStatuses))
@@ -636,7 +841,7 @@ export function createProjectStore(api) {
     if (!pending.has(PORTFOLIO_SNAPSHOT_KEY)) {
       const snapshot = normalizePortfolioSnapshot(readKv(api, PORTFOLIO_SNAPSHOT_KEY, null))
       if (snapshot) {
-        setStore("projects", reconcile(mergeProjects(snapshot.projects, store.registeredProjects), { key: "id" }))
+        setStore("projects", reconcile(mergeProjects(snapshot.projects, store.registeredProjects, store.projects), { key: "id" }))
         const presence = readPresenceSnapshot(api)
         setStore("sessions", reconcile(mergePresenceSessions(snapshot.sessions, presence.sessions), { key: "id" }))
         setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, { ...snapshot.statuses, ...presence.statuses })))
@@ -680,33 +885,44 @@ export function createProjectStore(api) {
     setStore("loading", true)
     if (!store.loadedAt) setStore("phase", "loading")
     try {
-      const applyCore = ({ projects, sessions, statuses, errors }) => {
+      const applyCore = ({ projects, sessions, sessionsComplete, statuses, errors }) => {
         if (disposed) return
-        if (projects) setStore("projects", reconcile(projects, { key: "id" }))
-        if (sessions) {
+        if (projects) setStore("projects", reconcile(mergeProjects(projects, store.registeredProjects, store.projects), { key: "id" }))
+        if (sessions !== undefined) {
           const previous = new Map(store.sessions.map((session) => [session?.id, session]))
           const carried = sessions.map((session) => ({
             ...session,
-            alonixTodos: Array.from(previous.get(session.id)?.alonixTodos ?? []),
-            alonixFiles: Array.from(previous.get(session.id)?.alonixFiles ?? []),
+            alonixTodos: Array.from(session.alonixTodos ?? previous.get(session.id)?.alonixTodos ?? []),
+            alonixFiles: Array.from(session.alonixFiles ?? previous.get(session.id)?.alonixFiles ?? []),
           }))
-          setStore("sessions", reconcile(carried, { key: "id" }))
+          const nextSessions = reconcileSessionInventory(store.sessions, carried, sessionsComplete === true)
+          setStore("sessions", reconcile(nextSessions, { key: "id" }))
           publishHostPresence()
           setStore("loadedAt", Date.now())
           setStore("phase", "ready")
         }
-        if (statuses) setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, statuses)))
+        if (statuses) {
+          for (const [id, status] of Object.entries(statuses)) {
+            if (["busy", "retry", "compacting"].includes(String(status?.type ?? status ?? ""))) markWorking(id, { authoritative: false })
+          }
+          setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, statuses)))
+        }
         if (errors?.length) setStore("error", errors.join("; "))
         settleInitialLoad()
       }
-      const { projects, sessions, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID(), store.sessions, intelligenceRotation, applyCore)
+      const { projects, sessions, sessionsComplete, statuses, errors } = await loadPortfolio(api, store.registeredProjects, activeSessionID(), store.sessions, intelligenceRotation, applyCore)
       intelligenceRotation = (intelligenceRotation + DELIVERY_ROTATING_LIMIT) % Math.max(1, sessions?.length ?? store.sessions.length)
       if (disposed) return
       // Only overwrite a list that actually loaded, so a partial failure keeps
       // the last good data instead of emptying the workbench.
-      if (projects) setStore("projects", reconcile(projects, { key: "id" }))
-      if (sessions) setStore("sessions", reconcile(sessions, { key: "id" }))
-      if (statuses) setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, statuses)))
+      if (projects) setStore("projects", reconcile(mergeProjects(projects, store.registeredProjects, store.projects), { key: "id" }))
+      if (sessions !== undefined) setStore("sessions", reconcile(reconcileSessionInventory(store.sessions, sessions, sessionsComplete === true), { key: "id" }))
+      if (statuses) {
+        for (const [id, status] of Object.entries(statuses)) {
+          if (["busy", "retry", "compacting"].includes(String(status?.type ?? status ?? ""))) markWorking(id, { authoritative: false })
+        }
+        setStore("statuses", reconcile(mergePresenceStatuses(store.statuses, statuses)))
+      }
       setStore("error", errors.length ? errors.join("; ") : "")
       // Folder metadata can arrive before any chat listing. Only an actual
       // session-list result (including a legitimate empty array) makes zero
@@ -715,7 +931,7 @@ export function createProjectStore(api) {
         const authoritativeProjects = projects ?? store.projects
         setStore("loadedAt", Date.now())
         setStore("phase", "ready")
-        persistPortfolio(authoritativeProjects, sessions, statuses ?? store.statuses)
+        persistPortfolio(authoritativeProjects, reconcileSessionInventory(store.sessions, sessions, sessionsComplete === true), statuses ?? store.statuses)
       } else if (!store.loadedAt) {
         setStore("phase", "error")
       }
@@ -752,21 +968,27 @@ export function createProjectStore(api) {
   function publishHostPresence() {
     if (disposed || !store.sessions.length) return false
     const local = {}
+    const now = Date.now()
     for (const session of store.sessions) {
       if (!session?.id) continue
       try {
         const status = api?.state?.session?.status?.(session.id)
         const type = String(status?.type ?? "")
         if (["busy", "retry", "compacting"].includes(type)) {
-          local[session.id] = status
-          publishPresenceLease(api, session.id, status, { session })
+          const evidence = currentTurnWorkEvidence(session.id, now)
+          if (!evidence) continue
+          const receipt = store.completions[session.id]
+          if (receipt && !recoverTerminalWork(session.id, receipt, now)) continue
+          markWorking(session.id, { authoritative: false })
+          const observed = observedStatus(status, "host-state", now)
+          local[session.id] = observed
+          publishPresenceLease(api, session.id, observed, { session, now: observed.observedAt })
         }
       } catch {}
     }
     if (!Object.keys(local).length) return false
     const merged = mergePresenceStatuses(store.statuses, local)
     setStore("statuses", reconcile(merged))
-    persistPortfolio(store.projects, store.sessions, merged)
     return true
   }
 
@@ -776,18 +998,22 @@ export function createProjectStore(api) {
     if (!payload) return publishHostPresence()
     const next = { ...store.statuses }
     if (["busy", "retry", "compacting"].includes(payload.type)) {
+      markWorking(payload.sessionID, { authoritative: true })
       const session = store.sessions.find((item) => item?.id === payload.sessionID)
-      publishPresenceLease(api, payload.sessionID, payload.status, { session })
-      next[payload.sessionID] = payload.status
+      const observed = observedStatus(payload.status, "live-event")
+      publishPresenceLease(api, payload.sessionID, observed, { session, now: observed.observedAt })
+      next[payload.sessionID] = observed
       setStore("statuses", reconcile(next))
-      persistPortfolio(store.projects, store.sessions, { [payload.sessionID]: payload.status })
       return true
     }
     if (payload.type === "idle") {
       clearPresenceLease(api, payload.sessionID)
       delete next[payload.sessionID]
       setStore("statuses", reconcile(next))
-      persistPortfolio(store.projects, store.sessions, next, [payload.sessionID])
+      if (observedWorking.delete(payload.sessionID)) {
+        pendingCompletion.add(payload.sessionID)
+        void confirmCompletion(payload.sessionID)
+      }
       return true
     }
     return publishHostPresence()
@@ -822,14 +1048,12 @@ export function createProjectStore(api) {
         if (disposed) return
         const merged = mergePresenceStatuses(store.statuses, live)
         setStore("statuses", reconcile(merged))
-        persistPortfolio(store.projects, store.sessions, merged)
       }
       const next = await loadPresence(api, store.projects, store.sessions, activeSessionID(), presenceRotation, publishLive)
       presenceRotation = (presenceRotation + PRESENCE_ROTATING_LIMIT) % Math.max(1, store.sessions.length)
       if (disposed || !Object.keys(next).length) return
       const merged = mergePresenceStatuses(store.statuses, next)
       setStore("statuses", reconcile(merged))
-      persistPortfolio(store.projects, store.sessions, merged)
     } catch {
       // Presence is advisory. Keep the last known state on a transient failure.
     } finally {
@@ -846,13 +1070,12 @@ export function createProjectStore(api) {
   // These are the events that actually change what the sidebar displays.
   const STRUCTURAL_EVENTS = [
     "session.created",
-    "session.updated",
     "session.deleted",
     "session.compacted",
     "project.updated",
     "project.directories.updated",
   ]
-  const PRESENCE_EVENTS = ["session.idle", "session.error", "session.diff"]
+  const PRESENCE_EVENTS = ["session.idle", "session.diff"]
 
   const offs = []
   for (const event of STRUCTURAL_EVENTS) {
@@ -862,6 +1085,32 @@ export function createProjectStore(api) {
     } catch {
       // Unknown event names are ignored; periodic reconciliation still covers them.
     }
+  }
+  try {
+    const off = api?.event?.on?.("session.error", (event) => {
+      const properties = event?.properties ?? event?.payload?.properties
+      const id = String(properties?.sessionID ?? "").trim()
+      if (id) {
+        const detail = String(properties?.error?.message ?? properties?.error ?? "Latest run failed")
+        setTerminalState(id, "error", { detail })
+        const next = { ...store.statuses }
+        delete next[id]
+        setStore("statuses", reconcile(next))
+        clearPresenceLease(api, id)
+      }
+      schedulePresence(event)
+    })
+    if (typeof off === "function") offs.push(off)
+  } catch {}
+  for (const name of ["permission.asked", "question.asked"]) {
+    try {
+      const off = api?.event?.on?.(name, (event) => {
+        const properties = event?.properties ?? event?.payload?.properties
+        const id = String(properties?.sessionID ?? "").trim()
+        if (id) setTerminalState(id, "needs-input", { detail: name === "permission.asked" ? "Permission request waiting" : "Question waiting for your answer" })
+      })
+      if (typeof off === "function") offs.push(off)
+    } catch {}
   }
   try {
     const off = api?.event?.on?.("session.status", (event) => {
@@ -891,6 +1140,10 @@ export function createProjectStore(api) {
     if (!disposed) void load()
   }, STRUCTURAL_RECONCILE_INTERVAL_MS)
   structuralTimer?.unref?.()
+  const completionTimer = setInterval(() => {
+    if (!disposed) syncCompletionReceipts()
+  }, COMPLETION_RECONCILE_INTERVAL_MS)
+  completionTimer?.unref?.()
   const presenceTimer = setInterval(() => {
     if (!disposed) {
       publishHostPresence()
@@ -903,6 +1156,9 @@ export function createProjectStore(api) {
     disposed = true
     clearInterval(structuralTimer)
     clearInterval(presenceTimer)
+    clearInterval(completionTimer)
+    for (const timer of completionTimers) clearTimeout(timer)
+    completionTimers.clear()
     if (hydrationTimer) clearInterval(hydrationTimer)
     if (debounce) clearTimeout(debounce)
     if (presenceDebounce) clearTimeout(presenceDebounce)
@@ -917,13 +1173,34 @@ export function createProjectStore(api) {
 
   const statuses = () => {
     const map = mergePresenceStatuses(readPresenceLeases(api), store.statuses)
+    const now = Date.now()
     for (const session of store.sessions) {
       if (!session?.id) continue
+      const receipt = store.completions[session.id]
+      let evidence = null
       try {
         const status = api?.state?.session?.status?.(session.id)
-        if (status) map[session.id] = mergeStatus(status, map[session.id])
+        const type = String(status?.type ?? "")
+        if (type === "idle") delete map[session.id]
+        else if (["busy", "retry", "compacting"].includes(type)) {
+          evidence = currentTurnWorkEvidence(session.id, now)
+          if (evidence) {
+            const observed = observedStatus(status, "host-state", now)
+            const terminalAt = Number(receipt?.occurredAt ?? receipt?.completedAt ?? 0)
+            if (!receipt || (evidence.progressAt > terminalAt && observed.observedAt > terminalAt)) map[session.id] = observed
+          }
+        }
       } catch {
         // Durable polling still covers sessions owned by another process.
+      }
+      // Terminal receipts mask stale reducer, SDK and cache state. A genuinely
+      // newer hydrated in-flight turn is allowed through immediately; the
+      // reconciliation timer then clears the obsolete receipt on disk.
+      if (receipt) {
+        const signal = map[session.id]
+        if (signal && !evidence) evidence = currentTurnWorkEvidence(session.id, now)
+        const terminalAt = Number(receipt?.occurredAt ?? receipt?.completedAt ?? 0)
+        if (!evidence || !signal || evidence.progressAt <= terminalAt || Number(signal.observedAt) <= terminalAt) delete map[session.id]
       }
     }
     return map
@@ -945,6 +1222,7 @@ export function createProjectStore(api) {
       projects: store.projects,
       sessions: store.sessions,
       statuses: statuses(),
+      completions: store.completions,
       selectedProjectID: store.selectedProjectID,
       selectedProjectDirectory: store.selectedProjectDirectory,
       pinnedProjects: store.pinnedProjects,
@@ -1049,6 +1327,9 @@ export function createProjectStore(api) {
     get registeredProjects() {
       return store.registeredProjects
     },
+    get completions() {
+      return store.completions
+    },
     get selectedProjectID() {
       return store.selectedProjectID
     },
@@ -1078,6 +1359,9 @@ export function createProjectStore(api) {
       ]).finally(() => { if (timer) clearTimeout(timer) })
     },
 
+    acknowledgeCompletion(sessionID) {
+      return acknowledgeTerminal(sessionID)
+    },
     selectProject(project) {
       const row = typeof project === "string"
         ? projectRows().find((item) => item.id === project || item.stateKey === project)
@@ -1133,7 +1417,7 @@ export function createProjectStore(api) {
       setStore("selectedProjectID", id)
       setStore("selectedProjectDirectory", target)
       persist(SELECTED_PROJECT_KEY, { id, directory: target })
-      setStore("projects", reconcile(mergeProjects(store.projects, [target]), { key: "id" }))
+      setStore("projects", reconcile(mergeProjects([], [target], store.projects), { key: "id" }))
       void load()
       return true
     },

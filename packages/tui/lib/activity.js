@@ -78,21 +78,45 @@ function partTime(part) {
  * `getParts` is called per message id so the caller controls how host state is
  * reached; failures are contained and simply yield no parts for that message.
  */
+function messageTail(value, limit = 12) {
+  if (Array.isArray(value)) return value.slice(-limit)
+  if (value && typeof value.slice === "function" && Number.isFinite(Number(value.length))) {
+    return Array.from(value.slice(-limit) ?? [])
+  }
+  const rows = Array.from(value ?? [])
+  return rows.length > limit ? rows.slice(-limit) : rows
+}
+
 export function sessionActivity(input = {}) {
-  const messages = Array.from(input.messages ?? [])
+  const messages = messageTail(input.messages, 12)
   const getParts = typeof input.getParts === "function" ? input.getParts : () => []
   const limit = Math.max(1, Math.floor(Number(input.limit) || 8))
 
   const events = []
   let assistantText = ""
+  let assistantCompleted = false
   let lastRole = ""
+  let currentTurnID = ""
+  let currentTurnStartedAt = 0
+  let currentTurnProgressAt = 0
+  let currentTurnInFlight = false
 
   // Walk from the newest message backwards; a bounded scan keeps this cheap
   // even for very long transcripts.
-  const recent = messages.slice(-12)
+  const recent = messages
+  const currentMessage = recent.at(-1)
+  const currentInfo = currentMessage?.info ?? currentMessage
+  currentTurnID = String(currentMessage?.id ?? "")
+  lastRole = String(currentInfo?.role ?? currentMessage?.role ?? "")
+  currentTurnStartedAt = Number(currentInfo?.time?.created ?? 0) || 0
+  currentTurnProgressAt = Math.max(currentTurnStartedAt, Number(currentInfo?.time?.updated ?? 0) || 0, Number(currentInfo?.time?.completed ?? 0) || 0)
+  assistantCompleted = lastRole === "assistant" && Number(currentInfo?.time?.completed ?? 0) > 0
+  currentTurnInFlight = Boolean(currentTurnID && !assistantCompleted && (lastRole === "user" || lastRole === "assistant"))
+
   for (const message of recent) {
     if (!message?.id) continue
-    lastRole = String(message.role ?? lastRole)
+    const info = message?.info ?? message
+    const role = String(info?.role ?? message?.role ?? "")
     let parts = []
     try {
       parts = Array.from(getParts(message.id) ?? [])
@@ -102,9 +126,9 @@ export function sessionActivity(input = {}) {
 
     for (const part of parts) {
       const type = String(part?.type ?? "")
-      if (type === "text" && message.role === "assistant") {
+      if (type === "text" && role === "assistant") {
         const text = String(part?.text ?? "").trim()
-        if (text) assistantText = text
+        if (text && message.id === currentTurnID) assistantText = text
         continue
       }
       if (type !== "tool" && type !== "tool-invocation") continue
@@ -112,23 +136,32 @@ export function sessionActivity(input = {}) {
       const name = part?.tool ?? part?.toolName ?? part?.name
       const args = part?.state?.input ?? part?.input ?? {}
       const state = partState(part)
+      const time = partTime(part)
+      const current = message.id === currentTurnID
+      if (current) {
+        currentTurnProgressAt = Math.max(currentTurnProgressAt, time)
+        if (state === "running" || state === "pending") currentTurnInFlight = true
+      }
       events.push({
         id: String(part?.id ?? `${message.id}:${events.length}`),
+        messageID: message.id,
+        current,
         tool: String(name ?? ""),
         label: describeTool(name, args),
         state,
         stateLabel: STATE_LABEL[state] ?? state,
         running: state === "running",
         failed: state === "error",
-        time: partTime(part),
+        time,
       })
     }
   }
 
   // Newest first, stable for equal timestamps.
   const ordered = events.slice().reverse()
-  const running = ordered.filter((event) => event.running)
-  const latestTool = ordered[0] ?? null
+  const currentEvents = ordered.filter((event) => event.current)
+  const running = currentEvents.filter((event) => event.running)
+  const latestTool = currentEvents[0] ?? null
 
   return {
     events: ordered.slice(0, limit),
@@ -137,9 +170,16 @@ export function sessionActivity(input = {}) {
     failedCount: ordered.filter((event) => event.failed).length,
     latestTool,
     latestToolFailed: latestTool?.failed === true,
+    hydrated: true,
+    currentTurnID,
+    currentTurnStartedAt,
+    progressAt: currentTurnProgressAt,
+    inFlight: currentTurnInFlight,
     // The single line that answers "what is happening right now".
     headline: headlineFor({ running, events: ordered, assistantText, busy: input.busy === true, lastRole }),
     assistantText,
+    assistantCompleted,
+    lastRole,
   }
 }
 
@@ -181,16 +221,24 @@ export function liveActivity(api, sessionID, options = {}) {
     latestToolFailed: false,
     headline: "Idle",
     assistantText: "",
+    assistantCompleted: false,
+    lastRole: "",
+    hydrated: false,
+    currentTurnID: "",
+    currentTurnStartedAt: 0,
+    progressAt: 0,
+    inFlight: false,
     busy: false,
   }
   if (!api || !sessionID) return empty
 
   let messages = []
   try {
-    messages = Array.from(api.state?.session?.messages?.(sessionID) ?? [])
+    messages = messageTail(api.state?.session?.messages?.(sessionID), 12)
   } catch {
     return empty
   }
+  if (!messages.length) return empty
 
   let busy = false
   try {

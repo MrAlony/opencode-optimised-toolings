@@ -10,7 +10,11 @@ import { agentWindow, missionControlLayout, missionControlModel, missionScrollIn
 import { workspaceSnapshot } from "../lib/workspace.js"
 import { ActivityLine, Button, ClickRow, SegmentedControl } from "./controls.jsx"
 import { Badge, EmptyState, StatusDot } from "./ide-kit.jsx"
-import { useClock } from "./runtime.jsx"
+
+function missionEligible(session) {
+  const terminal = String(session?.terminalState ?? "")
+  return session?.running === true || ["completed", "error", "needs-input"].includes(terminal)
+}
 
 function missionAgent(api, session) {
   const activity = liveActivity(api, session.id, { limit: 8 })
@@ -21,8 +25,14 @@ function missionAgent(api, session) {
     headline: activity.headline,
     events: activity.events,
     failedCount: activity.failedCount,
+    latestTool: activity.latestTool,
     latestToolFailed: activity.latestToolFailed,
+    runningCount: activity.runningCount,
+    hydrated: activity.hydrated,
+    progressAt: activity.progressAt,
+    inFlight: activity.inFlight,
     attention: snapshot.attention,
+    terminalState: session.terminalState,
     activeTodos: snapshot.todos.length ? snapshot.activeTodos : Array.from(session.todos ?? []).filter((item) => item?.status !== "completed" && item?.status !== "cancelled").length,
     currentTodo: snapshot.currentTodo ?? Array.from(session.todos ?? []).find((item) => item?.status === "in_progress") ?? Array.from(session.todos ?? [])[0] ?? null,
     changedFiles: snapshot.changedFiles || session.changedFiles,
@@ -33,9 +43,9 @@ function missionAgent(api, session) {
 function FocusPanel(props) {
   const agent = () => props.agent
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={0} border borderStyle="rounded" borderColor={agent().needsAttention ? props.tokens.warning : agent().hasError || agent().stalled ? props.tokens.error : agent().collision ? props.tokens.warning : props.tokens.accent} backgroundColor={props.tokens.panel}>
+    <box flexDirection="column" flexGrow={1} minHeight={0} border borderStyle="rounded" borderColor={agent().tone === "warning" ? props.tokens.warning : agent().tone === "error" ? props.tokens.error : agent().tone === "success" ? props.tokens.success : agent().collision ? props.tokens.warning : props.tokens.accent} backgroundColor={props.tokens.panel}>
       <box flexDirection="row" height={2} flexShrink={0} paddingLeft={1} paddingRight={1} alignItems="center" backgroundColor={props.tokens.surface} gap={1}>
-        <StatusDot tokens={props.tokens} tone={agent().needsAttention ? "warning" : agent().hasError || agent().stalled ? "error" : "accent"} pulse={agent().running} />
+        <StatusDot tokens={props.tokens} tone={agent().tone} pulse={agent().health?.pulse === true} glyph={agent().completed ? GLYPH.ok : undefined} />
         <box flexDirection="column" flexGrow={1} minWidth={0}>
           <text fg={props.tokens.text} wrapMode="none"><b>{fit(agent().title, Math.max(14, props.width - 24))}</b></text>
           <text fg={props.tokens.faint} wrapMode="none">{fit(agent().projectName || agent().directory || "", Math.max(12, props.width - 20))}</text>
@@ -46,11 +56,12 @@ function FocusPanel(props) {
       <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingTop={1} gap={1}>
         <text fg={props.tokens.muted}>Current objective</text>
         <text fg={props.tokens.text} wrapMode="wrap">{agent().currentTodo?.content || agent().headline || "Working in this chat"}</text>
-        <ActivityLine tokens={props.tokens} busy={agent().busy} width={Math.max(12, props.width - 7)}>{agent().headline}</ActivityLine>
+        <ActivityLine tokens={props.tokens} busy={agent().health?.pulse === true} width={Math.max(12, props.width - 7)}>{agent().health?.detail || agent().headline}</ActivityLine>
         <box flexDirection="row" gap={1} flexWrap="wrap">
           <Show when={agent().attention > 0}><Badge tokens={props.tokens} tone="warning">{agent().attention} need you</Badge></Show>
           <Show when={agent().hasError}><Badge tokens={props.tokens} tone="error">latest tool failed</Badge></Show>
           <Show when={agent().stalled}><Badge tokens={props.tokens} tone="error">possibly stalled</Badge></Show>
+          <Show when={agent().completed}><Badge tokens={props.tokens} tone="success">work completed</Badge></Show>
           <Show when={agent().collision}><Badge tokens={props.tokens} tone="warning">file overlap</Badge></Show>
           <Show when={agent().activeTodos > 0}><Badge tokens={props.tokens} tone="accent">{agent().activeTodos} todos</Badge></Show>
           <Show when={agent().changedFiles > 0}><Badge tokens={props.tokens} tone="neutral">{agent().changedFiles} changed</Badge></Show>
@@ -68,17 +79,17 @@ function FocusPanel(props) {
 
 function AgentCard(props) {
   const agent = () => props.agent
-  const tone = () => agent().needsAttention ? "warning" : agent().hasError || agent().stalled ? "error" : agent().collision ? "warning" : "accent"
+  const tone = () => agent().tone ?? (agent().collision ? "warning" : "accent")
   return (
-    <box flexDirection="column" flexShrink={0} width={props.width} minHeight={props.density === "compact" ? 5 : 9} border borderStyle="rounded" borderColor={tone() === "warning" ? props.tokens.warning : tone() === "error" ? props.tokens.error : props.tokens.accent} backgroundColor={props.tokens.panel}>
+    <box flexDirection="column" flexShrink={0} width={props.width} minHeight={props.density === "compact" ? 5 : 9} border borderStyle="rounded" borderColor={tone() === "warning" ? props.tokens.warning : tone() === "error" ? props.tokens.error : tone() === "success" ? props.tokens.success : props.tokens.accent} backgroundColor={props.tokens.panel}>
       <ClickRow tokens={props.tokens} width={Math.max(1, props.width - 2)} selected={props.selected} onHover={props.onHover} onSelect={() => props.onFocus?.(agent())}>
-        <StatusDot tokens={props.tokens} tone={tone()} pulse={agent().running} />
+        <StatusDot tokens={props.tokens} tone={tone()} pulse={agent().health?.pulse === true} glyph={agent().completed ? GLYPH.ok : undefined} />
         <box flexDirection="column" flexGrow={1} minWidth={0}>
           <text fg={props.tokens.text} wrapMode="none"><b>{fit(agent().title, Math.max(8, props.width - 14))}</b></text>
           <text fg={props.tokens.faint} wrapMode="none">{fit(agent().projectName || agent().directory || "", Math.max(8, props.width - 10))}</text>
         </box>
       </ClickRow>
-      <box paddingLeft={1} paddingRight={1} paddingTop={1}><ActivityLine tokens={props.tokens} busy={agent().busy} width={Math.max(8, props.width - 5)}>{agent().headline}</ActivityLine></box>
+      <box paddingLeft={1} paddingRight={1} paddingTop={1}><ActivityLine tokens={props.tokens} busy={agent().health?.pulse === true} width={Math.max(8, props.width - 5)}>{agent().health?.detail || agent().headline}</ActivityLine></box>
       <Show when={props.density !== "compact"}>
         <box flexDirection="column" flexGrow={1} minHeight={0} paddingLeft={2} paddingTop={1}>
           <For each={agent().events.slice(0, props.density === "detailed" ? 6 : 3)}>{(event) => <text wrapMode="none"><span style={{ fg: event.running ? props.tokens.accent : event.failed ? props.tokens.error : props.tokens.success }}>{event.running ? GLYPH.pointer : event.failed ? GLYPH.fail : GLYPH.ok}</span><span style={{ fg: event.running ? props.tokens.text : props.tokens.muted }}>{" "}{fit(event.label, Math.max(8, props.width - 7))}</span></text>}</For>
@@ -88,6 +99,7 @@ function AgentCard(props) {
         <Show when={agent().needsAttention}><Badge tokens={props.tokens} tone="warning">needs you</Badge></Show>
         <Show when={agent().hasError}><Badge tokens={props.tokens} tone="error">tool failed</Badge></Show>
         <Show when={agent().stalled}><Badge tokens={props.tokens} tone="error">stalled?</Badge></Show>
+        <Show when={agent().completed}><Badge tokens={props.tokens} tone="success">completed</Badge></Show>
         <Show when={agent().collision}><Badge tokens={props.tokens} tone="warning">overlap</Badge></Show>
         <box flexGrow={1} />
         <Show when={agent().changedFiles > 0}><text fg={props.tokens.faint}>{agent().changedFiles} files</text></Show>
@@ -98,10 +110,10 @@ function AgentCard(props) {
 
 function AgentTableRow(props) {
   const agent = () => props.agent
-  const tone = () => agent().needsAttention ? "warning" : agent().hasError || agent().stalled ? "error" : agent().collision ? "warning" : "accent"
+  const tone = () => agent().tone ?? (agent().collision ? "warning" : "accent")
   return (
     <ClickRow tokens={props.tokens} width={props.width} selected={props.selected} onHover={props.onHover} onSelect={() => props.onFocus?.(agent())}>
-      <StatusDot tokens={props.tokens} tone={tone()} pulse={agent().running} />
+      <StatusDot tokens={props.tokens} tone={tone()} pulse={agent().health?.pulse === true} glyph={agent().completed ? GLYPH.ok : undefined} />
       <text fg={props.tokens.text} wrapMode="none"><b>{fit(agent().title, Math.max(10, Math.floor(props.width * 0.24)))}</b></text>
       <text fg={props.tokens.faint} wrapMode="none">{fit(agent().projectName, Math.max(8, Math.floor(props.width * 0.16)))}</text>
       <text fg={props.tokens.muted} wrapMode="none">{fit(agent().currentTodo?.content || agent().headline, Math.max(12, Math.floor(props.width * 0.36)))}</text>
@@ -109,6 +121,7 @@ function AgentTableRow(props) {
       <Show when={agent().needsAttention}><Badge tokens={props.tokens} tone="warning">needs you</Badge></Show>
       <Show when={agent().hasError}><Badge tokens={props.tokens} tone="error">tool failed</Badge></Show>
       <Show when={agent().stalled}><Badge tokens={props.tokens} tone="error">stalled</Badge></Show>
+      <Show when={agent().completed}><Badge tokens={props.tokens} tone="success">completed</Badge></Show>
       <Show when={agent().collision}><Badge tokens={props.tokens} tone="warning">overlap</Badge></Show>
     </ClickRow>
   )
@@ -121,11 +134,10 @@ export function Monitor(props) {
   const [projectIndex, setProjectIndex] = createSignal(0)
   const [selected, setSelected] = createSignal(0)
   const [focusedID, setFocusedID] = createSignal("")
-  const clock = useClock(() => props.tokens().motion !== false)
-  const enriched = createMemo(() => {
-    void clock()
-    return Array.from(props.sessions?.() ?? []).map((session) => missionAgent(props.api, session))
-  })
+  // Live Agents excludes ordinary historical chats. Filter using the portfolio's
+  // cheap lifecycle fields before touching host transcripts, parts, diffs, todos,
+  // permissions, providers, LSP and MCP state for each candidate.
+  const enriched = createMemo(() => Array.from(props.sessions?.() ?? []).filter(missionEligible).map((session) => missionAgent(props.api, session)))
   const projects = createMemo(() => [{ id: "", name: "All folders" }, ...Array.from(props.projects?.() ?? []).map((project) => ({ id: project.id, name: project.name }))])
   const project = createMemo(() => projects()[Math.min(projectIndex(), projects().length - 1)] ?? projects()[0])
   const model = createMemo(() => missionControlModel({ agents: enriched(), filter: filter(), project: project().id, now: Date.now() }))
@@ -154,7 +166,7 @@ export function Monitor(props) {
         <Button tokens={tokens()} size="sm" variant="secondary" onPress={() => setDensity(density() === "cards" ? "table" : density() === "table" ? "compact" : "cards")}>View: {density()}</Button>
       </box>
       <box flexDirection="row" flexShrink={0} gap={1} flexWrap="wrap">
-        <SegmentedControl tokens={tokens()} value={filter()} onChange={(value) => { setFilter(value); setSelected(0); setFocusedID("") }} items={[{ value: "all", label: "All", count: model().stats.total }, { value: "attention", label: "Needs you", count: model().stats.attention }, { value: "errors", label: "Errors", count: model().stats.errors }, { value: "working", label: "Working", count: model().stats.working }, { value: "stalled", label: "Stalled", count: model().stats.stalled }, { value: "collisions", label: "Overlaps", count: model().stats.collisions }]} />
+        <SegmentedControl tokens={tokens()} value={filter()} onChange={(value) => { setFilter(value); setSelected(0); setFocusedID("") }} items={[{ value: "all", label: "All", count: model().stats.total }, { value: "attention", label: "Needs you", count: model().stats.attention }, { value: "errors", label: "Errors", count: model().stats.errors }, { value: "working", label: "Working", count: model().stats.working }, { value: "completed", label: "Completed", count: model().stats.completed }, { value: "stalled", label: "Stalled", count: model().stats.stalled }, { value: "collisions", label: "Overlaps", count: model().stats.collisions }]} />
         <box flexGrow={1} />
         <Show when={windowed().before > 0}><Badge tokens={tokens()} tone="neutral">{windowed().before} above</Badge></Show>
         <Show when={windowed().after > 0}><Badge tokens={tokens()} tone="neutral">+{windowed().after} more</Badge></Show>

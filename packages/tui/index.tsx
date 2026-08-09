@@ -34,6 +34,7 @@ import { Dock } from "./components/dock.jsx"
 import { SettingsView } from "./components/settings.jsx"
 import { applyManagedSettings, readManagedSettings } from "./lib/settings.js"
 import { workbenchCommands } from "./lib/command-registry.js"
+import { installTerminalModeRecovery } from "./lib/terminal-recovery.js"
 
 type Tokens = ReturnType<typeof createTokens>
 
@@ -147,6 +148,12 @@ const tui: TuiPlugin = async (api, options) => {
   // cached snapshot; the shared store reconciles authoritative state in place.
   const persistedStateReady = kvReady(api)
   record("initializing", persistedStateReady ? "kv-ready" : "kv-hydrating")
+
+  // OpenTUI 0.4.x restores terminal modes only after an observed blur. Windows
+  // Terminal can drop mouse/focus/paste modes without delivering that blur, so
+  // repair the renderer's tracked modes on every focus-in before native parsing.
+  const disposeTerminalRecovery = installTerminalModeRecovery(api.renderer)
+  api.lifecycle.onDispose(disposeTerminalRecovery)
 
   const registration: RendererRegistration = {
     available: false,
@@ -280,7 +287,11 @@ const tui: TuiPlugin = async (api, options) => {
     for (const name of customTools) {
       try {
         const View = rendererFor(name)
-        const dispose = registry.register(name, (props) => <View skin={toolSkin(tokens())} {...props} />)
+        const dispose = registry.register(name, (props) => (
+          <ClockProvider clock={clock}>
+            <View skin={toolSkin(tokens())} {...props} />
+          </ClockProvider>
+        ))
         if (typeof dispose === "function") api.lifecycle.onDispose(dispose)
         registration.registered += 1
       } catch {
@@ -341,17 +352,24 @@ const tui: TuiPlugin = async (api, options) => {
   }
 
   const openSessionTab = (sessionID: string) => {
-    const row = projects.sessionRows().find((item) => item.id === sessionID)
-    if (row) {
-      projects.openTab({
-        id: row.id,
-        title: row.title,
-        projectID: row.projectID,
-        projectName: row.projectName,
-        directory: row.directory,
-      })
-    }
-    openSession(api, sessionID)
+    // Route first so navigation paints on the interaction frame. Durable
+    // acknowledgement and workbench persistence must not delay prompt focus.
+    if (!openSession(api, sessionID)) return false
+    queueMicrotask(() => {
+      projects.acknowledgeCompletion(sessionID)
+      const row = projects.sessionRows().find((item) => item.id === sessionID)
+      if (row) {
+        projects.openTab({
+          id: row.id,
+          title: row.title,
+          projectID: row.projectID,
+          projectName: row.projectName,
+          directory: row.directory,
+        })
+        if (row.projectID) projects.selectProject(row.projectID)
+      }
+    })
+    return true
   }
 
   /** Controller handed to palette commands so they stay declarative. */
@@ -381,7 +399,7 @@ const tui: TuiPlugin = async (api, options) => {
    * which is what a user means by "show me the chat".
    */
   const openChat = (sessionID: string | null) => {
-    if (sessionID) openSession(api, sessionID)
+    if (sessionID) openSessionTab(sessionID)
     else api.route.navigate("home")
   }
 
@@ -634,7 +652,6 @@ const tui: TuiPlugin = async (api, options) => {
                 expanded={dockOpen}
                 onToggle={toggleDock}
                 onOpen={(session: { id: string; projectID?: string }) => {
-                  if (session.projectID) projects.selectProject(session.projectID)
                   openSessionTab(session.id)
                 }}
                 onOpenProject={openProject}
@@ -765,10 +782,15 @@ const tui: TuiPlugin = async (api, options) => {
 
   // Live patch-progress toasts, one per transition, from the same poller.
   let previous: unknown = null
+  let toolingStateFingerprint = JSON.stringify(toolingState())
   const poll = setInterval(() => {
     try {
       const state = readStateSync(statePath)
-      setToolingState(state)
+      const fingerprint = JSON.stringify(state)
+      if (fingerprint !== toolingStateFingerprint) {
+        toolingStateFingerprint = fingerprint
+        setToolingState(state)
+      }
       const toast = toastForTransition(previous, state, { renderersRegistered: registered() })
       previous = state
       if (toast) {

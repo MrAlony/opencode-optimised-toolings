@@ -1,5 +1,7 @@
 // Pure real-time supervision model for Live Agents Mission Control.
 
+import { healthIsVisible, sessionHealth, SESSION_STALL_MS } from "./session-health.js"
+
 function rows(value) {
   return Array.from(value ?? []).filter((item) => item && typeof item === "object")
 }
@@ -13,7 +15,7 @@ function fileName(item) {
   return String(item?.file ?? item?.path ?? "").trim().replaceAll("\\", "/")
 }
 
-export const MISSION_STALL_MS = 10 * 60 * 1000
+export const MISSION_STALL_MS = SESSION_STALL_MS
 
 const MISSION_DENSITIES = new Set(["cards", "compact", "table"])
 
@@ -67,20 +69,45 @@ export function missionScrollIndex(current, total, direction, step = 1) {
 
 export function missionControlModel(input = {}) {
   const now = number(input.now) || Date.now()
-  const filter = ["all", "attention", "errors", "working", "stalled", "collisions"].includes(input.filter) ? input.filter : "all"
+  const filter = ["all", "attention", "errors", "working", "completed", "stalled", "collisions"].includes(input.filter) ? input.filter : "all"
   const project = String(input.project ?? "")
   const agents = rows(input.agents).map((agent) => {
     const updated = number(agent.updated)
     const age = Math.max(0, now - updated)
     const attention = number(agent.attention)
     const failed = number(agent.failedCount)
-    const hasError = agent.latestToolFailed === true
-    // Historical tool failures remain visible in the activity feed, but they do
-    // not describe current health. A newer queued, running, or successful tool
-    // clears `latestToolFailed`. Stalls are based only on durable inactivity;
-    // failure history must never make progressing work look abandoned.
-    const stalled = agent.running === true && attention === 0 && age >= MISSION_STALL_MS
-    return { ...agent, updated, age, attention, failed, hasError, stalled, needsAttention: attention > 0 }
+    const health = sessionHealth({
+      activity: {
+        busy: agent.busy,
+        headline: agent.headline,
+        runningCount: agent.runningCount,
+        latestTool: agent.latestTool,
+        latestToolFailed: agent.latestToolFailed,
+        hydrated: agent.hydrated,
+        progressAt: agent.progressAt,
+        inFlight: agent.inFlight,
+      },
+      attention,
+      running: agent.running,
+      terminalState: agent.terminalState,
+      completed: agent.completed,
+      completedAt: agent.completedAt,
+      now,
+    })
+    return {
+      ...agent,
+      updated,
+      age,
+      attention,
+      failed,
+      health,
+      state: health.state,
+      tone: health.tone,
+      hasError: health.state === "error",
+      stalled: health.state === "stalled",
+      completed: health.state === "completed",
+      needsAttention: health.state === "needs-input",
+    }
   })
 
   const fileOwners = new Map()
@@ -105,10 +132,11 @@ export function missionControlModel(input = {}) {
     if (project && agent.projectID !== project && agent.projectKey !== project) return false
     if (filter === "attention") return agent.needsAttention
     if (filter === "errors") return agent.hasError
-    if (filter === "working") return agent.running && !agent.stalled && !agent.needsAttention && !agent.hasError
+    if (filter === "working") return ["working", "thinking", "responding"].includes(agent.state)
+    if (filter === "completed") return agent.completed && healthIsVisible(agent.health, { active: agent.active })
     if (filter === "stalled") return agent.stalled
     if (filter === "collisions") return agent.collision
-    return agent.running || agent.needsAttention || agent.hasError
+    return healthIsVisible(agent.health, { active: agent.active })
   }).sort((a, b) => {
     if (a.needsAttention !== b.needsAttention) return a.needsAttention ? -1 : 1
     if (a.hasError !== b.hasError) return a.hasError ? -1 : 1
@@ -123,10 +151,11 @@ export function missionControlModel(input = {}) {
     agents: filtered,
     collisions,
     stats: {
-      total: enriched.filter((agent) => agent.running || agent.needsAttention || agent.hasError).length,
+      total: enriched.filter((agent) => healthIsVisible(agent.health, { active: agent.active })).length,
       attention: enriched.filter((agent) => agent.needsAttention).length,
       errors: enriched.filter((agent) => agent.hasError).length,
-      working: enriched.filter((agent) => agent.running && !agent.stalled && !agent.needsAttention && !agent.hasError).length,
+      working: enriched.filter((agent) => ["working", "thinking", "responding"].includes(agent.state)).length,
+      completed: enriched.filter((agent) => agent.completed && healthIsVisible(agent.health, { active: agent.active })).length,
       stalled: enriched.filter((agent) => agent.stalled).length,
       collisions: collisions.length,
     },

@@ -41,6 +41,8 @@ test("columns always fit the list across the full size range", () => {
       assertColumnsFit(layout, `${size}@${width}`)
       assert.ok(layout.columns.title >= 6, `${size}@${width}: the title must stay readable`)
       assert.ok(layout.list >= 18)
+      assert.equal(layout.panelHeight, layout.rows + 10)
+      assert.ok(layout.panelHeight <= Math.max(13, 40 - 4), `${size}@${width}: panel body must remain bounded`)
     }
   }
 })
@@ -55,19 +57,21 @@ test("titles keep a usable width at the sizes the palette actually uses", () => 
   assert.ok(layout.columns.subtitle >= 12, "the subtitle must stay meaningful")
 })
 
-test("the preview only appears when the panel can afford it", () => {
+test("the preview only appears when the panel and finder mode can afford it", () => {
   assert.equal(paletteLayout({ size: "medium", width: 200, height: 40 }).showPreview, false)
   assert.equal(paletteLayout({ size: "xlarge", width: 200, height: 40 }).showPreview, true)
+  assert.equal(paletteLayout({ size: "xlarge", width: 200, height: 40, preview: false }).showPreview, false, "folder destination mode reclaims the whole list width")
   // When hidden it must consume no width.
   assert.equal(paletteLayout({ size: "medium", width: 200, height: 40 }).preview, 0)
+  assert.equal(paletteLayout({ size: "xlarge", width: 200, height: 40, preview: false }).preview, 0)
 })
 
 test("list and preview never exceed the inner panel width", () => {
   for (const size of ["medium", "large", "xlarge"]) {
     for (const width of [40, 80, 120, 200]) {
       const layout = paletteLayout({ size, width, height: 40 })
-      const used = layout.list + layout.preview + (layout.showPreview ? 2 : 0)
-      assert.ok(used <= layout.inner + 1, `${size}@${width}: ${used} exceeds inner ${layout.inner}`)
+      const used = layout.list + layout.preview + layout.gap
+      assert.equal(used, layout.inner, `${size}@${width}: ${used} must exactly equal inner ${layout.inner}`)
     }
   }
 })
@@ -79,6 +83,16 @@ test("row height budget responds to the terminal height", () => {
       paletteLayout({ size: "xlarge", width: 120, height: 24 }).rows,
   )
   assert.ok(paletteLayout({ size: "xlarge", width: 120, height: 400 }).rows <= 16, "rows stay bounded")
+})
+
+test("the complete chooser panel owns one bounded rectangle", () => {
+  for (const dimensions of [{ width: 120, height: 24 }, { width: 187, height: 50 }, { width: 60, height: 20 }]) {
+    const layout = paletteLayout({ size: "xlarge", ...dimensions })
+    assert.equal(layout.list + layout.preview + layout.gap, layout.inner)
+    assert.equal(layout.outer - PALETTE_PADDING * 2, layout.inner)
+    assert.equal(layout.panelHeight, layout.rows + 10)
+    assert.ok(layout.panelHeight <= Math.max(13, dimensions.height - 4))
+  }
 })
 
 test("padded columns render at exactly their declared width", () => {

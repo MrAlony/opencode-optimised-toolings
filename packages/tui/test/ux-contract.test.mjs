@@ -21,6 +21,15 @@ test("activity rows preserve Solid reactivity and remount details on every expan
   assert.match(kit, /backgroundColor=\{statusSurface\(props\.status, props\.skin, active\(\)\)\}/)
 })
 
+test("failed tool calls remain collapsed until the user explicitly opens them", async () => {
+  const kit = await source("components/kit.jsx")
+  const activity = kit.slice(kit.indexOf("export function Activity"), kit.indexOf("export function ItemRow"))
+  assert.match(activity, /createSignal\(Boolean\(props\.openDefault\)\)/, "explicit defaults remain supported")
+  assert.match(activity, /setOpen\(\(value\) => !value\)/, "pointer and keyboard toggles remain supported")
+  assert.doesNotMatch(activity, /props\.status === "FAILED"[\s\S]*setOpen\(true\)/, "an execution failure must never expand its own details")
+  assert.doesNotMatch(activity, /failureOpened/, "failure-triggered expansion state must not exist")
+})
+
 test("structured result status wins over stale running lifecycle while execution errors remain authoritative", async () => {
   const kit = await source("components/kit.jsx")
   assert.match(kit, /lifecycle\.phase === "error".*return "FAILED"/s)
