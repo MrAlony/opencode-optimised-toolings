@@ -8,6 +8,10 @@ function defaultMatch(requested, observed) {
   return Boolean(left && right && (left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`)))
 }
 
+function firstNonblank(...values) {
+  return values.find((value) => String(value ?? "").trim())
+}
+
 export function declaredCounts(text) {
   const source = String(text ?? "")
   const ofTotal = source.match(/\b(\d+)\s+of\s+(\d+)\b/i)
@@ -62,7 +66,9 @@ export function reconcileBatch(plan, observed, options = {}) {
       ...item,
       ...result,
       number: result.number ?? index + 1,
-      label: options.label ? options.label(item, result, index) : result.label ?? result.titleText ?? result.title ?? item.label,
+      label: options.label
+        ? firstNonblank(options.label(item, result, index), result.label, result.titleText, result.title, item.label)
+        : firstNonblank(result.label, result.titleText, result.title, item.label),
       meta: options.meta ? options.meta(item, result, index) : result.meta ?? item.meta,
       detailAvailable: true,
       requested: item,

@@ -122,14 +122,15 @@ test("sessions from unknown projects are retained, never dropped", () => {
   assert.equal(ghost.sessionCount, 1)
 })
 
-test("an empty project worktree inherits a real session directory", () => {
+test("an incomplete global project inherits the session directory and account label", () => {
   const rows = buildProjectModel({
     now: NOW,
-    projects: [{ id: "home", name: "dell", worktree: "" }],
-    sessions: [session("home-chat", { projectID: "home", directory: "C:/Users/dell" })],
+    projects: [{ id: "global", name: "untitled", worktree: "" }],
+    sessions: [session("home-chat", { projectID: "global", directory: "C:/Users/dell" })],
   })
   assert.equal(rows.length, 1)
   assert.equal(rows[0].worktree, "C:/Users/dell")
+  assert.equal(rows[0].name, "dell")
   assert.equal(rows[0].openable, true)
 })
 
@@ -175,6 +176,34 @@ test("folder order is stable across current, running, and recency refreshes", ()
     sessions: [session("a", { time: { updated: NOW + DAY } })],
   })
   assert.deepEqual(refreshed.map((row) => row.id), ["p_alpha", "p_gamma", "p_beta", "p_delta"], "only explicit selection may promote a project; background state cannot reorder the rest")
+})
+
+test("projects follow recent session activity after selected and pinned projects", () => {
+  const projects = [
+    { id: "p_a", worktree: "C:/work/a", name: "A" },
+    { id: "p_b", worktree: "C:/work/b", name: "B" },
+    { id: "p_c", worktree: "C:/work/c", name: "C" },
+    { id: "p_pinned", worktree: "C:/work/pinned", name: "Pinned" },
+  ]
+  const sessions = [
+    session("a", { projectID: "p_a", directory: "C:/work/a", time: { updated: NOW - 3 * HOUR } }),
+    session("b", { projectID: "p_b", directory: "C:/work/b", time: { updated: NOW - HOUR } }),
+    session("c", { projectID: "p_c", directory: "C:/work/c", time: { updated: NOW - 2 * HOUR } }),
+    session("p", { projectID: "p_pinned", directory: "C:/work/pinned", time: { updated: NOW - 9 * HOUR } }),
+  ]
+  const input = {
+    now: NOW,
+    projects,
+    sessions,
+    selectedProjectID: "p_a",
+    selectedProjectDirectory: "C:/work/a",
+    pinnedProjects: ["p_pinned"],
+  }
+  const rows = buildProjectModel(input)
+  assert.deepEqual(rows.map((row) => row.id), ["p_a", "p_pinned", "p_b", "p_c"])
+
+  const statusRefresh = buildProjectModel({ ...input, statuses: { c: { type: "busy" }, b: { type: "idle" } } })
+  assert.deepEqual(statusRefresh.map((row) => row.id), rows.map((row) => row.id), "status-only refreshes cannot move projects")
 })
 
 test("project-owned state uses directory identity across synthetic and server IDs", () => {

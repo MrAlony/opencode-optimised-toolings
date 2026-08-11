@@ -25,9 +25,15 @@ export function repoRoot() {
  * written to the shared state file that the TUI companion renders. Tool
  * outputs are never modified.
  */
+export function controllerRetryDelay(state) {
+  return state?.status === "no-opencode" ? 45_000 : null
+}
+
 export async function SelfPatchPlugin() {
   const root = repoRoot()
-  let started = false
+  let running = false
+  let disposed = false
+  let retryTimer = null
   let tuiRegistration
   try {
     tuiRegistration = await ensureTuiCompanion(root)
@@ -39,14 +45,23 @@ export async function SelfPatchPlugin() {
   }
 
   function ensureStarted() {
-    if (started) return
-    started = true
+    if (disposed || running || retryTimer) return
+    running = true
     void (async () => {
       try {
         // runSelfPatch only installs a binary after strict source-capability
         // verification. OpenCode updates and incompatible official binaries are
         // never blocked or replaced; portable plugin behavior stays available.
         await runSelfPatch(root)
+        const state = await readState(root)
+        const delay = controllerRetryDelay(state)
+        if (delay !== null && !disposed) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null
+            ensureStarted()
+          }, delay)
+          retryTimer.unref?.()
+        }
       } catch (error) {
         await writeState(root, {
           status: "portable",
@@ -55,6 +70,8 @@ export async function SelfPatchPlugin() {
           renderersActive: false,
           lastError: error?.message ?? String(error),
         }).catch(() => {})
+      } finally {
+        running = false
       }
     })()
   }
@@ -103,7 +120,9 @@ export async function SelfPatchPlugin() {
       },
     },
     dispose: () => {
-      started = true
+      disposed = true
+      if (retryTimer) clearTimeout(retryTimer)
+      retryTimer = null
     },
   }
 }

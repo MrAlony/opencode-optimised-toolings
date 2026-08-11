@@ -34,6 +34,20 @@ test("request plan cardinality survives truncated per-item output", () => {
   assert.equal(visibleOutcome(batch.records).omitted, 2)
 })
 
+test("reconciliation falls back from blank result titles to the observed URL or request label", () => {
+  const observedTitle = reconcileBatch(
+    [{ status: "PENDING", label: "https://requested.test", meta: "markdown" }],
+    [{ number: 1, status: "SUCCESS", label: "", titleText: "", title: "https://observed.test", outcome: "HTTP 200 OK" }],
+  )
+  assert.equal(observedTitle.records[0].label, "https://observed.test")
+
+  const requestedLabel = reconcileBatch(
+    [{ status: "PENDING", label: "https://requested.test", meta: "markdown" }],
+    [{ number: 1, status: "SUCCESS", label: "  ", titleText: "", title: "", outcome: "HTTP 200 OK" }],
+  )
+  assert.equal(requestedLabel.records[0].label, "https://requested.test")
+})
+
 test("reconciliation matches absolute result paths to relative requested paths", () => {
   const batch = reconcileBatch(
     [{ status: "PENDING", label: "packages/tui/a.jsx", meta: "requested" }],

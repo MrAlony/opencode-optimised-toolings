@@ -10,6 +10,12 @@ test("web fetch inspector preserves per-URL mixed outcomes", () => {
   assert.match(parsed.items[1].error, /blocked/)
 })
 
+test("web fetch without a page title retains the URL identity for reconciliation", () => {
+  const parsed = parseWebFetch(`WEB FETCH RESULT: SUCCESS\nWHAT HAPPENED: 1 of 1 URL request(s) returned successful HTTP responses.\n\n=== URL 1: https://untitled.test/path ===\nOutcome: HTTP 200 OK\nFinal URL: https://untitled.test/path\nReturned extraction: complete`)
+  assert.equal(parsed.items[0].titleText, "")
+  assert.equal(parsed.items[0].title, "https://untitled.test/path")
+})
+
 test("web fetch parser keeps declared batch counts separate from visible truncated blocks", () => {
   const parsed = parseWebFetch(`WEB FETCH RESULT: SUCCESS\nWHAT HAPPENED: 3 of 3 URL request(s) returned successful HTTP responses.\n\n=== URL 1: https://one.test ===\nOutcome: HTTP 200 OK\nFinal URL: https://one.test/`)
   assert.equal(parsed.items.length, 1)

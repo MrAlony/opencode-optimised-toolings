@@ -111,3 +111,26 @@ export function detectBinary(overrides = {}) {
   }
   return devFallback
 }
+
+/**
+ * OpenCode's updater replaces the packaged executable in place. During that
+ * short swap window the path can be absent or fail its `--version` probe even
+ * though the installation is healthy. Retry only missing/dev-only detection;
+ * a real detected executable returns immediately and incompatible versions are
+ * still handled by strict source fingerprints in the patch pipeline.
+ */
+export async function detectBinaryWithRetry(options = {}) {
+  const attempts = Math.max(1, Math.min(8, Number(options.attempts) || 4))
+  const delayMs = Math.max(0, Math.min(2_000, Number(options.delayMs) || 100))
+  const detect = typeof options.detect === "function" ? options.detect : detectBinary
+  const wait = typeof options.wait === "function"
+    ? options.wait
+    : (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  let last = null
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = detect(options.overrides ?? {})
+    if (last?.path && !last.devMode) return last
+    if (attempt + 1 < attempts) await wait(delayMs * 2 ** attempt)
+  }
+  return last
+}

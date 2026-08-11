@@ -4,7 +4,10 @@ import { manifest as base } from "../1.18.13/manifest.mjs"
 // touched host files around those anchors. Bind the proven patch bodies to the
 // official v1.18.15 fingerprints instead of weakening capability validation.
 const beforeSha256 = new Map([
+  ["packages/tui/src/context/sync.tsx", "452035470d52b6bb3cfd58eea9df612942510126e8f759279c46c1de4899a2ab"],
   ["packages/tui/src/routes/session/index.tsx", "90f0471caac6eac5768cf4358d4371207dd69362affeddb4ea0f30133a7e576c"],
+  ["packages/tui/src/prompt/history.tsx", "ebf619998f067afd0d0c590b98366cb8bf87a527cd0ef366679ec883084def27"],
+  ["packages/tui/src/component/prompt/index.tsx", "fed47f1ef68ee6d96db553749570d073e539d0544e89aa5968ff1f55a3828d6e"],
   ["packages/plugin/src/tui.ts", "3b0ccca22ebf8558afb9dc055505c7c503930f2f622d1db8c3fb9ca3e9278e8c"],
   ["packages/opencode/src/plugin/tui/runtime.ts", "f454bc0c2ec61d5cf605f4c65b2223692cd6731f501fd64a4a762a8868c69e70"],
   ["packages/opencode/src/session/prompt.ts", "0ef73c460d46619cd3e75d4b790a22a3c4c999b311a43e7887b634ff7a3fa06d"],

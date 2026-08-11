@@ -8,6 +8,7 @@ import { patchedBinaryPath, readState, runtimeDir, sha256File, writeState } from
 import { detectBinary } from "./detect.js"
 import { installPatchedBinary } from "./restart.js"
 import { reconcileHostRuntime } from "./host-recovery.js"
+import { detectBinaryWithRetry } from "./detect.js"
 import { bunCacheEntries, looksLikeBrokenInstall, packagesFromBuildLog, verifyPackages } from "./integrity.js"
 
 export const OPENCODE_VERSION = "1.18.13"
@@ -607,7 +608,7 @@ export async function runSelfPatch(root) {
   await acquireLock(lock)
   const state = await readState(root)
   try {
-    const detected = detectBinary()
+    const detected = await detectBinaryWithRetry()
     const bin = detected?.path ? { ...detected, path: path.resolve(detected.path) } : detected
     if (!bin || !(await exists(bin.path))) {
       await writeState(root, { ...state, status: "no-opencode", stepLabel: "No OpenCode binary found; self-patching skipped" })

@@ -230,7 +230,10 @@ export function buildProjectModel(input = {}) {
       vcs: project?.vcs ?? null,
       known: Boolean(project),
     })
-    if (!bucket.worktree && worktree) bucket.worktree = worktree
+    if (!bucket.worktree && worktree) {
+      bucket.worktree = worktree
+      bucket.name = projectLabel({ ...bucket, worktree })
+    }
     const state = String(statuses[session.id]?.type ?? "idle")
     bucket.sessions.push({
       id: session.id,
@@ -291,6 +294,7 @@ export function buildProjectModel(input = {}) {
   visible.sort((a, b) => {
     if (a.current !== b.current) return a.current ? -1 : 1
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    if (a.updated !== b.updated) return b.updated - a.updated
     const name = a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
     if (name) return name
     return directoryKey(a.worktree).localeCompare(directoryKey(b.worktree))

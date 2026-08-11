@@ -15,10 +15,18 @@ import {
   resolveBun,
   sourceReady,
 } from "../lib/pipeline.js"
-import { detectBinary, isDevRuntime, resolveOnPath, versionOf } from "../lib/detect.js"
-import { SelfPatchPlugin } from "../index.js"
+import { detectBinary, detectBinaryWithRetry, isDevRuntime, resolveOnPath, versionOf } from "../lib/detect.js"
+import { controllerRetryDelay, SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
 import { manifest as patchManifest11815 } from "../patches/1.18.15/manifest.mjs"
+import { manifest as patchManifest11816 } from "../patches/1.18.16/manifest.mjs"
+
+test("controller retries only a transient updater swap miss", () => {
+  assert.equal(controllerRetryDelay({ status: "no-opencode" }), 45_000)
+  for (const status of ["installed", "portable", "unsupported-version", "error", "dev-mode", "ok"]) {
+    assert.equal(controllerRetryDelay({ status }), null)
+  }
+})
 
 test("alonix-toolings tool registration exposes a callable execute", async () => {
   const previous = process.env.OPENCODE_CONFIG_DIR
@@ -384,7 +392,7 @@ test("v1.18.13 patch exposes a native deferred session draft without creating se
   }
 })
 
-test("v1.18.13 patch is limited to renderer plumbing, deferred drafts, tool recovery, and one layout slot", () => {
+test("v1.18.13 patch is limited to bounded presentation, prompt-history references, renderer plumbing, deferred drafts, tool recovery, and one layout slot", () => {
   // Every host file patched here is a maintenance cost on each OpenCode
   // upgrade, so the set stays explicit and small.
   const paths = patchManifest.files.map((file) => file.path)
@@ -397,7 +405,10 @@ test("v1.18.13 patch is limited to renderer plumbing, deferred drafts, tool reco
     // panel is the only alternative and it covers the transcript instead of
     // sitting beside it.
     "packages/tui/src/app.tsx",
+    "packages/tui/src/component/prompt/index.tsx",
+    "packages/tui/src/context/sync.tsx",
     "packages/tui/src/plugin/adapters.tsx",
+    "packages/tui/src/prompt/history.tsx",
     "packages/tui/src/routes/home/session-destination.tsx",
     "packages/tui/src/routes/session/index.tsx",
   ].sort())
@@ -441,11 +452,84 @@ test("the app_left slot is declared in the public plugin types", () => {
   assert.match(replaced, /app_left: \{\}/, "plugins must be able to target the new slot in a typed way")
 })
 
-test("v1.18.13 patch leaves native transcript synchronization untouched", () => {
+test("v1.18.13 patch keeps transcript data authoritative while mounting presentation progressively", () => {
   const source = JSON.stringify(patchManifest)
-  assert.equal(patchManifest.files.some((file) => file.path === "packages/tui/src/context/sync.tsx"), false)
+  const sessionRoute = patchManifest.files.find((file) => file.path === "packages/tui/src/routes/session/index.tsx")
+  const routeSource = sessionRoute?.replacements.map((item) => item.replace).join("\n") ?? ""
+  const sync = patchManifest.files.find((file) => file.path === "packages/tui/src/context/sync.tsx")
+  assert.ok(sync, "native sync must coalesce presentation commits without dropping authoritative deltas")
   assert.doesNotMatch(source, /transcriptOnly|active transcript cross-process reconciliation|adaptive visible transcript refresh loop/)
   assert.doesNotMatch(source, /sync\.session\.sync\(sessionID, \{ force: true/)
+  assert.match(routeSource, /TRANSCRIPT_WINDOW_MESSAGES = 24/)
+  assert.match(routeSource, /messages\(\)\.slice\(transcriptStart\(\), transcriptEnd\(\)\)/)
+  assert.match(routeSource, /copy\/export continue to use messages\(\)/)
+  assert.match(routeSource, /revealMessage\(messageID/)
+  assert.match(routeSource, /revealMessage\(message\.id/, "last-user navigation must mount hidden targets before scrolling")
+  assert.match(routeSource, /moveTranscriptWindow\(0, undefined/, "first-message navigation must shift, not expand, the bounded window")
+  assert.match(routeSource, /moveTranscriptWindow\(transcriptMaximumStart\(\), undefined/, "last-message navigation must restore the bounded tail window")
+  assert.match(routeSource, /hiddenEarlierMessages\(\)/)
+  assert.match(routeSource, /hiddenLaterMessages\(\)/)
+  assert.match(routeSource, /revealLaterMessages\(\)/)
+  assert.match(routeSource, /anchorID/)
+  assert.match(routeSource, /scroll\.scrollBy\(current\.y - anchorY\)/, "window shifts must preserve a surviving viewport anchor")
+  assert.doesNotMatch(routeSource, /transcriptLimit|setTranscriptLimit/, "history navigation must never grow the mounted transcript")
+})
+
+test("v1.18.13 patch losslessly coalesces provider deltas to one Solid commit per frame", () => {
+  const sync = patchManifest.files.find((file) => file.path === "packages/tui/src/context/sync.tsx")
+  const helper = patchManifest.create.find((file) => file.path.endsWith("part-delta-buffer.ts"))?.content ?? ""
+  assert.ok(sync)
+  const source = sync.replacements.map((item) => item.replace).join("\n")
+  assert.match(helper, /frameMs.*16/)
+  assert.match(helper, /current\.chunks\.push\(entry\.delta\)/, "ordered deltas must accumulate without repeatedly copying a growing string")
+  assert.match(helper, /buffered\.chunks\.join\(""\)/, "one final join must preserve every byte in order")
+  assert.match(source, /partDeltas\.queue/)
+  assert.match(source, /batch\(\(\) =>/)
+  assert.match(source, /status\.type === "idle".*flushSessionDeltas/)
+  assert.match(source, /flushMessageDeltas\(event\.properties\.info\.id\)/)
+  assert.match(source, /flushPartDeltas\(event\.properties\.part\.id\)/)
+  assert.match(source, /onCleanup\(\(\) => partDeltas\.dispose\(\)\)/)
+  assert.match(source, /flush\(sessionID: string\)/, "copy/export must have an explicit exact-data flush boundary")
+  assert.doesNotMatch(source, /\(existing \?\? ""\) \+ event\.properties\.delta/)
+  const route = patchManifest.files.find((file) => file.path === "packages/tui/src/routes/session/index.tsx")
+  const routeSource = route?.replacements.map((item) => item.replace).join("\n") ?? ""
+  assert.equal((routeSource.match(/sync\.session\.flush\(route\.sessionID\)/g) ?? []).length, 3, "message copy, transcript copy, and export must flush the current frame")
+})
+
+test("v1.18.13 patch externalizes prompt-history attachments and hydrates only the recalled entry", () => {
+  const history = patchManifest.files.find((file) => file.path === "packages/tui/src/prompt/history.tsx")
+  const prompt = patchManifest.files.find((file) => file.path === "packages/tui/src/component/prompt/index.tsx")
+  const helper = patchManifest.create.find((file) => file.path.endsWith("history-attachments.ts"))?.content ?? ""
+  assert.ok(history)
+  assert.ok(prompt)
+  const historySource = history.replacements.map((item) => item.replace).join("\n")
+  const promptSource = prompt.replacements.map((item) => item.replace).join("\n")
+  assert.match(helper, /alonix-history:\/\//)
+  assert.match(helper, /CryptoHasher\("sha256"\)/)
+  assert.match(helper, /Buffer\.from\(match\[2\], "base64"\)/)
+  assert.match(helper, /hydratePromptHistoryEntry/)
+  assert.match(helper, /ORPHAN_GRACE_MS/)
+  assert.match(historySource, /externalizePromptHistoryEntry/)
+  assert.match(historySource, /hydratePromptHistoryEntry\(selected, paths\.state\)/)
+  assert.match(historySource, /appendQueue = appendQueue\.then/)
+  assert.doesNotMatch(historySource, /structuredClone\(unwrap\(item\)\)/)
+  assert.match(promptSource, /await history\.move\(-1/)
+  assert.match(promptSource, /await history\.move\(1/)
+})
+
+test("v1.18.13 patch scopes interrupt confirmation to one session and real elapsed time", () => {
+  const prompt = patchManifest.files.find((file) => file.path === "packages/tui/src/component/prompt/index.tsx")
+  assert.ok(prompt)
+  const source = prompt.replacements.map((item) => item.replace).join("\n")
+  assert.match(source, /interruptArm: \{ sessionID: string; armedAt: number \}/)
+  assert.match(source, /INTERRUPT_CONFIRM_MIN_MS = 180/)
+  assert.match(source, /INTERRUPT_CONFIRM_MAX_MS = 5_000/)
+  assert.match(source, /createEffect\(on\(\(\) => props\.sessionID, clearInterruptArm/)
+  assert.match(source, /if \(status\(\)\.type === "idle"\) clearInterruptArm\(\)/)
+  assert.match(source, /elapsed > INTERRUPT_CONFIRM_MAX_MS/)
+  assert.match(source, /elapsed < INTERRUPT_CONFIRM_MIN_MS/)
+  assert.match(source, /async function submit\(\) \{\n    clearInterruptArm\(\)/)
+  assert.doesNotMatch(source, /setStore\("interrupt"|setTimeout\(\(\) => \{\n\s*setStore\("interrupt"/)
 })
 
 test("v1.18.13 patch terminalizes only unfinished tools at a newly owned loop boundary", () => {
@@ -469,9 +553,49 @@ test("v1.18.13 renderer registry is reactive and disposal-safe", () => {
   assert.match(source, /\.at\(-1\)\?\.renderer/)
 })
 
+test("v1.18.16 exact profile preserves every reviewed v1.18.15 host fingerprint", () => {
+  assert.equal(patchManifest11816.version, "1.18.16")
+  assert.deepEqual(
+    patchManifest11816.files.map((entry) => [entry.path, entry.beforeSha256]),
+    patchManifest11815.files.map((entry) => [entry.path, entry.beforeSha256]),
+  )
+  assert.deepEqual(patchManifest11816.create, patchManifest11815.create)
+})
+
+test("binary detection retries through an updater swap window", async () => {
+  const waits = []
+  const results = [null, { path: process.execPath, version: process.versions.node, devMode: true }, { path: "C:/tools/opencode.exe", version: "1.18.16", devMode: false }]
+  const detected = await detectBinaryWithRetry({
+    attempts: 4,
+    delayMs: 25,
+    detect: () => results.shift() ?? null,
+    wait: async (ms) => { waits.push(ms) },
+  })
+  assert.equal(detected?.version, "1.18.16")
+  assert.equal(detected?.devMode, false)
+  assert.deepEqual(waits, [25, 50])
+})
+
+test("binary detection returns a proven executable without updater delay", async () => {
+  const waits = []
+  const expected = { path: "C:/tools/opencode.exe", version: "1.18.16", devMode: false }
+  const detected = await detectBinaryWithRetry({ detect: () => expected, wait: async (ms) => { waits.push(ms) } })
+  assert.equal(detected, expected)
+  assert.deepEqual(waits, [])
+})
+
+test("plugin controller owns and cancels its delayed updater-swap retry", () => {
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8")
+  assert.match(source, /controllerRetryDelay\(state\)/)
+  assert.match(source, /retryTimer = setTimeout/)
+  assert.match(source, /retryTimer\.unref\?\.\(\)/)
+  assert.match(source, /if \(retryTimer\) clearTimeout\(retryTimer\)/)
+})
+
 test("self-patch rejects a missing relative detector result before opening it", () => {
   const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
   assert.match(source, /detected\?\.path \? \{ \.\.\.detected, path: path\.resolve\(detected\.path\) \}/)
+  assert.match(source, /await detectBinaryWithRetry\(\)/)
   assert.match(source, /!bin \|\| !\(await exists\(bin\.path\)\)/)
 })
 
