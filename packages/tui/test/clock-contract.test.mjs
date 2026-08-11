@@ -384,8 +384,15 @@ test("settings is a first-class mouse-accessible route", async () => {
   for (const page of ["Tool access", "Instructions", "Context \/ DCP", "Web providers", "Plugin & safety"]) assert.match(settings, new RegExp(page))
   assert.match(settings, /Save changes/)
   assert.match(settings, /dockWidth\(props\.dockOpen\(\), dimensions\(\)\.width\)/, "settings must reserve the persistent sidebar column")
-  const saveBody = settings.match(/const save = async \(\) => \{([\s\S]*?)\n  \}\n\n  return/)?.[1] ?? ""
+  const saveBody = settings.match(/const save = async \(\) => \{([\s\S]*?)\r?\n  \}\r?\n\r?\n  return/)?.[1] ?? ""
   assert.doesNotMatch(saveBody, /session|prompt|route|navigate|dialog|openSession|sessionDraft/, "settings save must be config-only")
+  assert.ok(saveBody.includes("showToast("), "settings save must surface its result as a toast")
+  assert.ok(saveBody.includes('variant: "success"'), "a rewritten save must toast success")
+  assert.ok(saveBody.includes('variant: "info"'), "an unchanged duplicate save must toast a neutral notice")
+  assert.ok(saveBody.includes('variant: "error"'), "a failed save must toast an error")
+  assert.match(settings, /setTimeout\(\(\) => setToast\(null\), 5000\)/, "settings toasts auto-dismiss like native toasts")
+  assert.match(settings, /position="absolute"[\s\S]*?top=\{2\}[\s\S]*?right=\{2\}[\s\S]*?zIndex=\{2000\}/, "the settings toast paints above the layer as a top-right panel")
+  assert.doesNotMatch(entry, /onToast=/, "settings toasts live inside the settings layer, not the host toast API")
   const settingsLib = await source("lib/settings.js")
   assert.match(settingsLib, /if \(!changes\.length\) return \{[\s\S]*changed: false/, "duplicate saves must be strict no-ops")
 })

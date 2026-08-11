@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createMemo, createSignal, For, Show, onCleanup } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { GLYPH } from "../lib/design.js"
 import { TOOL_GROUPS, WEB_PROVIDERS } from "../lib/settings.js"
@@ -48,6 +48,16 @@ export function SettingsView(props) {
   const [message, setMessage] = createSignal("")
   const [secretInput, setSecretInput] = createSignal({})
   const [secretClear, setSecretClear] = createSignal({})
+  const [toast, setToast] = createSignal(null)
+  let toastTimer = null
+  const showToast = (next) => {
+    setToast(next)
+    if (toastTimer) clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => setToast(null), 5000)
+  }
+  onCleanup(() => {
+    if (toastTimer) clearTimeout(toastTimer)
+  })
   const width = createMemo(() => {
     const reserved = props.dockOpen ? dockWidth(props.dockOpen(), dimensions().width) : 0
     return Math.max(48, dimensions().width - reserved)
@@ -76,11 +86,19 @@ export function SettingsView(props) {
       setDraft(structuredClone(result ?? draft()))
       setSecretInput({})
       setSecretClear({})
-      setMessage(result?.changed === false
+      const unchanged = result?.changed === false
+      setMessage(unchanged
         ? "Already saved. No files were rewritten."
         : "Saved. Restart OpenCode to activate config-time changes.")
+      // Additive feedback renders as a toast inside this layer so it can never
+      // hide behind the settings surface; the persistent status line stays.
+      showToast(unchanged
+        ? { variant: "info", title: "Already saved", message: "No files were rewritten." }
+        : { variant: "success", title: "Settings saved", message: "Saved. Restart OpenCode to activate config-time changes." })
     } catch (error) {
-      setMessage(`Could not save: ${error instanceof Error ? error.message : String(error)}`)
+      const detail = error instanceof Error ? error.message : String(error)
+      setMessage(`Could not save: ${detail}`)
+      showToast({ variant: "error", title: "Settings not saved", message: detail })
     } finally {
       setSaving(false)
     }
@@ -177,6 +195,30 @@ export function SettingsView(props) {
       <box flexShrink={0} minHeight={1} paddingLeft={2} paddingRight={2} backgroundColor={message().startsWith("Could not") ? tokens().errorSurface : tokens().raised}>
         <text fg={message().startsWith("Could not") ? tokens().error : tokens().muted} wrapMode="wrap">{message() || "Ready. No changes are written until Save changes is pressed."}</text>
       </box>
+
+      <Show when={toast()}>
+        {(current) => (
+          <box
+            position="absolute"
+            top={2}
+            right={2}
+            zIndex={2000}
+            maxWidth={Math.min(60, dimensions().width - 6)}
+            paddingLeft={2}
+            paddingRight={2}
+            paddingTop={1}
+            paddingBottom={1}
+            backgroundColor={tokens().panel}
+            borderColor={tokens()[current().variant] ?? tokens().info}
+            border={["left", "right"]}
+          >
+            <Show when={current().title}>
+              <text fg={tokens().text} marginBottom={1}><b>{current().title}</b></text>
+            </Show>
+            <text fg={tokens().text} wrapMode="word" width="100%">{current().message}</text>
+          </box>
+        )}
+      </Show>
     </box>
   )
 }
