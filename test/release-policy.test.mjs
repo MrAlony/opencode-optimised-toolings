@@ -24,9 +24,27 @@ test("candidate promotion is built from the exact validated working tree before 
   assert.match(candidate, /npm", \["pack", "--json"/)
   assert.match(candidate, /checkoutFingerprint !== transportFingerprint/)
   assert.match(candidate, /test\/tui-runtime-parity\.test\.mjs/)
-  assert.match(candidate, /activatePackageGeneration\(generation/)
-  assert.ok(candidate.indexOf("tui-runtime-parity.test.mjs") < candidate.indexOf("activatePackageGeneration(generation"), "candidate parity must pass before live activation")
+  assert.match(candidate, /reconcileDeployment\(generation\.root/)
+  assert.match(candidate, /runSelfPatch\(deploymentRoot, \{ toolchainRoot: root \}\)/)
+  assert.match(candidate, /runtime-only transport intentionally excludes Bun\/dev dependencies/)
+  assert.match(candidate, /stdout\.replace\(\/\\r\?\\n\$\/, ""\)/, "candidate audit paths must preserve Git porcelain's leading status columns")
+  assert.ok(candidate.indexOf("tui-runtime-parity.test.mjs") < candidate.indexOf("reconcileDeployment(generation.root"), "candidate parity must pass before unified deployment reconciliation")
   assert.doesNotMatch(candidate, /git tag|git push|npm publish/)
+})
+
+test("one discoverable control plane owns deployment state and derived outputs", () => {
+  const packageJson = JSON.parse(read("package.json"))
+  const agents = read("AGENTS.md")
+  const control = read("packages/shared/deployment.js")
+  assert.equal(packageJson.scripts.toolings, "node scripts/toolings.mjs")
+  assert.equal(packageJson.scripts.doctor, "node scripts/toolings.mjs doctor")
+  assert.match(agents, /only supported deployment-management interface/)
+  assert.match(control, /deploymentRecordPath/)
+  assert.match(control, /coordination pointer derived/)
+  assert.match(control, /host runtime reconciled/)
+  const legacyInstall = read("scripts/install.mjs")
+  assert.match(legacyInstall, /developmentDeployment/)
+  assert.doesNotMatch(legacyInstall, /writeJsonAtomic|ensureTuiCompanion/)
 })
 
 test("shareability validation requires the native stealth runtime and rejects retired Python workers", () => {
@@ -50,6 +68,9 @@ test("local release enforces immutable tags, complete tests, native passkey auth
   assert.match(source, /native authentication flow/);
   assert.match(source, /--provenance=false/);
   assert.match(source, /registry\.integrity !== packed\.integrity/);
+  assert.match(source, /reconcileDeployment\(publishedGeneration\.root/);
+  assert.match(source, /runSelfPatch\(deploymentRoot, \{ toolchainRoot: buildRoot \}\)/);
+  assert.match(source, /published deployment did not reconcile exactly/);
   assert.match(source, /expectedTools = 17/);
   assert.match(source, /npmCli = process\.env\.npm_execpath/);
   assert.match(source, /process\.execPath/);

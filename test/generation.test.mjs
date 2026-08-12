@@ -4,7 +4,8 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { activatePackageGeneration, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, resolveNpmCommand, runtimeAttestation, runtimeHealth, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
+import { activatePackageGeneration, deploymentRecordPath, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, resolveNpmCommand, runtimeAttestation, runtimeHealth, tuiCoordinationPath, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
+import { deploymentStatus, discoverConfiguredDeployment, reconcileDeployment } from "../packages/shared/deployment.js"
 
 function createInstallation(root, version) {
   const packageRoot = join(root, "node_modules", "opencode-optimised-toolings")
@@ -181,7 +182,79 @@ test("activation switches server and TUI together and preserves unrelated config
     assert.equal(tui.plugin[1], "file:///old/packages/tui/index.tsx")
     assert.equal(tui.plugin[2], "other-tui")
     assert.equal(tui.theme, "keep")
-    assert.equal(result.backups.length, 2)
+    assert.equal(result.backups.length, 4)
+    const pointer = JSON.parse(readFileSync(tuiCoordinationPath(configDir), "utf8"))
+    const deployment = JSON.parse(readFileSync(deploymentRecordPath(configDir), "utf8"))
+    assert.equal(pointer.spec, generation.specs.tui)
+    assert.equal(pointer.generation, generation.root)
+    assert.equal(deployment.desired.root, generation.root)
+    assert.equal(deployment.desired.serverSpec, generation.specs.server)
+    assert.equal(deployment.desired.tuiSpec, generation.specs.tui)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("first-run adoption requires matching validated server and TUI roots", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-adopt-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    mkdirSync(configDir, { recursive: true })
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations") }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: [generation.specs.server] }, null, 2))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [generation.specs.tui] }, null, 2))
+    const adopted = await discoverConfiguredDeployment({ configDir, env })
+    assert.equal(adopted.valid, true)
+    assert.equal(adopted.root, generation.root)
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: ["file:///different/opencode-optimised-toolings/packages/tui/index.tsx"] }, null, 2))
+    const rejected = await discoverConfiguredDeployment({ configDir, env })
+    assert.equal(rejected.valid, false)
+    assert.equal(rejected.reason, "configured-server-tui-roots-do-not-match")
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("host deployment identity includes the verified artifact manifest without artifact archaeology", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-host-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    const runtime = join(directory, "runtime")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: [] }))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: runtime }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    await reconcileDeployment(generation.root, { configDir, env, generation })
+    const patchedPath = join(runtime, "patched", "opencode-1.2.3.exe")
+    mkdirSync(join(runtime, "patched"), { recursive: true })
+    writeFileSync(`${patchedPath}.manifest.json`, JSON.stringify({ profileVersion: "1.2.3", manifestSha256: "manifest-sha", binarySha256: "binary-sha" }))
+    const { writeHostDeployment } = await import("../packages/shared/deployment.js")
+    await writeHostDeployment(generation.root, { version: "1.2.3", patchedPath, patchedSha256: "binary-sha", binaryPath: join(runtime, "opencode.exe") }, { configDir, env })
+    const deployment = JSON.parse(readFileSync(deploymentRecordPath(configDir), "utf8"))
+    assert.equal(deployment.desired.host.profile, "1.2.3")
+    assert.equal(deployment.desired.host.manifestSha256, "manifest-sha")
+    assert.equal(deployment.desired.host.expectedSha256, "binary-sha")
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("deployment status detects and unified reconcile repairs every derived pointer", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-reconcile-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: ["wrong-server"] }, null, 2))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: ["wrong-tui"] }, null, 2))
+    writeFileSync(tuiCoordinationPath(configDir), JSON.stringify({ spec: "wrong-pointer" }, null, 2))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime") }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    const reconciled = await reconcileDeployment(generation.root, { configDir, env, generation })
+    assert.equal(reconciled.status.checks.find((item) => item.name === "server config derived")?.ok, true)
+    assert.equal(reconciled.status.checks.find((item) => item.name === "TUI config derived")?.ok, true)
+    assert.equal(reconciled.status.checks.find((item) => item.name === "coordination pointer derived")?.ok, true)
+    const status = await deploymentStatus({ configDir, env })
+    assert.equal(status.desired.root, generation.root)
+    assert.equal(status.checks.filter((item) => item.name !== "host runtime reconciled").every((item) => item.ok), true)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 

@@ -4,6 +4,7 @@ import { readState, stateSummary, writeState } from "./lib/state.js"
 import { runSelfPatch } from "./lib/pipeline.js"
 import { ensureTuiCompanion } from "./lib/tui-registration.js"
 import { runtimeHealth } from "../shared/generation.js"
+import { deploymentStatus, writeHostDeployment } from "../shared/deployment.js"
 
 export function repoRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
@@ -54,6 +55,7 @@ export async function SelfPatchPlugin() {
         // never blocked or replaced; portable plugin behavior stays available.
         await runSelfPatch(root)
         const state = await readState(root)
+        await writeHostDeployment(root, state).catch(() => {})
         const delay = controllerRetryDelay(state)
         if (delay !== null && !disposed) {
           retryTimer = setTimeout(() => {
@@ -98,11 +100,13 @@ export async function SelfPatchPlugin() {
           ensureStarted()
           const state = await readState(root)
           const runtime = runtimeHealth(process.env, root)
+          const deployment = await deploymentStatus().catch(() => null)
           const short = (value) => typeof value === "string" ? value.slice(0, 16) : "unknown"
           return [
             `Enhancement status: ${state.status}`,
             `OpenCode version: ${state.version ?? "unknown"}`,
             `Plugin active: yes`,
+            `Deployment control plane: ${deployment?.ok ? "consistent" : "drifted; run npm run toolings -- reconcile"}`,
             `Runtime parity: ${runtime.exact ? "exact" : `not proven (${runtime.reason})`}`,
             runtime.server ? `Server loaded: v${runtime.server.version ?? "unknown"} · source ${short(runtime.server.sourceFingerprint)} · dependencies ${short(runtime.server.dependencyFingerprint)}` : "Server loaded: attestation unavailable",
             runtime.tui ? `TUI loaded: v${runtime.tui.version ?? "unknown"} · ${runtime.tui.status}/${runtime.tui.stage ?? "unknown"} · source ${short(runtime.tui.sourceFingerprint)} · dependencies ${short(runtime.tui.dependencyFingerprint)}` : "TUI loaded: attestation unavailable",

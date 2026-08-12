@@ -562,6 +562,14 @@ test("v1.18.16 exact profile preserves every reviewed v1.18.15 host fingerprint"
   assert.deepEqual(patchManifest11816.create, patchManifest11815.create)
 })
 
+test("self-patch separates immutable deployment identity from the local build toolchain", () => {
+  const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
+  assert.match(source, /runSelfPatch\(root, options = \{\}\)/)
+  assert.match(source, /toolchainRoot = path\.resolve\(options\.toolchainRoot \?\? root\)/)
+  assert.match(source, /installSourceDeps\(sourceRoot, toolchainRoot/)
+  assert.match(source, /buildPatchedWithRepair\([\s\S]*?sourceRoot,[\s\S]*?toolchainRoot,/)
+})
+
 test("binary detection retries through an updater swap window", async () => {
   const waits = []
   const results = [null, { path: process.execPath, version: process.versions.node, devMode: true }, { path: "C:/tools/opencode.exe", version: "1.18.16", devMode: false }]

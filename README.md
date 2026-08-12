@@ -2,6 +2,18 @@
 
 A zero-touch, updateable OpenCode plugin that turns the terminal UI into a mouse-first IDE and adds production-grade filesystem, terminal, codebase-memory, web, stealth, settings, and host-integration tools.
 
+## One control plane
+
+Every deployment decision is declared in one machine-readable record: `~/.config/opencode/alonix/deployment.json`. Server config, TUI config, the coordination pointer, immutable generation, and host enhancement identity are derived state. Humans and agents must not manage those outputs independently.
+
+```bash
+npm run toolings -- status
+npm run toolings -- doctor
+npm run toolings -- reconcile
+```
+
+`status` explains the desired deployment and every derived invariant. `doctor` exits nonzero on drift. `reconcile` idempotently repairs all derived outputs from the canonical record; use `--source=checkout` only for the mandatory direct-local development phase. This is the complete operational interface for a fresh agent.
+
 ## Install
 
 ```bash

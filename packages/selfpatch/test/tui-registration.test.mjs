@@ -7,9 +7,18 @@ import { join } from "node:path"
 import { ensureTuiCompanion, tuiCompanionSpec } from "../lib/tui-registration.js"
 
 function developmentFixture() {
-  const root = mkdtempSync(join(tmpdir(), "alonix-tui-dev-"))
-  const configDirectory = join(root, "config")
-  return { root, configDirectory, configPath: join(configDirectory, "tui.json") }
+  const container = mkdtempSync(join(tmpdir(), "alonix-tui-dev-"))
+  const root = join(container, "opencode-optimised-toolings")
+  const configDirectory = join(container, "user-config")
+  for (const directory of ["packages/tui", "packages/cbm/dist", "config"]) mkdirSync(join(root, directory), { recursive: true })
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "4.0.2", files: ["index.js", "packages/tui", "packages/cbm/dist", "config"] }))
+  writeFileSync(join(root, "index.js"), "export default async () => ({ tool: {} })\n")
+  writeFileSync(join(root, "packages/tui/index.tsx"), "export default { id: 'fixture' }\n")
+  writeFileSync(join(root, "packages/tui/package.json"), JSON.stringify({ name: "@sparkly/toolings-tui", version: "2.0.0", private: true, type: "module", main: "index.tsx" }))
+  writeFileSync(join(root, "packages/cbm/dist/index.js"), "export default async () => ({ tool: {} })\n")
+  const graph = []
+  writeFileSync(join(root, "config/runtime-dependencies.json"), JSON.stringify({ schemaVersion: 1, fingerprint: createHash("sha256").update(JSON.stringify(graph)).digest("hex"), graph }))
+  return { root, container, configDirectory, configPath: join(configDirectory, "tui.json") }
 }
 
 function installedFixture(directory, name, version) {
@@ -37,7 +46,13 @@ test("development checkout registration creates TUI config and is idempotent", a
     assert.equal(first.changed, true)
     assert.equal(second.changed, false)
     assert.deepEqual(config.plugin, [tuiCompanionSpec(f.root)])
-  } finally { rmSync(f.root, { recursive: true, force: true }) }
+    const server = JSON.parse(readFileSync(join(f.configDirectory, "opencode.json"), "utf8"))
+    const pointer = JSON.parse(readFileSync(join(f.configDirectory, ".sparkly-toolings-tui.json"), "utf8"))
+    const deployment = JSON.parse(readFileSync(join(f.configDirectory, "alonix", "deployment.json"), "utf8"))
+    assert.match(server.plugin[0], /index\.js$/)
+    assert.equal(pointer.spec, tuiCompanionSpec(f.root))
+    assert.equal(deployment.desired.mode, "development")
+  } finally { rmSync(f.container, { recursive: true, force: true }) }
 })
 
 test("development registration preserves unrelated TUI settings and replaces only its managed path", async () => {
@@ -49,22 +64,22 @@ test("development registration preserves unrelated TUI settings and replaces onl
     const config = JSON.parse(readFileSync(f.configPath, "utf8"))
     assert.equal(result.changed, true)
     assert.equal(config.theme, "custom")
-    assert.deepEqual(config.plugin, [["unrelated", { keep: true }], result.spec])
-  } finally { rmSync(f.root, { recursive: true, force: true }) }
+    assert.deepEqual(config.plugin, [result.spec, ["unrelated", { keep: true }]])
+  } finally { rmSync(f.container, { recursive: true, force: true }) }
 })
 
-test("unchanged development registration does not rewrite its marker on every project instance", async () => {
+test("unchanged development registration does not rewrite its canonical deployment on every project instance", async () => {
   const f = developmentFixture()
   try {
     const first = await ensureTuiCompanion(f.root, { configDirectory: f.configDirectory })
-    const marker = join(f.configDirectory, ".sparkly-toolings-tui.json")
+    const marker = join(f.configDirectory, "alonix", "deployment.json")
     const before = readFileSync(marker, "utf8")
     await new Promise((resolve) => setTimeout(resolve, 5))
     const second = await ensureTuiCompanion(f.root, { configDirectory: f.configDirectory })
     assert.equal(first.changed, true)
     assert.equal(second.changed, false)
     assert.equal(readFileSync(marker, "utf8"), before)
-  } finally { rmSync(f.root, { recursive: true, force: true }) }
+  } finally { rmSync(f.container, { recursive: true, force: true }) }
 })
 
 test("installed registration provisions one generation and switches both configs to direct files", async () => {
@@ -89,6 +104,11 @@ test("installed registration provisions one generation and switches both configs
     assert.equal(server.plugin[1], "personal")
     assert.equal(tui.plugin[1], "other-tui")
     assert.equal(tui.theme, "keep")
+    const pointer = JSON.parse(readFileSync(join(configDirectory, ".sparkly-toolings-tui.json"), "utf8"))
+    const deployment = JSON.parse(readFileSync(join(configDirectory, "alonix", "deployment.json"), "utf8"))
+    assert.equal(pointer.spec, result.spec)
+    assert.equal(deployment.desired.tuiSpec, result.spec)
+    assert.equal(deployment.desired.serverSpec, server.plugin[0])
   } finally {
     if (previousMode === undefined) delete process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
     else process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = previousMode

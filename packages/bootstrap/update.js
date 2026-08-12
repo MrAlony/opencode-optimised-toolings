@@ -1,5 +1,6 @@
 import { isDevelopmentCheckout, packageVersion } from "../shared/paths.js"
-import { activatePackageGeneration, ensurePackageGeneration, validateActivationConfig } from "../shared/generation.js"
+import { ensurePackageGeneration, validateActivationConfig } from "../shared/generation.js"
+import { reconcileDeployment } from "../shared/deployment.js"
 
 const PACKAGE_NAME = "opencode-optimised-toolings"
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`
@@ -60,7 +61,8 @@ export async function stagePackageUpdate(packageRoot, options = {}) {
     version: latest,
     source: "registry",
   })
-  const activation = await activatePackageGeneration(generation, options)
+  const reconciled = await reconcileDeployment(generation.root, { ...options, generation })
+  const activation = reconciled.activation
   return {
     changed: activation.changed,
     current,

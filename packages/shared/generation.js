@@ -598,6 +598,38 @@ function activationHash(text) {
   return createHash("sha256").update(text).digest("hex")
 }
 
+export function deploymentRecordPath(configDir) {
+  return join(resolve(configDir), "alonix", "deployment.json")
+}
+
+export function tuiCoordinationPath(configDir) {
+  return join(resolve(configDir), ".sparkly-toolings-tui.json")
+}
+
+function deploymentRecord(generation, previous = null) {
+  const root = resolve(generation.root)
+  const sameDeployment = previous?.desired?.root && normalize(previous.desired.root) === normalize(root)
+    && previous.desired.version === generation.version
+    && (previous.desired.fingerprint ?? null) === (generation.fingerprint ?? null)
+  return {
+    schemaVersion: 1,
+    authority: "opencode-optimised-toolings-control-plane",
+    desired: {
+      mode: generation.development ? "development" : "immutable-generation",
+      package: PACKAGE_NAME,
+      version: generation.version,
+      root,
+      fingerprint: generation.fingerprint ?? null,
+      serverSpec: generation.specs.server,
+      tuiSpec: generation.specs.tui,
+      host: sameDeployment && previous?.desired?.host
+        ? previous.desired.host
+        : { policy: "exact-compatible-profile" },
+    },
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 async function recoverActivationJournal(configDir) {
   const journal = join(configDir, "alonix", ".generation-activation.json")
   if (!existsSync(journal)) return { recovered: false }
@@ -613,8 +645,11 @@ async function recoverActivationJournal(configDir) {
   }))).every(Boolean)
   if (!committed) {
     for (const item of files) {
-      const before = await fs.readFile(item.backup, "utf8")
-      await atomicWrite(item.file, before)
+      if (item.existed === false) await fs.rm(item.file, { force: true }).catch(() => {})
+      else {
+        const before = await fs.readFile(item.backup, "utf8")
+        await atomicWrite(item.file, before)
+      }
     }
   }
   await fs.rm(journal, { force: true }).catch(() => {})
@@ -650,25 +685,45 @@ export async function activatePackageGeneration(generation, options = {}) {
       const spec = role === "server" ? generation.specs.server : generation.specs.tui
       const after = setJsonc(before, ["plugin"], replaceManaged(data.plugin, spec))
       parseDocument(after, basename(file))
-      if (after !== before) planned.push({ role, file, before, after, afterHash: activationHash(after) })
+      if (after !== before) planned.push({ role, file, before, after, afterHash: activationHash(after), existed: existsSync(file) })
     }
+
+    const pointerFile = tuiCoordinationPath(configDir)
+    const pointerBefore = existsSync(pointerFile) ? await fs.readFile(pointerFile, "utf8") : ""
+    const pointerAfter = `${JSON.stringify({ schemaVersion: 1, spec: generation.specs.tui, generation: resolve(generation.root), version: generation.version, fingerprint: generation.fingerprint ?? null }, null, 2)}\n`
+    if (pointerAfter !== pointerBefore) planned.push({ role: "pointer", file: pointerFile, before: pointerBefore, after: pointerAfter, afterHash: activationHash(pointerAfter), existed: existsSync(pointerFile) })
+
+    const deploymentFile = deploymentRecordPath(configDir)
+    const deploymentBefore = existsSync(deploymentFile) ? await fs.readFile(deploymentFile, "utf8") : ""
+    let currentDeployment = null
+    try { currentDeployment = JSON.parse(deploymentBefore) } catch {}
+    const deploymentAfter = `${JSON.stringify(deploymentRecord(generation, currentDeployment), null, 2)}\n`
+    let deploymentEquivalent = false
+    try {
+      const current = currentDeployment
+      const next = JSON.parse(deploymentAfter)
+      deploymentEquivalent = JSON.stringify(current?.desired) === JSON.stringify(next.desired)
+    } catch {}
+    if (!deploymentEquivalent) planned.push({ role: "deployment", file: deploymentFile, before: deploymentBefore, after: deploymentAfter, afterHash: activationHash(deploymentAfter), existed: existsSync(deploymentFile) })
+
     if (!planned.length) return { changed: false, generation: generation.root, version: generation.version, files: [] }
 
     const backupDir = join(configDir, "alonix", "backups")
     await fs.mkdir(backupDir, { recursive: true })
     const stamp = new Date().toISOString().replace(/[:.]/g, "-")
     for (const item of planned) {
-      item.backup = join(backupDir, `${stamp}-generation-${basename(item.file)}`)
+      item.backup = join(backupDir, `${stamp}-deployment-${item.role}-${basename(item.file)}`)
       await fs.writeFile(item.backup, item.before, { encoding: "utf8", mode: 0o600 })
     }
     const journal = join(configDir, "alonix", ".generation-activation.json")
-    await atomicWrite(journal, `${JSON.stringify({ version: 1, generation: generation.root, createdAt: new Date().toISOString(), files: planned.map(({ file, backup, afterHash }) => ({ file, backup, afterHash })) }, null, 2)}\n`)
+    await atomicWrite(journal, `${JSON.stringify({ version: 2, generation: generation.root, createdAt: new Date().toISOString(), files: planned.map(({ file, backup, afterHash, existed }) => ({ file, backup, afterHash, existed })) }, null, 2)}\n`)
     const applied = []
     try {
-      // Write TUI first. If the process is interrupted before the server switch,
-      // the new TUI can fail closed against the old server. The reverse ordering
-      // could expose an old TUI with new server behavior.
-      for (const item of planned.toSorted((left, right) => (left.role === "tui" ? -1 : 1) - (right.role === "tui" ? -1 : 1))) {
+      // Derived outputs switch before the canonical record. If interrupted, the
+      // journal restores all outputs; deployment.json is committed last and is
+      // therefore the sole declaration that a deployment became authoritative.
+      const order = { tui: 0, pointer: 1, server: 2, deployment: 3 }
+      for (const item of planned.toSorted((left, right) => (order[left.role] ?? 2) - (order[right.role] ?? 2))) {
         await atomicWrite(item.file, item.after)
         applied.push(item)
       }
@@ -677,7 +732,10 @@ export async function activatePackageGeneration(generation, options = {}) {
       }
       await fs.rm(journal, { force: true })
     } catch (error) {
-      for (const item of planned) await atomicWrite(item.file, item.before).catch(() => {})
+      for (const item of planned) {
+        if (!item.existed) await fs.rm(item.file, { force: true }).catch(() => {})
+        else await atomicWrite(item.file, item.before).catch(() => {})
+      }
       await fs.rm(journal, { force: true }).catch(() => {})
       throw error
     }

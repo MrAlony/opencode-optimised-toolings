@@ -9,7 +9,8 @@ import { SelfPatchPlugin } from "./packages/selfpatch/index.js";
 import { applyRuntimeDefaults, migrateInstalledConfig } from "./packages/bootstrap/index.js";
 import { packageRootFrom } from "./packages/shared/paths.js";
 import { schedulePackageUpdate } from "./packages/bootstrap/update.js";
-import { ensureAndActivateGeneration, runtimeAttestation, writeServerLifecycle } from "./packages/shared/generation.js";
+import { runtimeAttestation, writeServerLifecycle } from "./packages/shared/generation.js";
+import { reconcileDeployment } from "./packages/shared/deployment.js";
 
 function combineHooks(parts) {
   const output = { tool: {} };
@@ -41,7 +42,7 @@ export const OptimisedToolingsPlugin = async (input) => {
     // package-local locked generation, switch both config entries atomically,
     // and execute that exact server generation in this process.
     try {
-      const prepared = await ensureAndActivateGeneration(packageRoot);
+      const prepared = await reconcileDeployment(packageRoot);
       const target = prepared.generation.root;
       if (target === packageRoot) throw new Error("Alonix locked-generation delegation did not change the runtime root");
       const loaded = await import(`${pathToFileURL(join(target, "index.js")).href}?generation=${prepared.generation.fingerprint}`);

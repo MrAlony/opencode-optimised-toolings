@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { packageFingerprint } from "../packages/shared/generation.js"
+import { runSelfPatch } from "../packages/selfpatch/lib/pipeline.js"
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)))
 const packageName = "opencode-optimised-toolings"
@@ -38,7 +39,7 @@ function output(command, args, options = {}) {
   return run(command, args, { ...options, capture: true }).stdout.trim()
 }
 
-const status = output("git", ["status", "--porcelain"])
+const status = run("git", ["status", "--porcelain"], { capture: true }).stdout.replace(/\r?\n$/, "")
 if (!status) fail("candidate mode requires locally validated working-tree changes; the checkout is clean")
 const changed = status.split(/\r?\n/).filter(Boolean)
 console.log(`Preparing candidate from ${changed.length} working-tree change(s).`)
@@ -85,7 +86,17 @@ try {
     env: { ...process.env, ALONIX_GENERATION: generation.root, OPENCODE_TOOLINGS_DATA_DIR: runtimeRoot },
   })
 
-  const activation = await generationModule.activatePackageGeneration(generation, { env })
+  const deploymentModule = await import(pathToFileURL(join(transportRoot, "packages", "shared", "deployment.js")).href)
+  // Candidate source/dependency parity is proven above. Host construction still
+  // executes through the checkout's validated build environment because the
+  // clean runtime-only transport intentionally excludes Bun/dev dependencies.
+  const reconciled = await deploymentModule.reconcileDeployment(generation.root, {
+    env,
+    generation,
+    reconcileHost: (deploymentRoot) => runSelfPatch(deploymentRoot, { toolchainRoot: root }),
+  })
+  const activation = reconciled.activation
+  if (!reconciled.status.ok) fail(`candidate deployment control plane is inconsistent: ${JSON.stringify(reconciled.status.checks)}`)
   const summary = {
     candidate: generation.root,
     version: generation.version,

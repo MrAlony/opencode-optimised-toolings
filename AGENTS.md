@@ -1,5 +1,9 @@
 # Repository Agent Rules
 
+## Deployment control plane
+
+The only supported deployment-management interface is `npm run toolings -- status|doctor|reconcile`. The canonical desired state is `~/.config/opencode/alonix/deployment.json`; `opencode.json`, `tui.json`, `.sparkly-toolings-tui.json`, immutable generations, and host-patch state are derived implementation details. Never edit or activate those outputs independently. Use `reconcile --source=checkout` for direct-local validation; candidate/update/release tooling must call the same reconciler.
+
 ## Release policy: local-only, no runners
 
 This repository must not depend on GitHub Actions, GitHub-hosted runners, self-hosted runners, or any other CI runner for building, testing, packaging, publishing, or recovering an npm release.

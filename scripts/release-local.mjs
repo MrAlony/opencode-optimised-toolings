@@ -182,7 +182,20 @@ try {
   if (registry.integrity !== packed.integrity || registry.shasum !== packed.shasum) {
     fail("registry integrity does not match the locally verified tarball");
   }
-  console.log(`LOCAL RELEASE SUCCESS: ${packageName}@${version} is registry-verified.`);
+
+  // Publication and live activation use the same control plane as development,
+  // candidates, and background updates. No temporary consumer path or @latest
+  // pointer is allowed to become an independent deployment authority.
+  const generationModule = await import(pathToFileURL(join(buildRoot, "packages", "shared", "generation.js")).href);
+  const deploymentModule = await import(pathToFileURL(join(buildRoot, "packages", "shared", "deployment.js")).href);
+  const selfpatchModule = await import(pathToFileURL(join(buildRoot, "packages", "selfpatch", "lib", "pipeline.js")).href);
+  const publishedGeneration = await generationModule.ensurePackageGeneration(buildRoot, { version, source: "registry", force: true });
+  const reconciled = await deploymentModule.reconcileDeployment(publishedGeneration.root, {
+    generation: publishedGeneration,
+    reconcileHost: (deploymentRoot) => selfpatchModule.runSelfPatch(deploymentRoot, { toolchainRoot: buildRoot }),
+  });
+  if (!reconciled.status.ok) fail(`published deployment did not reconcile exactly: ${JSON.stringify(reconciled.status.checks)}`);
+  console.log(`LOCAL RELEASE SUCCESS: ${packageName}@${version} is registry-verified and reconciled through ${reconciled.status.files.deployment}.`);
 } finally {
   if (process.env.ALONIX_KEEP_RELEASE_TEMP !== "1") rmSync(releaseRoot, { recursive: true, force: true });
 }

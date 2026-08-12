@@ -603,7 +603,8 @@ export function installPending(state, now = Date.now()) {
   return now - ts <= INSTALL_PENDING_STALE_MS
 }
 
-export async function runSelfPatch(root) {
+export async function runSelfPatch(root, options = {}) {
+  const toolchainRoot = path.resolve(options.toolchainRoot ?? root)
   const lock = lockFile(root)
   await acquireLock(lock)
   const state = await readState(root)
@@ -777,13 +778,13 @@ export async function runSelfPatch(root) {
     }
 
     await writeState(root, { status: "installing", progressPercent: 35, stepLabel: "Installing OpenCode build dependencies (first run only; takes a few minutes)" })
-    await installSourceDeps(sourceRoot, root, (tail) => {
+    await installSourceDeps(sourceRoot, toolchainRoot, (tail) => {
       void writeState(root, { status: "installing", progressPercent: 38, stepLabel: "Installing OpenCode build dependencies", logTail: tail }).catch(() => {})
     })
     await writeState(root, { status: "building", progressPercent: 40, stepLabel: "Rebuilding OpenCode (first run takes a few minutes)" })
     const binary = await buildPatchedWithRepair(
       sourceRoot,
-      root,
+      toolchainRoot,
       bin.version,
       (tail) => {
         void writeState(root, { status: "building", progressPercent: 45, stepLabel: "Rebuilding OpenCode", logTail: tail }).catch(() => {})

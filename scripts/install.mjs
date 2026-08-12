@@ -1,28 +1,15 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-import { cbmSkillPath, configDirectory, globalConfigPath, globalOpenCodeDirectory, installStatePath, root, rootPluginUrl } from "./lib/paths.mjs";
-import { readJson, writeJsonAtomic } from "./lib/json-files.mjs";
-import { migrateOpenCodeConfig } from "./lib/install-core.mjs";
-import { ensureTuiCompanion } from "../packages/selfpatch/lib/tui-registration.js";
+import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { developmentDeployment } from "../packages/shared/deployment.js"
+import { runSelfPatch } from "../packages/selfpatch/lib/pipeline.js"
 
-function backup(path, suffix) { if (!existsSync(path)) return null; const target = resolve(configDirectory, `backup-${suffix}-${Date.now()}-${basename(path)}`); copyFileSync(path, target); return target; }
-
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)))
 try {
-  const original = readJson(globalConfigPath);
-  const previousState = readJson(installStatePath, null);
-  const reusable = previousState?.backups?.config && existsSync(previousState.backups.config);
-  const state = reusable
-    ? { ...previousState, reinstalled_at: new Date().toISOString(), root_plugin: rootPluginUrl }
-    : { installed_at: new Date().toISOString(), global_config: globalConfigPath, backups: {}, root_plugin: rootPluginUrl };
-  if (!reusable) state.backups.config = backup(globalConfigPath, "opencode");
-  const config = migrateOpenCodeConfig(original, { rootPluginUrl, cbmSkillPath });
-  mkdirSync(globalOpenCodeDirectory, { recursive: true }); writeJsonAtomic(globalConfigPath, config);
-  const guidanceTargets = [[resolve(root, "config", "AGENTS.md"), resolve(globalOpenCodeDirectory, "AGENTS.md"), "agents"], [resolve(root, "config", "agents", "kilo-implementer.md"), resolve(globalOpenCodeDirectory, "agents", "kilo-implementer.md"), "kilo"]];
-  for (const [source, target, key] of guidanceTargets) { if (!reusable || !state.backups[key] || !existsSync(state.backups[key])) state.backups[key] = backup(target, key); mkdirSync(dirname(target), { recursive: true }); copyFileSync(source, target); }
-  const tuiJsonPath = resolve(globalOpenCodeDirectory, "tui.json");
-  if (!reusable || !state.backups.tui || !existsSync(state.backups.tui)) state.backups.tui = existsSync(tuiJsonPath) ? backup(tuiJsonPath, "tui") : null;
-  await ensureTuiCompanion(root, { configDirectory: globalOpenCodeDirectory });
-  writeJsonAtomic(installStatePath, state);
-  console.log(`INSTALL SUCCESS\nRoot plugin: ${rootPluginUrl}\nConfig backup: ${state.backups.config}\nBuilt-in webfetch: disabled and denied\nStealth MCP: removed\nTUI plugin: ${tuiJsonPath}\nFully quit and restart OpenCode to load the unified plugin. If the first launch installs a patched binary, quit and relaunch once more to activate it; the installer never stops or restarts a running process.`);
-} catch (error) { console.error(`INSTALL FAILED: ${error.message}`); process.exitCode = 1; }
+  const result = await developmentDeployment(root, { reconcileHost: runSelfPatch })
+  if (!result.status.ok) throw new Error(`deployment remains inconsistent: ${JSON.stringify(result.status.checks)}`)
+  console.log(`INSTALL SUCCESS: direct checkout reconciled through ${result.status.files.deployment}. Fully quit and restart OpenCode.`)
+} catch (error) {
+  console.error(`INSTALL FAILED: ${error?.message ?? error}`)
+  process.exitCode = 1
+}
