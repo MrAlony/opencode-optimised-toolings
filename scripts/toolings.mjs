@@ -23,7 +23,18 @@ try {
     const root = sourceArg === "checkout" ? checkout : resolve(record?.desired?.root ?? discovered.root)
     const result = sourceArg === "checkout"
       ? await developmentDeployment(root, { reconcileHost: runSelfPatch })
-      : await reconcileDeployment(root, { generation: discovered?.validation, reconcileHost: runSelfPatch })
+      : await reconcileDeployment(root, {
+          generation: discovered?.validation,
+          configSpecs: record?.desired
+            ? {
+                server: record.desired.serverSpec,
+                tui: Object.hasOwn(record.desired, "tuiConfigSpec") ? record.desired.tuiConfigSpec : record.desired.tuiSpec,
+                pointer: record.desired.tuiSpec,
+                desiredTui: record.desired.tuiSpec,
+              }
+            : undefined,
+          reconcileHost: runSelfPatch,
+        })
     console.log(json ? JSON.stringify(result, null, 2) : deploymentSummary(result.status))
     if (!result.status.ok) process.exitCode = 1
   } else {

@@ -10,6 +10,7 @@ const beforeSha256 = new Map([
   ["packages/tui/src/component/prompt/index.tsx", "fed47f1ef68ee6d96db553749570d073e539d0544e89aa5968ff1f55a3828d6e"],
   ["packages/plugin/src/tui.ts", "3b0ccca22ebf8558afb9dc055505c7c503930f2f622d1db8c3fb9ca3e9278e8c"],
   ["packages/opencode/src/plugin/tui/runtime.ts", "f454bc0c2ec61d5cf605f4c65b2223692cd6731f501fd64a4a762a8868c69e70"],
+  ["packages/opencode/src/config/tui.ts", "7d7b30d41d5c04ea443819727490142406d293e031dcc221babeb3da1db3e902"],
   ["packages/opencode/src/session/prompt.ts", "0ef73c460d46619cd3e75d4b790a22a3c4c999b311a43e7887b634ff7a3fa06d"],
   ["packages/tui/src/app.tsx", "c0715487889226993d4d6f3938880aad999704ca89211dcd70cbf77ec5b1e3d7"],
   ["packages/tui/src/plugin/adapters.tsx", "ecff9bb3a2d1acf0f4ee6d1dacf213ee059d88fa22cedced8cafa51dfb4eb353"],

@@ -9,6 +9,7 @@ import {
   deploymentRecordPath,
   ensurePackageGeneration,
   generationSpecs,
+  publicPackageSpecs,
   runtimeAttestation,
   tuiCoordinationPath,
   validateGeneration,
@@ -149,7 +150,8 @@ export async function deploymentStatus(options = {}) {
 
   const [server, tui, pointer] = await Promise.all([configuredSpec(files.server), configuredSpec(files.tui), readJson(files.pointer)])
   add("server config derived", server.valid && server.spec === desired?.serverSpec, server.spec ?? "missing")
-  add("TUI config derived", tui.valid && tui.spec === desired?.tuiSpec, tui.spec ?? "missing")
+  const expectedTuiConfigSpec = Object.hasOwn(desired ?? {}, "tuiConfigSpec") ? desired.tuiConfigSpec : desired?.tuiSpec
+  add("TUI config derived", tui.valid && tui.spec === expectedTuiConfigSpec, tui.spec ?? (expectedTuiConfigSpec === null ? "not declared (server package bridge)" : "missing"))
   add("coordination pointer derived", pointer?.spec === desired?.tuiSpec && (!desired?.root || normalize(pointer?.generation) === normalize(desired.root)), pointer?.spec ?? "missing")
 
   const state = desired?.root ? await readJson(join(runtimeRootForPackage(desired.root, options.env), "selfpatch-state.json")) : null
@@ -166,12 +168,13 @@ export async function deploymentStatus(options = {}) {
 export async function reconcileDeployment(packageRoot, options = {}) {
   const root = resolve(packageRoot)
   const generation = options.generation ?? await ensurePackageGeneration(root, options)
+  const configSpecs = options.publicPackage === true ? publicPackageSpecs() : options.configSpecs ?? generation.specs
   // Host preparation happens before the desired generation becomes active. A
   // failed optional enhancement therefore cannot leave package pointers moved
   // to a deployment whose host boundary was never examined.
   let host = null
   if (typeof options.reconcileHost === "function") host = await options.reconcileHost(generation.root)
-  const activation = await activatePackageGeneration(generation, options)
+  const activation = await activatePackageGeneration(generation, { ...options, configSpecs })
   if (typeof options.reconcileHost === "function") {
     const state = await readJson(join(runtimeRootForPackage(generation.root, options.env), "selfpatch-state.json"))
     if (state) await writeHostDeployment(generation.root, state, options)

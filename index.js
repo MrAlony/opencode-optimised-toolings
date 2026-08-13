@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { SelfPatchPlugin } from "./packages/selfpatch/index.js";
 import { applyRuntimeDefaults, migrateInstalledConfig } from "./packages/bootstrap/index.js";
-import { packageRootFrom } from "./packages/shared/paths.js";
+import { isDevelopmentCheckout, packageRootFrom } from "./packages/shared/paths.js";
 import { schedulePackageUpdate } from "./packages/bootstrap/update.js";
 import { runtimeAttestation, writeServerLifecycle } from "./packages/shared/generation.js";
 import { reconcileDeployment } from "./packages/shared/deployment.js";
@@ -36,13 +36,12 @@ export const OptimisedToolingsPlugin = async (input) => {
   const packageRoot = packageRootFrom(import.meta.url);
   const attestation = await runtimeAttestation(packageRoot, { role: "server" });
   let provisioningError = null;
-  if (attestation.dependencyMatchesExpected === false) {
-    // The npm-resolved package is transport only. OpenCode/npm may hoist a
-    // different transitive tree than the published shrinkwrap. Provision the
-    // package-local locked generation, switch both config entries atomically,
-    // and execute that exact server generation in this process.
+  if (!isDevelopmentCheckout(packageRoot) && attestation.sourceMatchesMarker !== true) {
+    // The npm-resolved package is a stable public bootstrap. Keep the user's
+    // `opencode-optimised-toolings@latest` declaration intact while executing
+    // the package's hidden, dependency-locked immutable generation internally.
     try {
-      const prepared = await reconcileDeployment(packageRoot);
+      const prepared = await reconcileDeployment(packageRoot, { publicPackage: true });
       const target = prepared.generation.root;
       if (target === packageRoot) throw new Error("Alonix locked-generation delegation did not change the runtime root");
       const loaded = await import(`${pathToFileURL(join(target, "index.js")).href}?generation=${prepared.generation.fingerprint}`);

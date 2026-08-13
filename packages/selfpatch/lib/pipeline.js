@@ -552,6 +552,12 @@ export async function buildPatchedWithRepair(sourceRoot, root, version, onLog, o
   } catch (error) {
     if (!error?.brokenInstall) throw error
     onRepair?.("Repairing an incomplete dependency install")
+    const implicated = packagesFromBuildLog(error.buildLog)
+    if (implicated.length === 0) {
+      onRepair?.("Refreshing the interrupted OpenCode workspace dependency graph")
+      await installSourceDeps(sourceRoot, root, onLog, { force: true })
+      return await buildPatched(sourceRoot, root, version, onLog)
+    }
     const repaired = await repairBrokenDependencies(sourceRoot, root, error.buildLog, onLog)
     if (repaired.length === 0) throw error
     onRepair?.(`Rebuilding after repairing ${repaired.map((item) => item.name).join(", ")}`)

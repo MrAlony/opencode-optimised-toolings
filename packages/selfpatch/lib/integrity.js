@@ -84,7 +84,10 @@ export function packagesFromBuildLog(log) {
 
 /** True when a build log shows the unresolved-import signature. */
 export function looksLikeBrokenInstall(log) {
-  return packagesFromBuildLog(log).length > 0
+  if (packagesFromBuildLog(log).length > 0) return true
+  const failures = parseUnresolvedImports(log)
+  const bareImports = failures.filter((item) => item.specifier && !item.specifier.startsWith(".") && !item.specifier.startsWith("/"))
+  return bareImports.length >= 3 && /Maybe you need to ["']bun install["']\?/i.test(String(log ?? ""))
 }
 
 function addTarget(set, value) {

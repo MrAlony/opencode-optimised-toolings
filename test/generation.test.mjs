@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { activatePackageGeneration, deploymentRecordPath, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, resolveNpmCommand, runtimeAttestation, runtimeHealth, tuiCoordinationPath, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
+import { activatePackageGeneration, candidatePackageSpecs, deploymentRecordPath, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, publicPackageSpecs, resolveNpmCommand, runtimeAttestation, runtimeHealth, tuiCoordinationPath, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
 import { deploymentStatus, discoverConfiguredDeployment, reconcileDeployment } from "../packages/shared/deployment.js"
 
 function createInstallation(root, version) {
@@ -193,6 +193,67 @@ test("activation switches server and TUI together and preserves unrelated config
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
+test("candidate activation uses one immutable package-root declaration and no TUI entry", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-candidate-spec-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: ["opencode-optimised-toolings@4.0.1", "personal"] }, null, 2))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [
+      "file:///old/opencode-optimised-toolings/packages/tui/index.tsx",
+      "file:///C:/Users/test/AppData/Local/Temp/opencode-optimised-toolings-6.4.0-old123/packages/tui/index.tsx",
+      "other",
+    ] }, null, 2))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations") }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    const configSpecs = candidatePackageSpecs(generation.root)
+    await activatePackageGeneration(generation, { configDir, configSpecs })
+    const server = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8"))
+    const tui = JSON.parse(readFileSync(join(configDir, "tui.json"), "utf8"))
+    const pointer = JSON.parse(readFileSync(tuiCoordinationPath(configDir), "utf8"))
+    const deployment = JSON.parse(readFileSync(deploymentRecordPath(configDir), "utf8"))
+    assert.equal(server.plugin[0], configSpecs.server)
+    assert.match(server.plugin[0], /opencode-optimised-toolings$/)
+    assert.equal(server.plugin[0].endsWith("/index.js"), false)
+    assert.deepEqual(tui.plugin, ["other"])
+    assert.equal(tui.plugin.some((entry) => String(entry).includes("opencode-optimised-toolings-6.4.0-old123")), false)
+    assert.equal(pointer.spec, configSpecs.server)
+    assert.equal(pointer.generation, generation.root)
+    assert.equal(deployment.desired.serverSpec, configSpecs.server)
+    assert.equal(deployment.desired.tuiSpec, configSpecs.server)
+    assert.equal(deployment.desired.tuiConfigSpec, null)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("installed activation keeps one public @latest declaration while internal identity remains immutable", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-generation-public-spec-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: ["file:///old/generation/opencode-optimised-toolings/index.js", "personal"] }, null, 2))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: ["file:///old/generation/opencode-optimised-toolings/packages/tui/index.tsx", "other"] }, null, 2))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations") }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    const configSpecs = publicPackageSpecs()
+    await activatePackageGeneration(generation, { configDir, configSpecs })
+    const server = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8"))
+    const tui = JSON.parse(readFileSync(join(configDir, "tui.json"), "utf8"))
+    const pointer = JSON.parse(readFileSync(tuiCoordinationPath(configDir), "utf8"))
+    const deployment = JSON.parse(readFileSync(deploymentRecordPath(configDir), "utf8"))
+    assert.equal(server.plugin[0], "opencode-optimised-toolings@latest")
+    assert.equal(tui.plugin.includes("opencode-optimised-toolings@latest"), false)
+    assert.equal(tui.plugin.includes("file:///old/generation/opencode-optimised-toolings/packages/tui/index.tsx"), false)
+    assert.equal(pointer.spec, "opencode-optimised-toolings@latest")
+    assert.equal(pointer.generation, generation.root)
+    assert.equal(deployment.desired.serverSpec, "opencode-optimised-toolings@latest")
+    assert.equal(deployment.desired.tuiSpec, "opencode-optimised-toolings@latest")
+    assert.equal(deployment.desired.tuiConfigSpec, null)
+    assert.equal(deployment.desired.root, generation.root)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
 test("first-run adoption requires matching validated server and TUI roots", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-adopt-"))
   try {
@@ -234,6 +295,25 @@ test("host deployment identity includes the verified artifact manifest without a
     assert.equal(deployment.desired.host.profile, "1.2.3")
     assert.equal(deployment.desired.host.manifestSha256, "manifest-sha")
     assert.equal(deployment.desired.host.expectedSha256, "binary-sha")
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("deployment status validates public specs against hidden immutable identity", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-public-status-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: [] }))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime") }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    const reconciled = await reconcileDeployment(generation.root, { configDir, env, generation, publicPackage: true })
+    assert.equal(reconciled.status.ok, true)
+    assert.equal(reconciled.status.desired.root, generation.root)
+    assert.equal(reconciled.status.desired.serverSpec, "opencode-optimised-toolings@latest")
+    assert.equal(reconciled.status.desired.tuiSpec, "opencode-optimised-toolings@latest")
+    assert.equal(reconciled.status.desired.tuiConfigSpec, null)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 

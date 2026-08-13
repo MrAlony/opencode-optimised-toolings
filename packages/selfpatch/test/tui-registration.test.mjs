@@ -82,7 +82,7 @@ test("unchanged development registration does not rewrite its canonical deployme
   } finally { rmSync(f.container, { recursive: true, force: true }) }
 })
 
-test("installed registration provisions one generation and switches both configs to direct files", async () => {
+test("installed registration provisions one generation while preserving one public package declaration", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-tui-installed-"))
   const previousMode = process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
   const previousGenerations = process.env.OPENCODE_TOOLINGS_GENERATIONS_DIR
@@ -97,17 +97,19 @@ test("installed registration provisions one generation and switches both configs
     const result = await ensureTuiCompanion(root, { configDirectory })
     const server = JSON.parse(readFileSync(join(configDirectory, "opencode.json"), "utf8"))
     const tui = JSON.parse(readFileSync(join(configDirectory, "tui.json"), "utf8"))
-    assert.match(result.spec, /generations\/v4\.0\.2--[a-f0-9]{16}\/opencode-optimised-toolings\/packages\/tui\/index\.tsx$/)
-    assert.match(server.plugin[0], /generations\/v4\.0\.2--[a-f0-9]{16}\/opencode-optimised-toolings\/index\.js$/)
-    assert.equal(result.spec.includes("/node_modules/"), false)
-    assert.equal(tui.plugin[0], result.spec)
+    assert.equal(result.spec, "opencode-optimised-toolings@latest")
+    assert.equal(server.plugin[0], "opencode-optimised-toolings@latest")
+    assert.equal(tui.plugin.includes("opencode-optimised-toolings@latest"), false)
+    assert.equal(tui.plugin.includes("opencode-optimised-toolings@4.0.1"), false)
     assert.equal(server.plugin[1], "personal")
-    assert.equal(tui.plugin[1], "other-tui")
+    assert.deepEqual(tui.plugin, ["other-tui"])
     assert.equal(tui.theme, "keep")
     const pointer = JSON.parse(readFileSync(join(configDirectory, ".sparkly-toolings-tui.json"), "utf8"))
     const deployment = JSON.parse(readFileSync(join(configDirectory, "alonix", "deployment.json"), "utf8"))
     assert.equal(pointer.spec, result.spec)
+    assert.match(pointer.generation, /generations[\\/]v4\.0\.2--[a-f0-9]{16}[\\/]opencode-optimised-toolings$/)
     assert.equal(deployment.desired.tuiSpec, result.spec)
+    assert.equal(deployment.desired.tuiConfigSpec, null)
     assert.equal(deployment.desired.serverSpec, server.plugin[0])
   } finally {
     if (previousMode === undefined) delete process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
@@ -118,7 +120,7 @@ test("installed registration provisions one generation and switches both configs
   }
 })
 
-test("an older installed process cannot downgrade a newer direct generation", async () => {
+test("an older installed process cannot downgrade the canonical immutable generation behind @latest", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-tui-no-downgrade-"))
   const previousMode = process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
   const previousGenerations = process.env.OPENCODE_TOOLINGS_GENERATIONS_DIR
@@ -132,10 +134,12 @@ test("an older installed process cannot downgrade a newer direct generation", as
     writeFileSync(join(configDirectory, "opencode.json"), JSON.stringify({ plugin: [] }))
     writeFileSync(join(configDirectory, "tui.json"), JSON.stringify({ plugin: [] }))
     await ensureTuiCompanion(newRoot, { configDirectory })
-    const before = readFileSync(join(configDirectory, "tui.json"), "utf8")
+    const beforeTui = readFileSync(join(configDirectory, "tui.json"), "utf8")
+    const beforeDeployment = readFileSync(join(configDirectory, "alonix", "deployment.json"), "utf8")
     const older = await ensureTuiCompanion(oldRoot, { configDirectory })
     assert.equal(older.changed, false)
-    assert.equal(readFileSync(join(configDirectory, "tui.json"), "utf8"), before)
+    assert.equal(readFileSync(join(configDirectory, "tui.json"), "utf8"), beforeTui)
+    assert.equal(readFileSync(join(configDirectory, "alonix", "deployment.json"), "utf8"), beforeDeployment)
   } finally {
     if (previousMode === undefined) delete process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
     else process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = previousMode

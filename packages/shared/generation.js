@@ -6,7 +6,7 @@ import { createRequire } from "node:module"
 import { basename, delimiter, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser"
-import { PACKAGE_NAME, isDevelopmentCheckout, openCodeConfigDir, packageVersion, userDataRoot } from "./paths.js"
+import { PACKAGE_NAME, PACKAGE_SPEC, isDevelopmentCheckout, openCodeConfigDir, packageVersion, userDataRoot } from "./paths.js"
 
 const LOCK_STALE_MS = 5 * 60_000
 const LOCK_WAIT_MS = 30_000
@@ -67,6 +67,25 @@ export function generationSpecs(packageRoot) {
   }
 }
 
+export function publicPackageSpecs() {
+  return {
+    server: PACKAGE_SPEC,
+    tui: null,
+    pointer: PACKAGE_SPEC,
+    desiredTui: PACKAGE_SPEC,
+  }
+}
+
+export function candidatePackageSpecs(packageRoot) {
+  const spec = pathToFileURL(resolve(packageRoot)).href
+  return {
+    server: spec,
+    tui: null,
+    pointer: spec,
+    desiredTui: spec,
+  }
+}
+
 function withoutBom(text) {
   return String(text ?? "").replace(/^\uFEFF/, "")
 }
@@ -95,8 +114,9 @@ function entrySpec(entry) {
 function isManagedEntry(entry) {
   const spec = entrySpec(entry).replaceAll("\\", "/")
   return new RegExp(`^(?:npm:)?${PACKAGE_NAME}(?:@|$)`, "i").test(spec)
+    || spec.toLowerCase().replace(/\/$/, "").endsWith(`/${PACKAGE_NAME.toLowerCase()}`)
     || spec.toLowerCase().includes(`/${PACKAGE_NAME.toLowerCase()}/index.js`)
-    || spec.toLowerCase().includes(`/${PACKAGE_NAME.toLowerCase()}/packages/tui/index.tsx`)
+    || new RegExp(`/${PACKAGE_NAME.toLowerCase()}(?:-[^/]+)?/packages/tui/index\\.tsx(?:$|[?#])`, "i").test(spec)
     || spec.toLowerCase().includes("/alonix/runtime/tui-loader.mjs")
 }
 
@@ -127,6 +147,7 @@ function compareVersions(left, right) {
 }
 
 function replaceManaged(list, spec) {
+  if (spec === null) return (Array.isArray(list) ? list : []).filter((entry) => !isManagedEntry(entry))
   const output = []
   let inserted = false
   for (const entry of Array.isArray(list) ? list : []) {
@@ -606,8 +627,10 @@ export function tuiCoordinationPath(configDir) {
   return join(resolve(configDir), ".sparkly-toolings-tui.json")
 }
 
-function deploymentRecord(generation, previous = null) {
+function deploymentRecord(generation, previous = null, specs = generation.specs) {
   const root = resolve(generation.root)
+  const desiredTui = specs.desiredTui ?? specs.tui
+  const tuiConfigSpec = Object.hasOwn(specs, "tui") ? specs.tui : desiredTui
   const sameDeployment = previous?.desired?.root && normalize(previous.desired.root) === normalize(root)
     && previous.desired.version === generation.version
     && (previous.desired.fingerprint ?? null) === (generation.fingerprint ?? null)
@@ -620,8 +643,9 @@ function deploymentRecord(generation, previous = null) {
       version: generation.version,
       root,
       fingerprint: generation.fingerprint ?? null,
-      serverSpec: generation.specs.server,
-      tuiSpec: generation.specs.tui,
+      serverSpec: specs.server,
+      tuiSpec: desiredTui,
+      tuiConfigSpec,
       host: sameDeployment && previous?.desired?.host
         ? previous.desired.host
         : { policy: "exact-compatible-profile" },
@@ -658,6 +682,8 @@ async function recoverActivationJournal(configDir) {
 
 export async function activatePackageGeneration(generation, options = {}) {
   if (!generation?.valid || !generation?.root || !generation?.specs) throw new Error("Cannot activate an unverified package generation")
+  const configSpecs = options.configSpecs ?? generation.specs
+  if (!configSpecs?.server || (!Object.hasOwn(configSpecs, "tui") && !configSpecs?.desiredTui)) throw new Error("Activation requires explicit server and TUI specs")
   const configDir = resolve(options.configDir ?? openCodeConfigDir(options.env))
   await fs.mkdir(configDir, { recursive: true })
   const lock = join(configDir, "alonix", ".generation-activation.lock")
@@ -668,6 +694,11 @@ export async function activatePackageGeneration(generation, options = {}) {
     const paths = configPaths(configDir)
     const documents = []
     let newestConfiguredVersion = null
+    try {
+      const recorded = JSON.parse(await fs.readFile(deploymentRecordPath(configDir), "utf8"))
+      const recordedVersion = recorded?.desired?.version
+      if (versionParts(recordedVersion)) newestConfiguredVersion = recordedVersion
+    } catch {}
     for (const [role, file] of Object.entries(paths)) {
       const before = existsSync(file) ? await fs.readFile(file, "utf8") : role === "tui" ? '{\n  "$schema": "https://opencode.ai/tui.json",\n  "plugin": []\n}\n' : "{}\n"
       const data = parseDocument(before, basename(file))
@@ -682,7 +713,7 @@ export async function activatePackageGeneration(generation, options = {}) {
     }
     const planned = []
     for (const { role, file, before, data } of documents) {
-      const spec = role === "server" ? generation.specs.server : generation.specs.tui
+      const spec = role === "server" ? configSpecs.server : configSpecs.tui
       const after = setJsonc(before, ["plugin"], replaceManaged(data.plugin, spec))
       parseDocument(after, basename(file))
       if (after !== before) planned.push({ role, file, before, after, afterHash: activationHash(after), existed: existsSync(file) })
@@ -690,14 +721,15 @@ export async function activatePackageGeneration(generation, options = {}) {
 
     const pointerFile = tuiCoordinationPath(configDir)
     const pointerBefore = existsSync(pointerFile) ? await fs.readFile(pointerFile, "utf8") : ""
-    const pointerAfter = `${JSON.stringify({ schemaVersion: 1, spec: generation.specs.tui, generation: resolve(generation.root), version: generation.version, fingerprint: generation.fingerprint ?? null }, null, 2)}\n`
+    const pointerSpec = configSpecs.pointer ?? configSpecs.desiredTui ?? configSpecs.tui
+    const pointerAfter = `${JSON.stringify({ schemaVersion: 1, spec: pointerSpec, generation: resolve(generation.root), version: generation.version, fingerprint: generation.fingerprint ?? null }, null, 2)}\n`
     if (pointerAfter !== pointerBefore) planned.push({ role: "pointer", file: pointerFile, before: pointerBefore, after: pointerAfter, afterHash: activationHash(pointerAfter), existed: existsSync(pointerFile) })
 
     const deploymentFile = deploymentRecordPath(configDir)
     const deploymentBefore = existsSync(deploymentFile) ? await fs.readFile(deploymentFile, "utf8") : ""
     let currentDeployment = null
     try { currentDeployment = JSON.parse(deploymentBefore) } catch {}
-    const deploymentAfter = `${JSON.stringify(deploymentRecord(generation, currentDeployment), null, 2)}\n`
+    const deploymentAfter = `${JSON.stringify(deploymentRecord(generation, currentDeployment, configSpecs), null, 2)}\n`
     let deploymentEquivalent = false
     try {
       const current = currentDeployment

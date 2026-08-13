@@ -411,9 +411,11 @@ test("installed TUI resolves and attests the one direct immutable generation roo
   assert.doesNotMatch(entry, /packages[\\/]tui[\\/]package\.json/)
 })
 
-test("server and TUI direct entries are provisioned together before activation", async () => {
+test("activation transaction supports one package declaration with the TUI entry kept internal", async () => {
   const generation = await source("../shared/generation.js")
   assert.match(generation, /generationSpecs/)
+  assert.match(generation, /candidatePackageSpecs/)
+  assert.match(generation, /tui: null/)
   assert.match(generation, /validateGeneration/)
   assert.match(generation, /activatePackageGeneration/)
   assert.match(generation, /deploymentRecordPath/)

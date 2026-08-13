@@ -192,6 +192,7 @@ try {
   const publishedGeneration = await generationModule.ensurePackageGeneration(buildRoot, { version, source: "registry", force: true });
   const reconciled = await deploymentModule.reconcileDeployment(publishedGeneration.root, {
     generation: publishedGeneration,
+    publicPackage: true,
     reconcileHost: (deploymentRoot) => selfpatchModule.runSelfPatch(deploymentRoot, { toolchainRoot: buildRoot }),
   });
   if (!reconciled.status.ok) fail(`published deployment did not reconcile exactly: ${JSON.stringify(reconciled.status.checks)}`);

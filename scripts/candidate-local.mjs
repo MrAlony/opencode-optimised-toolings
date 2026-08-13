@@ -90,9 +90,11 @@ try {
   // Candidate source/dependency parity is proven above. Host construction still
   // executes through the checkout's validated build environment because the
   // clean runtime-only transport intentionally excludes Bun/dev dependencies.
+  const configSpecs = generationModule.candidatePackageSpecs(generation.root)
   const reconciled = await deploymentModule.reconcileDeployment(generation.root, {
     env,
     generation,
+    configSpecs,
     reconcileHost: (deploymentRoot) => runSelfPatch(deploymentRoot, { toolchainRoot: root }),
   })
   const activation = reconciled.activation
@@ -104,12 +106,14 @@ try {
     dependencyFingerprint: attestation.dependencyFingerprint,
     checkoutParity: true,
     interactionParity: true,
+    declaration: configSpecs.server,
+    tuiConfigEntry: null,
     activated: activation.changed,
     backups: activation.backups ?? [],
     changedFiles: changed.map((line) => line.slice(3)),
   }
   console.log(JSON.stringify(summary, null, 2))
-  console.log("LOCAL CANDIDATE READY: fully quit and restart OpenCode to validate the immutable candidate.")
+  console.log("LOCAL CANDIDATE READY: one package-root declaration is active; fully quit and restart OpenCode to validate the immutable candidate.")
 } finally {
   if (process.env.ALONIX_KEEP_CANDIDATE_TEMP !== "1") rmSync(temporary, { recursive: true, force: true })
 }

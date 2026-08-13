@@ -10,6 +10,66 @@ function normalizeWhitespace(value) {
   return normalizeNewlines(value).split("\n").map((line) => line.trim()).join("\n");
 }
 
+function commonPrefixLength(left, right) {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) index += 1;
+  return index;
+}
+
+function commonSuffixLength(left, right, prefixLength = 0) {
+  const limit = Math.min(left.length, right.length) - prefixLength;
+  let length = 0;
+  while (length < limit && left[left.length - 1 - length] === right[right.length - 1 - length]) length += 1;
+  return length;
+}
+
+function characterEvidence(value, offset) {
+  if (offset >= value.length) return { display: "<end of text>", codePoint: null };
+  const point = value.codePointAt(offset);
+  const character = String.fromCodePoint(point);
+  const labels = new Map([[0x09, "TAB"], [0x0a, "LINE FEED"], [0x0d, "CARRIAGE RETURN"], [0x20, "SPACE"], [0xa0, "NO-BREAK SPACE"]]);
+  return {
+    display: labels.get(point) ?? JSON.stringify(character),
+    codePoint: `U+${point.toString(16).toUpperCase().padStart(4, "0")}`,
+  };
+}
+
+function comparisonFragment(value, offset, radius = 42) {
+  const start = Math.max(0, offset - radius);
+  const end = Math.min(value.length, offset + radius);
+  return `${start > 0 ? "..." : ""}${JSON.stringify(value.slice(start, end)).slice(1, -1)}${end < value.length ? "..." : ""}`;
+}
+
+function sourceComparison(search, lines, candidates) {
+  if (!candidates.length) return null;
+  const normalizedSearch = normalizeNewlines(search);
+  const lineCount = Math.max(1, normalizedSearch.split("\n").length);
+  const ranked = candidates.map((candidate) => {
+    const text = lines.slice(candidate.line - 1, candidate.line - 1 + lineCount).join("\n");
+    const prefix = commonPrefixLength(normalizedSearch, text);
+    const suffix = commonSuffixLength(normalizedSearch, text, prefix);
+    return { line: candidate.line, text, prefix, suffix, similarity: prefix + suffix };
+  }).sort((left, right) => right.similarity - left.similarity || left.line - right.line);
+  const closest = ranked[0];
+  const firstDifferenceOffset = closest.prefix;
+  return {
+    line: closest.line,
+    searchCharacters: normalizedSearch.length,
+    candidateCharacters: closest.text.length,
+    searchUtf8Bytes: Buffer.byteLength(normalizedSearch),
+    candidateUtf8Bytes: Buffer.byteLength(closest.text),
+    sharedPrefixCharacters: closest.prefix,
+    sharedSuffixCharacters: closest.suffix,
+    firstDifferenceOffset,
+    submittedCharacter: characterEvidence(normalizedSearch, firstDifferenceOffset),
+    currentCharacter: characterEvidence(closest.text, firstDifferenceOffset),
+    submittedFragment: comparisonFragment(normalizedSearch, firstDifferenceOffset),
+    currentFragment: comparisonFragment(closest.text, firstDifferenceOffset),
+    comparableCandidates: ranked.filter((item) => item.similarity === closest.similarity).length,
+  };
+}
+
 function candidateEvidence(content, search, replace, expected, actual) {
   const lines = content.split(/\r?\n/);
   const searchLines = normalizeNewlines(search).split("\n").map((line) => line.trim()).filter(Boolean);
@@ -33,6 +93,7 @@ function candidateEvidence(content, search, replace, expected, actual) {
     newlineNormalizedCount,
     whitespaceNormalizedCount,
     candidates: candidates.slice(0, 3),
+    comparison: sourceComparison(search, lines, candidates),
     note: "Candidate evidence may or may not represent the intended edit target; no fuzzy replacement was applied.",
   };
 }
@@ -47,6 +108,22 @@ function formatEvidence(evidence) {
   const candidates = evidence.candidates.length
     ? evidence.candidates.map((item) => `    - Line ${item.line}: ${item.text}`).join("\n")
     : "    - None found within the bounded candidate scan.";
+  const comparison = evidence.comparison
+    ? [
+        "  Current-source comparison (informational only):",
+        `    - Closest candidate location: line ${evidence.comparison.line}`,
+        `    - Submitted length: ${evidence.comparison.searchCharacters} character(s), ${evidence.comparison.searchUtf8Bytes} UTF-8 byte(s)`,
+        `    - Current candidate length: ${evidence.comparison.candidateCharacters} character(s), ${evidence.comparison.candidateUtf8Bytes} UTF-8 byte(s)`,
+        `    - Shared prefix: ${evidence.comparison.sharedPrefixCharacters} character(s)`,
+        `    - Shared suffix: ${evidence.comparison.sharedSuffixCharacters} character(s)`,
+        `    - First differing offset: ${evidence.comparison.firstDifferenceOffset}`,
+        `    - Submitted character: ${evidence.comparison.submittedCharacter.display}${evidence.comparison.submittedCharacter.codePoint ? ` (${evidence.comparison.submittedCharacter.codePoint})` : ""}`,
+        `    - Current character: ${evidence.comparison.currentCharacter.display}${evidence.comparison.currentCharacter.codePoint ? ` (${evidence.comparison.currentCharacter.codePoint})` : ""}`,
+        `    - Submitted fragment: ${evidence.comparison.submittedFragment}`,
+        `    - Current fragment: ${evidence.comparison.currentFragment}`,
+        `    - Candidates with the same bounded similarity: ${evidence.comparison.comparableCandidates}`,
+      ]
+    : [];
   return [
     "  Diagnostic evidence (informational only):",
     `    - Exact search matches: ${evidence.exactSearchCount}`,
@@ -56,6 +133,7 @@ function formatEvidence(evidence) {
     `    - Replacement text already present: ${replacementState}`,
     "  Nearby candidate lines:",
     candidates,
+    ...comparison,
     "  Interpretation: the target text may have changed, the wrong file/version may be selected, or the edit may already exist in a different form.",
     "  Safety rule: candidate evidence is uncertain. No approximate or fuzzy replacement was attempted.",
   ].join("\n");

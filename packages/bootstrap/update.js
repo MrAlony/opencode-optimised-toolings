@@ -53,15 +53,15 @@ export async function stagePackageUpdate(packageRoot, options = {}) {
   // provisioning work. A broken user file is never partially bypassed.
   await validateActivationConfig(options)
 
-  // The complete next generation is installed and validated before either
-  // config file is touched. Server and TUI then switch to direct files from the
-  // same immutable root in one rollback-capable transaction.
+  // The complete next generation is installed and validated internally while
+  // the user's one-line `opencode-optimised-toolings@latest` declaration stays
+  // stable. Only hidden deployment identity changes transactionally.
   const generation = await ensurePackageGeneration(packageRoot, {
     ...options,
     version: latest,
     source: "registry",
   })
-  const reconciled = await reconcileDeployment(generation.root, { ...options, generation })
+  const reconciled = await reconcileDeployment(generation.root, { ...options, generation, publicPackage: true })
   const activation = reconciled.activation
   return {
     changed: activation.changed,

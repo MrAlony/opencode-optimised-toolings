@@ -1175,6 +1175,80 @@ function recoverOrphanedToolParts(messages: SessionV1.WithParts[], now: number) 
       ],
     },
     {
+      path: "packages/opencode/src/config/tui.ts",
+      beforeSha256: "7d7b30d41d5c04ea443819727490142406d293e031dcc221babeb3da1db3e902",
+      replacements: [
+        {
+          name: "server package bridge import",
+          search: `import { ConfigPlugin } from "@/config/plugin"
+import { TuiKeybind } from "@opencode-ai/tui/config/keybind"`,
+          replace: `import { ConfigPlugin } from "@/config/plugin"
+import { parsePluginSpecifier } from "@/plugin/shared"
+import { TuiKeybind } from "@opencode-ai/tui/config/keybind"`,
+        },
+        {
+          name: "server package bridge loader",
+          search: `  const mergeFile = (acc: Acc, file: string) =>
+    Effect.gen(function* () {
+      const data = yield* loadFile(file)`,
+          replace: `  const mergeServerPackagePlugins = (acc: Acc, file: string) =>
+    Effect.gen(function* () {
+      const text = yield* afs.readFileStringSafe(file)
+      if (!text) return
+      const expanded = yield* Effect.promise(() =>
+        ConfigVariable.substitute({ text, type: "path", path: file, missing: "empty" }),
+      )
+      const raw = ConfigParse.jsonc(expanded, file)
+      if (!isRecord(raw) || !Array.isArray(raw.plugin)) return
+      const declared = raw.plugin
+        .filter((item): item is ConfigPlugin.Origin["spec"] =>
+          typeof item === "string" || (Array.isArray(item) && typeof item[0] === "string"),
+        )
+        .filter((item) => {
+          const spec = ConfigPlugin.pluginSpecifier(item)
+          const normalized = spec.replaceAll("\\\\", "/").replace(/\\\/$/, "")
+          return parsePluginSpecifier(spec).pkg === "opencode-optimised-toolings"
+            || normalized.endsWith("/opencode-optimised-toolings")
+        })
+      if (!declared.length) return
+      const resolved = yield* Effect.forEach(declared, (item) =>
+        Effect.promise(() => ConfigPlugin.resolvePluginSpec(item, file)),
+      )
+      const plugins = ConfigPlugin.deduplicatePluginOrigins([
+        ...acc.plugin_origins,
+        ...resolved.map((spec) => ({ spec, scope: pluginScope(file, ctx), source: file })),
+      ])
+      acc.result = { ...acc.result, plugin: plugins.map((item) => item.spec) }
+      acc.plugin_origins = plugins
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("skipping invalid server package TUI bridge", {
+          path: file,
+          reason: FormatError(Cause.squash(cause)) ?? FormatUnknownError(Cause.squash(cause)),
+        }).pipe(Effect.asVoid),
+      ),
+    )
+
+  const mergeFile = (acc: Acc, file: string) =>
+    Effect.gen(function* () {
+      const data = yield* loadFile(file)`,
+        },
+        {
+          name: "bridge global server package into TUI origins",
+          search: `  // 2. Explicit OPENCODE_TUI_CONFIG override, if set.
+  if (Flag.OPENCODE_TUI_CONFIG) {`,
+          replace: `  // Packages that expose both ./server and ./tui may use one global
+  // declaration. Alonix keeps its immutable generation and TUI entry internal.
+  for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "opencode")) {
+    yield* mergeServerPackagePlugins(acc, file)
+  }
+
+  // 2. Explicit OPENCODE_TUI_CONFIG override, if set.
+  if (Flag.OPENCODE_TUI_CONFIG) {`,
+        },
+      ],
+    },
+    {
       // A left dock must occupy layout space rather than float above the
       // transcript: an absolutely positioned panel covers the content it is
       // meant to sit beside. Wrapping the root in a row and giving plugins an

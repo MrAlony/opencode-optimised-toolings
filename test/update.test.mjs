@@ -35,7 +35,7 @@ test("semantic version comparison handles stable patch updates", () => {
   assert.equal(compareVersions("4.0.0", "4.0.1"), -1)
 })
 
-test("installed update provisions the complete next generation before switching both direct entries", async () => {
+test("installed update provisions the complete next generation while preserving one public package declaration", async () => {
   const f = fixture()
   try {
     writeFileSync(f.configPath, JSON.stringify({ plugin: ["opencode-optimised-toolings@4.0.1", "personal"], provider: { private: { untouched: true } } }, null, 2))
@@ -43,14 +43,18 @@ test("installed update provisions the complete next generation before switching 
     const result = await stagePackageUpdate(f.packageRoot, { configDir: f.configDir, latestVersion: "4.0.2", force: true, env: { ...process.env, OPENCODE_TOOLINGS_GENERATIONS_DIR: f.generations }, install: installFixture })
     const config = JSON.parse(readFileSync(f.configPath, "utf8"))
     const tui = JSON.parse(readFileSync(f.tuiPath, "utf8"))
+    const pointer = JSON.parse(readFileSync(join(f.configDir, ".sparkly-toolings-tui.json"), "utf8"))
+    const deployment = JSON.parse(readFileSync(join(f.configDir, "alonix", "deployment.json"), "utf8"))
     assert.equal(result.changed, true)
-    assert.match(config.plugin[0], /generations\/v4\.0\.2--[a-f0-9]{16}\/opencode-optimised-toolings\/index\.js$/)
-    assert.match(tui.plugin[0], /generations\/v4\.0\.2--[a-f0-9]{16}\/opencode-optimised-toolings\/packages\/tui\/index\.tsx$/)
-    assert.equal(tui.plugin[0].includes("/node_modules/"), false)
+    assert.equal(config.plugin[0], "opencode-optimised-toolings@latest")
+    assert.deepEqual(tui.plugin, ["old-tui", "other-tui"])
+    assert.equal(pointer.spec, "opencode-optimised-toolings@latest")
+    assert.match(pointer.generation, /generations[\\/]v4\.0\.2--[a-f0-9]{16}[\\/]opencode-optimised-toolings$/)
+    assert.equal(deployment.desired.version, "4.0.2")
+    assert.equal(deployment.desired.root, pointer.generation)
+    assert.equal(deployment.desired.tuiConfigSpec, null)
     assert.equal(config.plugin[1], "personal")
     assert.equal(config.provider.private.untouched, true)
-    assert.equal(tui.plugin[1], "old-tui")
-    assert.equal(tui.plugin[2], "other-tui")
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
 

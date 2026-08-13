@@ -15,6 +15,15 @@ import {
 } from "../lib/integrity.js"
 
 // The exact failure the user hit: a truncated zod install.
+const WORKSPACE_INSTALL_LOG = `
+error: Could not resolve: "solid-js". Maybe you need to "bun install"?
+    at C:\\work\\packages\\tui\\src\\app.tsx:22:123
+error: Could not resolve: "@opentui/core". Maybe you need to "bun install"?
+    at C:\\work\\packages\\tui\\src\\renderer.ts:4:20
+error: Could not resolve: "effect". Maybe you need to "bun install"?
+    at C:\\work\\packages\\opencode\\src\\index.ts:8:12
+`
+
 const ZOD_LOG = `Loaded models.dev snapshot
 building opencode-windows-x64
 2 | export * from "./helpers/parseUtil.js";
@@ -45,6 +54,12 @@ test("a clean log yields no failures", () => {
   assert.deepEqual(parseUnresolvedImports(""), [])
   assert.deepEqual(parseUnresolvedImports(undefined), [])
   assert.equal(looksLikeBrokenInstall("error: Expected ';' at line 4"), false)
+})
+
+test("an interrupted workspace install is classified without blaming source files as packages", () => {
+  assert.equal(packagesFromBuildLog(WORKSPACE_INSTALL_LOG).length, 0)
+  assert.equal(looksLikeBrokenInstall(WORKSPACE_INSTALL_LOG), true)
+  assert.equal(looksLikeBrokenInstall('error: Could not resolve: "solid-js"'), false)
 })
 
 test("the owning package is resolved from a nested install path", () => {

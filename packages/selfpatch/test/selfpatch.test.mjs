@@ -371,6 +371,17 @@ test("v1.18.13 patch carries tool renderers through every TUI API boundary", () 
   assert.match(adapters.replacements.map((item) => item.replace).join("\n"), /return registerPluginToolRenderer/)
 })
 
+test("v1.18.13 package bridge emits valid Windows path and trailing-slash normalization source", () => {
+  const tuiConfig = patchManifest.files.find((file) => file.path === "packages/opencode/src/config/tui.ts")
+  assert.ok(tuiConfig, "the one-declaration TUI package bridge must patch global TUI config loading")
+  const source = tuiConfig.replacements.map((item) => item.replace).join("\n")
+  assert.ok(source.includes(String.raw`spec.replaceAll("\\", "/").replace(/\/$/, "")`))
+  assert.equal(source.includes(String.raw`spec.replaceAll("\", "/").replace(//$/, "")`), false)
+  assert.match(source, /parsePluginSpecifier/)
+  assert.match(source, /resolvePluginSpec/)
+  assert.match(source, /opencode-optimised-toolings/)
+})
+
 test("v1.18.13 patch exposes a native deferred session draft without creating sessions", () => {
   const files = new Map(patchManifest.files.map((file) => [file.path, file]))
   const pluginTypes = files.get("packages/plugin/src/tui.ts")
@@ -392,11 +403,12 @@ test("v1.18.13 patch exposes a native deferred session draft without creating se
   }
 })
 
-test("v1.18.13 patch is limited to bounded presentation, prompt-history references, renderer plumbing, deferred drafts, tool recovery, and one layout slot", () => {
+test("v1.18.13 patch is limited to the package bridge, bounded presentation, prompt-history references, renderer plumbing, deferred drafts, tool recovery, and one layout slot", () => {
   // Every host file patched here is a maintenance cost on each OpenCode
   // upgrade, so the set stays explicit and small.
   const paths = patchManifest.files.map((file) => file.path)
   assert.deepEqual(paths.sort(), [
+    "packages/opencode/src/config/tui.ts",
     "packages/opencode/src/plugin/tui/runtime.ts",
     "packages/opencode/src/session/prompt.ts",
     "packages/plugin/src/tui.ts",

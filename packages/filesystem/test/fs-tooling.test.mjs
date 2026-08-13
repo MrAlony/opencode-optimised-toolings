@@ -162,6 +162,36 @@ test("alonix-edit rolls back a failed same-file transaction and applies independ
   });
 });
 
+test("alonix-edit adds neutral first-difference evidence without changing rejection or safety output", async () => {
+  await withFixture(async (directory) => {
+    const target = join(directory, "src", "long.ts");
+    const current = `    ${"x".repeat(260)}<small>Config</small><b>value</b>\n`;
+    const submitted = `    ${"x".repeat(260)}<small>Config</span><b>value</b>\n`;
+    await writeFile(target, current, "utf8");
+    const tools = await getTools(directory);
+    const output = await tools["alonix-edit"].execute({
+      base_dir: directory,
+      actions: [{ path: "src/long.ts", operation: "patch", replacements: [{ search: submitted, replace: "replacement", expected_count: 1 }] }],
+    }, context(directory));
+    assert.match(output, /EDIT RESULT: FAILED/);
+    assert.match(output, /Safety outcome: no part of this file transaction was written/);
+    assert.match(output, /Nearby candidate lines:/);
+    assert.match(output, /Current-source comparison \(informational only\):/);
+    assert.match(output, /Submitted length: \d+ character\(s\), \d+ UTF-8 byte\(s\)/);
+    assert.match(output, /Current candidate length: \d+ character\(s\), \d+ UTF-8 byte\(s\)/);
+    assert.match(output, /Shared prefix: 280 character\(s\)/);
+    assert.match(output, /First differing offset: 280/);
+    assert.match(output, /Submitted character: "p" \(U\+0070\)/);
+    assert.match(output, /Current character: "m" \(U\+006D\)/);
+    assert.match(output, /Submitted fragment: .*<small>Config<\/span>/);
+    assert.match(output, /Current fragment: .*<small>Config<\/small>/);
+    assert.match(output, /Candidates with the same bounded similarity: 1/);
+    assert.match(output, /Interpretation: the target text may have changed/);
+    assert.match(output, /Safety rule: candidate evidence is uncertain\. No approximate or fuzzy replacement was attempted\./);
+    assert.equal(await readFile(target, "utf8"), current);
+  });
+});
+
 test("alonix-edit rejects create-on-existing and overwrite-on-missing without wasting independent work", async () => {
   await withFixture(async (directory) => {
     const tools = await getTools(directory);

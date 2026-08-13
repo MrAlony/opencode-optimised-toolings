@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { generationSpecs, validateGeneration } from "../packages/shared/generation.js"
+import { candidatePackageSpecs, generationSpecs, validateGeneration } from "../packages/shared/generation.js"
 import { isDevelopmentCheckout } from "../packages/shared/paths.js"
 
 test("package root discovery skips nested workspace package manifests", async () => {
@@ -28,6 +28,15 @@ test("generation specs point both direct entries into one transformable package 
   assert.match(specs.tui, /opencode-optimised-toolings\/packages\/tui\/index\.tsx$/)
   assert.equal(specs.server.includes("tui-loader"), false)
   assert.equal(specs.tui.includes("/node_modules/"), false)
+})
+
+test("candidate specs expose one package root and keep the TUI declaration internal", () => {
+  const root = resolve("C:/runtime/generations/v4.0.2--1234567890abcdef/opencode-optimised-toolings")
+  const specs = candidatePackageSpecs(root)
+  assert.match(specs.server, /opencode-optimised-toolings$/)
+  assert.equal(specs.tui, null)
+  assert.equal(specs.pointer, specs.server)
+  assert.equal(specs.desiredTui, specs.server)
 })
 
 test("a marked transformable generation is installed rather than a development checkout", () => {
