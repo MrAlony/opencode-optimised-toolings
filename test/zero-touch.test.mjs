@@ -88,7 +88,7 @@ test("installed migration removes only Alonix checkout references", () => {
     const result = migrateInstalledConfig(root, { configDir, force: true })
     assert.equal(result.changed, true)
     const config = JSON.parse(readFileSync(configPath, "utf8"))
-    assert.deepEqual(config.plugin, ["opencode-optimised-toolings@4.0.1", "personal-plugin", "@tarquinen/opencode-dcp@latest"])
+    assert.deepEqual(config.plugin, [PACKAGE_SPEC, "personal-plugin", "@tarquinen/opencode-dcp@latest"])
     assert.deepEqual(config.skills.paths, ["C:/personal/skill"])
     assert.deepEqual(config.instructions, ["personal.md"])
     assert.equal(config.provider.personal.apiKey, "untouched")
@@ -100,6 +100,23 @@ test("installed migration removes only Alonix checkout references", () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("installed migration preserves the one public latest declaration across startup", () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-zero-touch-public-latest-"))
+  try {
+    const configDir = join(root, "user-config")
+    mkdirSync(join(root, "config"), { recursive: true })
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "9.8.7" }))
+    writeFileSync(join(root, "config", "AGENTS.md"), "# Alonix guidance\n")
+    const configPath = join(configDir, "opencode.json")
+    writeFileSync(configPath, JSON.stringify({ plugin: [PACKAGE_SPEC, "personal-plugin"] }, null, 2))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }, null, 2))
+    migrateInstalledConfig(root, { configDir, force: true })
+    assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).plugin, [PACKAGE_SPEC, "personal-plugin"])
+    assert.deepEqual(JSON.parse(readFileSync(join(configDir, "tui.json"), "utf8")).plugin, [])
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test("an isolated installed candidate can explicitly preserve its own verified file spec", () => {

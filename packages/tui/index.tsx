@@ -543,6 +543,7 @@ const tui: TuiPlugin = async (api, options) => {
               tokens={tokens}
               dockOpen={dockOpen}
               initial={readManagedSettings()}
+              pluginVersion={attestation.version ?? "unknown"}
               onSave={(draft: unknown) => applyManagedSettings(draft)}
               onClose={openWorkbench}
             />

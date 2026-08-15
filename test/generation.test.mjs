@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { activatePackageGeneration, candidatePackageSpecs, deploymentRecordPath, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, publicPackageSpecs, resolveNpmCommand, runtimeAttestation, runtimeHealth, tuiCoordinationPath, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
+import { activatePackageGeneration, candidatePackageSpecs, deploymentRecordPath, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, liveRuntimeProcesses, publicPackageSpecs, resolveNpmCommand, runtimeAttestation, runtimeHealth, tuiCoordinationPath, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
 import { deploymentStatus, discoverConfiguredDeployment, reconcileDeployment } from "../packages/shared/deployment.js"
 
 function createInstallation(root, version) {
@@ -298,6 +298,37 @@ test("host deployment identity includes the verified artifact manifest without a
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
+test("live runtime diagnostics ignore dead receipts and report only alive stale plugin roots", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-live-runtime-status-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    const runtime = join(directory, "runtime")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: [] }))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: runtime }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    await reconcileDeployment(generation.root, { configDir, env, generation, configSpecs: candidatePackageSpecs(generation.root) })
+    const staleRoot = join(directory, "stale-generation", "opencode-optimised-toolings")
+    const currentPid = process.pid
+    const deadPid = 900719
+    const processStartedAt = new Date(Date.now() - 1000).toISOString()
+    writeServerLifecycle(staleRoot, "active", { processStartedAt, version: generation.version, sourceFingerprint: "stale" }, { env, file: join(runtime, `server-activation-${currentPid}.json`) })
+    writeTuiLifecycle(staleRoot, "active", { processStartedAt, version: generation.version, sourceFingerprint: "stale", stage: "complete" }, { env, file: join(runtime, `tui-activation-${currentPid}.json`) })
+    writeServerLifecycle(staleRoot, "active", { pid: deadPid, version: generation.version, sourceFingerprint: "dead-stale" }, { env, file: join(runtime, `server-activation-${deadPid}.json`) })
+
+    const live = liveRuntimeProcesses(env, { pidAlive: (pid) => pid === currentPid })
+    assert.equal(live.length, 1)
+    assert.equal(live[0].pid, currentPid)
+    const status = await deploymentStatus({ configDir, env, pidAlive: (pid) => pid === currentPid })
+    const check = status.checks.find((item) => item.name === "live plugin generation")
+    assert.equal(check?.ok, false)
+    assert.match(check?.detail ?? "", new RegExp(`pid ${currentPid} loaded`))
+    assert.doesNotMatch(check?.detail ?? "", new RegExp(String(deadPid)))
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
 test("deployment status validates public specs against hidden immutable identity", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-public-status-"))
   try {
@@ -308,12 +339,21 @@ test("deployment status validates public specs against hidden immutable identity
     writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }))
     const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime") }
     const generation = await ensurePackageGeneration(packageRoot, { env })
-    const reconciled = await reconcileDeployment(generation.root, { configDir, env, generation, publicPackage: true })
+    const reconcileHost = async () => {
+      mkdirSync(env.OPENCODE_TOOLINGS_DATA_DIR, { recursive: true })
+      writeFileSync(join(env.OPENCODE_TOOLINGS_DATA_DIR, "selfpatch-state.json"), JSON.stringify({
+        status: "portable",
+        version: "1.2.3",
+        manifestSha256: "canonical-resolver-manifest",
+      }))
+    }
+    const reconciled = await reconcileDeployment(generation.root, { configDir, env, generation, publicPackage: true, reconcileHost })
     assert.equal(reconciled.status.ok, true)
     assert.equal(reconciled.status.desired.root, generation.root)
     assert.equal(reconciled.status.desired.serverSpec, "opencode-optimised-toolings@latest")
     assert.equal(reconciled.status.desired.tuiSpec, "opencode-optimised-toolings@latest")
     assert.equal(reconciled.status.desired.tuiConfigSpec, null)
+    assert.equal(reconciled.status.checks.find((check) => check.name === "runtime package authority")?.ok, true)
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 

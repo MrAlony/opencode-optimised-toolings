@@ -786,7 +786,8 @@ export async function ensureAndActivateGeneration(packageRoot, options = {}) {
 function writeRuntimeRecord(packageRoot, role, status, detail = {}, options = {}) {
   const runtime = userDataRoot(options.env)
   const file = options.file ?? join(runtime, `${role}-activation-${process.pid}.json`)
-  const body = { status, role, pid: process.pid, at: new Date().toISOString(), root: resolve(packageRoot), ...detail }
+  const processStartedAt = new Date(Date.now() - (process.uptime() * 1000)).toISOString()
+  const body = { status, role, pid: process.pid, processStartedAt, at: new Date().toISOString(), root: resolve(packageRoot), ...detail }
   mkdirSync(dirname(file), { recursive: true })
   const temporary = join(dirname(file), `.${basename(file)}.${process.pid}.${randomUUID()}.tmp`)
   writeFileSync(temporary, `${JSON.stringify(body, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
@@ -800,6 +801,43 @@ export function writeServerLifecycle(packageRoot, status, detail = {}, options =
 
 export function writeTuiLifecycle(packageRoot, status, detail = {}, options = {}) {
   return writeRuntimeRecord(packageRoot, "tui", status, detail, options)
+}
+
+function runtimeRecords(env = process.env) {
+  const runtime = userDataRoot(env)
+  if (!existsSync(runtime)) return []
+  const records = []
+  for (const name of readdirSync(runtime)) {
+    if (!/^(?:server|tui)-activation-.*\.json$/i.test(name)) continue
+    try {
+      const value = JSON.parse(readFileSync(join(runtime, name), "utf8"))
+      const atMs = Date.parse(String(value?.at ?? ""))
+      if (!Number.isFinite(atMs)) continue
+      records.push({ ...value, atMs, file: join(runtime, name) })
+    } catch {}
+  }
+  return records
+}
+
+export function liveRuntimeProcesses(env = process.env, options = {}) {
+  const alive = typeof options.pidAlive === "function" ? options.pidAlive : pidAlive
+  const latest = new Map()
+  for (const record of runtimeRecords(env)) {
+    if (!Number.isInteger(record.pid) || !alive(record.pid)) continue
+    const key = `${record.pid}:${record.role}`
+    const previous = latest.get(key)
+    if (!previous || record.atMs > previous.atMs) latest.set(key, record)
+  }
+  const processes = new Map()
+  for (const record of latest.values()) {
+    const item = processes.get(record.pid) ?? { pid: record.pid, processStartedAt: record.processStartedAt ?? null, server: null, tui: null }
+    item[record.role] = record
+    if (!item.processStartedAt && record.processStartedAt) item.processStartedAt = record.processStartedAt
+    processes.set(record.pid, item)
+  }
+  return [...processes.values()]
+    .filter((item) => item.server && item.tui && item.server.processStartedAt && item.server.processStartedAt === item.tui.processStartedAt)
+    .sort((left, right) => left.pid - right.pid)
 }
 
 function newestRecord(role, env = process.env, expectedRoot = null) {

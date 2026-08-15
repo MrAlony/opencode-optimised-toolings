@@ -1093,6 +1093,52 @@ export type TuiDispose = () => void | Promise<void>`,
       ],
     },
     {
+      path: "packages/opencode/src/plugin/shared.ts",
+      beforeSha256: "1ada9e15915e47bbb7b16436f0018c9b86845a66e687d89d037be896b9663140",
+      replacements: [
+        {
+          name: "canonical Alonix deployment root resolver",
+          search: `export async function resolvePluginTarget(spec: string) {
+  if (isPathPluginSpec(spec)) return resolvePathPluginTarget(spec)
+  const hit = parse(spec)
+  const pkg = hit?.name && hit.raw === hit.name ? \`${"${hit.name}"}@latest\` : spec
+  const result = await Npm.add(pkg)
+  return result.directory
+}`,
+          replace: `async function canonicalAlonixTarget(spec: string) {
+  const parsed = parsePluginSpecifier(spec)
+  if (parsed.pkg !== "opencode-optimised-toolings") return
+  try {
+    const config = process.env.OPENCODE_CONFIG_DIR || path.join(process.env.USERPROFILE || process.env.HOME || "", ".config", "opencode")
+    const record = await Bun.file(path.join(config, "alonix", "deployment.json")).json()
+    const desired = record?.authority === "opencode-optimised-toolings-control-plane" ? record.desired : undefined
+    if (desired?.package !== parsed.pkg || desired?.serverSpec !== spec || typeof desired?.root !== "string") return
+    const root = path.resolve(desired.root)
+    const [pkg, marker] = await Promise.all([
+      Bun.file(path.join(root, "package.json")).json(),
+      Bun.file(path.join(path.dirname(root), ".alonix-generation.json")).json(),
+    ])
+    if (pkg?.name !== parsed.pkg || pkg?.version !== desired.version) return
+    if (marker?.fingerprint !== desired.fingerprint || marker?.version !== desired.version) return
+    return root
+  } catch {
+    return
+  }
+}
+
+export async function resolvePluginTarget(spec: string) {
+  if (isPathPluginSpec(spec)) return resolvePathPluginTarget(spec)
+  const canonical = await canonicalAlonixTarget(spec)
+  if (canonical) return canonical
+  const hit = parse(spec)
+  const pkg = hit?.name && hit.raw === hit.name ? \`${"${hit.name}"}@latest\` : spec
+  const result = await Npm.add(pkg)
+  return result.directory
+}`,
+        },
+      ],
+    },
+    {
       path: "packages/opencode/src/session/prompt.ts",
       beforeSha256: "79519fc90f6cac8ee992a7d772474e257758bcff44a2fe3b402bb1803ef72c3e",
       replacements: [
@@ -1239,8 +1285,15 @@ import { TuiKeybind } from "@opencode-ai/tui/config/keybind"`,
   if (Flag.OPENCODE_TUI_CONFIG) {`,
           replace: `  // Packages that expose both ./server and ./tui may use one global
   // declaration. Alonix keeps its immutable generation and TUI entry internal.
-  for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "opencode")) {
-    yield* mergeServerPackagePlugins(acc, file)
+  // Match the server config loader's explicit alternate-directory semantics,
+  // while deduplicating the normal global directory when both resolve equally.
+  const serverConfigDirectories = unique(
+    [Global.Path.config, Flag.OPENCODE_CONFIG_DIR].filter((value): value is string => Boolean(value)),
+  )
+  for (const directory of serverConfigDirectories) {
+    for (const file of ConfigPaths.fileInDirectory(directory, "opencode")) {
+      yield* mergeServerPackagePlugins(acc, file)
+    }
   }
 
   // 2. Explicit OPENCODE_TUI_CONFIG override, if set.

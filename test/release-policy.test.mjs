@@ -49,7 +49,9 @@ test("installed package exposes one public declaration and bridges its TUI expor
   assert.match(manifest, /server package bridge loader/)
   assert.match(manifest, /parsePluginSpecifier\(spec\)\.pkg === "opencode-optimised-toolings"/)
   assert.match(manifest, /normalized\.endsWith\("\/opencode-optimised-toolings"\)/)
-  assert.match(manifest, /ConfigPaths\.fileInDirectory\(Global\.Path\.config, "opencode"\)/)
+  assert.match(manifest, /serverConfigDirectories = unique/)
+  assert.match(manifest, /Global\.Path\.config, Flag\.OPENCODE_CONFIG_DIR/)
+  assert.match(manifest, /ConfigPaths\.fileInDirectory\(directory, "opencode"\)/)
 })
 
 test("one discoverable control plane owns deployment state and derived outputs", () => {

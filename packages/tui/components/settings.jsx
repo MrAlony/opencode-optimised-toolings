@@ -109,6 +109,7 @@ export function SettingsView(props) {
       <Toolbar tokens={tokens()} height={3}>
         <text fg={tokens().accent}>{GLYPH.diamond}</text>
         <text fg={tokens().text}><b>Alonix Settings</b></text>
+        <text fg={tokens().faint}>v{props.pluginVersion ?? "unknown"}</text>
         <text fg={tokens().faint}>Only Alonix-owned values are changed</text>
         <box flexGrow={1} />
         <Button tokens={tokens()} variant="primary" disabled={saving()} onPress={save}>{saving() ? "Saving…" : "Save changes"}</Button>
@@ -182,7 +183,12 @@ export function SettingsView(props) {
 
           <Show when={page() === "about"}>
             <box flexDirection="column" gap={1}>
-              <SectionLabel tokens={tokens()} title="PLUGIN & SAFETY" meta="npm-ready" />
+              <SectionLabel tokens={tokens()} title="PLUGIN & SAFETY" meta="runtime identity" />
+              <box flexDirection="row" flexShrink={0} gap={1}>
+                <text fg={tokens().muted}>Loaded plugin version</text>
+                <box flexGrow={1} />
+                <text fg={tokens().accent}><b>v{props.pluginVersion ?? "unknown"}</b></text>
+              </box>
               <text fg={tokens().text}><b>{draft().plugin.installed ? "Package entry detected" : "Local/development plugin source detected"}</b></text>
               <text fg={tokens().muted} wrapMode="wrap">Distribution package: <b>opencode-optimised-toolings@latest</b>. The plugin never manages personal models, provider definitions, accounts, or unrelated configuration.</text>
               <text fg={tokens().muted} wrapMode="wrap">Every save validates JSON/JSONC, creates timestamped backups, writes through atomic temporary files, and rolls back the transaction if any write fails.</text>

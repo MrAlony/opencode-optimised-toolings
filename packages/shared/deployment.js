@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { promises as fs } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
+import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { parse } from "jsonc-parser"
 import {
@@ -9,6 +10,7 @@ import {
   deploymentRecordPath,
   ensurePackageGeneration,
   generationSpecs,
+  liveRuntimeProcesses,
   publicPackageSpecs,
   runtimeAttestation,
   tuiCoordinationPath,
@@ -73,6 +75,18 @@ function entrySpec(entry) {
 
 async function readJson(file) {
   try { return JSON.parse(await fs.readFile(file, "utf8")) } catch { return null }
+}
+
+function openCodePackageCacheRoot(env = process.env) {
+  return resolve(env.OPENCODE_PACKAGE_CACHE_DIR || join(homedir(), ".cache", "opencode", "packages"))
+}
+
+async function cachedPackageVersion(spec, env = process.env) {
+  if (typeof spec !== "string" || spec !== `${PACKAGE_NAME}@latest`) return null
+  const wrapper = await readJson(join(openCodePackageCacheRoot(env), spec, "package.json"))
+  const pinned = wrapper?.dependencies?.[PACKAGE_NAME]
+  const installed = await readJson(join(openCodePackageCacheRoot(env), spec, "node_modules", PACKAGE_NAME, "package.json"))
+  return { pinned: typeof pinned === "string" ? pinned : null, installed: typeof installed?.version === "string" ? installed.version : null }
 }
 
 async function configuredSpec(file) {
@@ -154,6 +168,16 @@ export async function deploymentStatus(options = {}) {
   add("TUI config derived", tui.valid && tui.spec === expectedTuiConfigSpec, tui.spec ?? (expectedTuiConfigSpec === null ? "not declared (server package bridge)" : "missing"))
   add("coordination pointer derived", pointer?.spec === desired?.tuiSpec && (!desired?.root || normalize(pointer?.generation) === normalize(desired.root)), pointer?.spec ?? "missing")
 
+  const cache = await cachedPackageVersion(desired?.serverSpec, options.env)
+  const canonicalHostBridge = desired?.serverSpec !== `${PACKAGE_NAME}@latest` || Boolean(desired?.host?.manifestSha256)
+  add(
+    "runtime package authority",
+    canonicalHostBridge,
+    cache?.installed && cache.installed !== desired?.version
+      ? `canonical generation v${desired?.version} overrides stale OpenCode cache v${cache.installed}`
+      : canonicalHostBridge ? "canonical immutable generation" : "host bridge not yet attested",
+  )
+
   const state = desired?.root ? await readJson(join(runtimeRootForPackage(desired.root, options.env), "selfpatch-state.json")) : null
   let actualSha256 = null
   if (state?.binaryPath && existsSync(state.binaryPath)) actualSha256 = await sha256File(state.binaryPath).catch(() => null)
@@ -162,7 +186,23 @@ export async function deploymentStatus(options = {}) {
   const hostExact = expectedSha256 ? actualSha256 === expectedSha256 : hostPortable || !state
   add("host runtime reconciled", hostExact, expectedSha256 ? `${actualSha256 ?? "missing"} expected ${expectedSha256}` : state?.status ?? "pending first controller observation")
 
-  return { ok: checks.every((check) => check.ok), configDir, desired, files, checks, host: { state, actualSha256, expectedSha256 } }
+  const live = liveRuntimeProcesses(options.env, { pidAlive: options.pidAlive })
+  const stale = live.filter((item) => {
+    const records = [item.server, item.tui].filter(Boolean)
+    return records.some((record) => normalize(record.root) !== normalize(desired?.root) || (desired?.fingerprint && record.sourceFingerprint !== desired.fingerprint))
+  })
+  const matching = live.filter((item) => !stale.includes(item) && (item.server || item.tui))
+  const liveDetail = stale.length
+    ? stale.map((item) => {
+        const roots = [...new Set([item.server?.root, item.tui?.root].filter(Boolean))]
+        return `pid ${item.pid} loaded ${roots.join(" + ") || "unknown root"}`
+      }).join("; ")
+    : matching.length
+      ? `${matching.length} live process${matching.length === 1 ? "" : "es"} loaded desired generation`
+      : "no live Alonix process observed"
+  add("live plugin generation", stale.length === 0, liveDetail)
+
+  return { ok: checks.every((check) => check.ok), configDir, desired, files, checks, host: { state, actualSha256, expectedSha256 }, runtime: { live, stale, matching } }
 }
 
 export async function reconcileDeployment(packageRoot, options = {}) {

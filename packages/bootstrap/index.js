@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser"
-import { PACKAGE_NAME, PACKAGE_SPEC, installedPackageSpec, isDevelopmentCheckout, openCodeConfigDir } from "../shared/paths.js"
+import { PACKAGE_NAME, PACKAGE_SPEC, isDevelopmentCheckout, openCodeConfigDir } from "../shared/paths.js"
 export { PACKAGE_SPEC } from "../shared/paths.js"
 
 export const AGENTS_BLOCK_START = "<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: START -->"
@@ -121,7 +121,11 @@ export function migrateInstalledConfig(packageRoot, options = {}) {
   const preservedFileSpec = existsSync(join(packageRoot, PRESERVE_FILE_SPEC_MARKER))
     ? plugins.map(pluginSpec).find((spec) => isAlonixLocalReference(spec) && spec.replaceAll("\\", "/").toLowerCase().includes(resolve(packageRoot).replaceAll("\\", "/").toLowerCase()))
     : null
-  const managedSpec = options.pluginSpec ?? preservedFileSpec ?? installedPackageSpec(packageRoot)
+  // npm is the update transport, while the canonical immutable generation is
+  // the runtime authority. Keep the one public declaration stable across every
+  // startup; pinning the currently executing generation here would strand users
+  // on that release and recreate mutable-tag cache drift on future updates.
+  const managedSpec = options.pluginSpec ?? preservedFileSpec ?? PACKAGE_SPEC
   const nextPlugins = plugins.filter((entry) => {
     const spec = pluginSpec(entry)
     return !isAlonixLocalReference(spec) && !new RegExp(`^${PACKAGE_NAME}(?:@|$)`, "i").test(spec)

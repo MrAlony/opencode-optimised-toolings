@@ -380,6 +380,9 @@ test("v1.18.13 package bridge emits valid Windows path and trailing-slash normal
   assert.match(source, /parsePluginSpecifier/)
   assert.match(source, /resolvePluginSpec/)
   assert.match(source, /opencode-optimised-toolings/)
+  assert.match(source, /serverConfigDirectories = unique/)
+  assert.match(source, /Global\.Path\.config, Flag\.OPENCODE_CONFIG_DIR/)
+  assert.match(source, /ConfigPaths\.fileInDirectory\(directory, "opencode"\)/)
 })
 
 test("v1.18.13 patch exposes a native deferred session draft without creating sessions", () => {
@@ -409,6 +412,7 @@ test("v1.18.13 patch is limited to the package bridge, bounded presentation, pro
   const paths = patchManifest.files.map((file) => file.path)
   assert.deepEqual(paths.sort(), [
     "packages/opencode/src/config/tui.ts",
+    "packages/opencode/src/plugin/shared.ts",
     "packages/opencode/src/plugin/tui/runtime.ts",
     "packages/opencode/src/session/prompt.ts",
     "packages/plugin/src/tui.ts",
@@ -555,6 +559,20 @@ test("v1.18.13 patch terminalizes only unfinished tools at a newly owned loop bo
   assert.match(source, /if \(step === 0\)/)
   assert.match(source, /sessions\.updatePart\(part\)/)
   assert.doesNotMatch(source, /setTimeout|setInterval|Date\.now\(\)\s*-/)
+})
+
+test("v1.18.13 resolves Alonix npm declarations through the attested canonical generation", () => {
+  const shared = patchManifest.files.find((file) => file.path === "packages/opencode/src/plugin/shared.ts")
+  assert.ok(shared, "the shared server/TUI npm resolver must be patched")
+  const source = shared.replacements.map((item) => item.replace).join("\n")
+  assert.match(source, /parsed\.pkg !== "opencode-optimised-toolings"/)
+  assert.match(source, /authority === "opencode-optimised-toolings-control-plane"/)
+  assert.match(source, /desired\?\.serverSpec !== spec/)
+  assert.match(source, /\.alonix-generation\.json/)
+  assert.match(source, /marker\?\.fingerprint !== desired\.fingerprint/)
+  assert.match(source, /pkg\?\.version !== desired\.version/)
+  assert.match(source, /if \(canonical\) return canonical/)
+  assert.match(source, /const result = await Npm\.add\(pkg\)/, "unrelated or unproven packages must retain the normal resolver")
 })
 
 test("v1.18.13 renderer registry is reactive and disposal-safe", () => {
