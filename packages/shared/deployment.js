@@ -11,12 +11,13 @@ import {
   ensurePackageGeneration,
   generationSpecs,
   liveRuntimeProcesses,
+  packageFingerprint,
   publicPackageSpecs,
   runtimeAttestation,
   tuiCoordinationPath,
   validateGeneration,
 } from "./generation.js"
-import { PACKAGE_NAME, openCodeConfigDir, packageVersion, runtimeRootForPackage } from "./paths.js"
+import { PACKAGE_NAME, PACKAGE_SPEC, openCodeConfigDir, packageVersion, runtimeRootForPackage } from "./paths.js"
 
 function normalize(value) {
   const result = resolve(String(value ?? ""))
@@ -81,12 +82,87 @@ function openCodePackageCacheRoot(env = process.env) {
   return resolve(env.OPENCODE_PACKAGE_CACHE_DIR || join(homedir(), ".cache", "opencode", "packages"))
 }
 
-async function cachedPackageVersion(spec, env = process.env) {
-  if (typeof spec !== "string" || spec !== `${PACKAGE_NAME}@latest`) return null
-  const wrapper = await readJson(join(openCodePackageCacheRoot(env), spec, "package.json"))
+function packageCachePaths(spec, env = process.env) {
+  const root = join(openCodePackageCacheRoot(env), spec)
+  return {
+    root,
+    wrapper: join(root, "package.json"),
+    installedRoot: join(root, "node_modules", PACKAGE_NAME),
+    marker: join(root, ".alonix-cache-authority.json"),
+  }
+}
+
+async function cachedPackageAuthority(spec, desired, env = process.env) {
+  if (spec !== PACKAGE_SPEC) return null
+  const paths = packageCachePaths(spec, env)
+  const [wrapper, installed, marker] = await Promise.all([
+    readJson(paths.wrapper),
+    readJson(join(paths.installedRoot, "package.json")),
+    readJson(paths.marker),
+  ])
   const pinned = wrapper?.dependencies?.[PACKAGE_NAME]
-  const installed = await readJson(join(openCodePackageCacheRoot(env), spec, "node_modules", PACKAGE_NAME, "package.json"))
-  return { pinned: typeof pinned === "string" ? pinned : null, installed: typeof installed?.version === "string" ? installed.version : null }
+  const version = typeof installed?.version === "string" ? installed.version : null
+  let fingerprint = null
+  if (desired?.version === version && marker?.version === desired.version && marker?.fingerprint === desired?.fingerprint) {
+    fingerprint = await packageFingerprint(paths.installedRoot).catch(() => null)
+  }
+  return {
+    ...paths,
+    pinned: typeof pinned === "string" ? pinned : null,
+    installed: version,
+    fingerprint,
+    exact: pinned === desired?.version && version === desired?.version && fingerprint === desired?.fingerprint,
+  }
+}
+
+export async function reconcileOpenCodePackageCache(generation, options = {}) {
+  if (!generation?.valid || !generation?.root || !generation?.version || !generation?.fingerprint) {
+    throw new Error("Cannot reconcile OpenCode package cache from an unverified generation")
+  }
+  const spec = options.spec ?? PACKAGE_SPEC
+  if (spec !== PACKAGE_SPEC) return { changed: false, skipped: "not-public-latest-spec" }
+  const before = await cachedPackageAuthority(spec, generation, options.env)
+  if (before?.exact) return { changed: false, root: before.root, version: generation.version, fingerprint: generation.fingerprint }
+
+  const paths = packageCachePaths(spec, options.env)
+  const parent = dirname(paths.root)
+  const stage = `${paths.root}.alonix-stage-${process.pid}-${randomUUID()}`
+  const backup = `${paths.root}.alonix-backup-${process.pid}-${randomUUID()}`
+  await fs.mkdir(join(stage, "node_modules"), { recursive: true })
+  try {
+    await fs.cp(generation.root, join(stage, "node_modules", PACKAGE_NAME), { recursive: true, force: true, errorOnExist: false })
+    const stagedRoot = join(stage, "node_modules", PACKAGE_NAME)
+    const [manifest, fingerprint] = await Promise.all([
+      readJson(join(stagedRoot, "package.json")),
+      packageFingerprint(stagedRoot),
+    ])
+    if (manifest?.name !== PACKAGE_NAME || manifest?.version !== generation.version || fingerprint !== generation.fingerprint) {
+      throw new Error(`OpenCode cache staging attestation failed for ${PACKAGE_NAME}@${generation.version}`)
+    }
+    await fs.writeFile(join(stage, "package.json"), `${JSON.stringify({ dependencies: { [PACKAGE_NAME]: generation.version } }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
+    await fs.writeFile(join(stage, ".alonix-cache-authority.json"), `${JSON.stringify({ schemaVersion: 1, package: PACKAGE_NAME, version: generation.version, fingerprint: generation.fingerprint, generation: resolve(generation.root), updatedAt: new Date().toISOString() }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
+
+    let movedPrevious = false
+    try {
+      if (existsSync(paths.root)) {
+        await fs.rm(backup, { recursive: true, force: true })
+        await fs.rename(paths.root, backup)
+        movedPrevious = true
+      }
+      await fs.rename(stage, paths.root)
+      if (movedPrevious) await fs.rm(backup, { recursive: true, force: true }).catch(() => {})
+    } catch (error) {
+      await fs.rm(paths.root, { recursive: true, force: true }).catch(() => {})
+      if (movedPrevious && existsSync(backup)) await fs.rename(backup, paths.root).catch(() => {})
+      throw error
+    }
+  } finally {
+    await fs.rm(stage, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(backup, { recursive: true, force: true }).catch(() => {})
+  }
+  const after = await cachedPackageAuthority(spec, generation, options.env)
+  if (!after?.exact) throw new Error(`OpenCode cache reconciliation did not produce an exact ${PACKAGE_NAME}@${generation.version} fallback`)
+  return { changed: true, root: after.root, version: generation.version, fingerprint: generation.fingerprint }
 }
 
 async function configuredSpec(file) {
@@ -168,14 +244,17 @@ export async function deploymentStatus(options = {}) {
   add("TUI config derived", tui.valid && tui.spec === expectedTuiConfigSpec, tui.spec ?? (expectedTuiConfigSpec === null ? "not declared (server package bridge)" : "missing"))
   add("coordination pointer derived", pointer?.spec === desired?.tuiSpec && (!desired?.root || normalize(pointer?.generation) === normalize(desired.root)), pointer?.spec ?? "missing")
 
-  const cache = await cachedPackageVersion(desired?.serverSpec, options.env)
-  const canonicalHostBridge = desired?.serverSpec !== `${PACKAGE_NAME}@latest` || Boolean(desired?.host?.manifestSha256)
+  const cache = await cachedPackageAuthority(desired?.serverSpec, desired, options.env)
+  const canonicalHostBridge = desired?.serverSpec !== PACKAGE_SPEC || Boolean(desired?.host?.manifestSha256)
+  const exactCacheFallback = cache?.exact === true
   add(
     "runtime package authority",
-    canonicalHostBridge,
-    cache?.installed && cache.installed !== desired?.version
-      ? `canonical generation v${desired?.version} overrides stale OpenCode cache v${cache.installed}`
-      : canonicalHostBridge ? "canonical immutable generation" : "host bridge not yet attested",
+    canonicalHostBridge || exactCacheFallback,
+    exactCacheFallback
+      ? `OpenCode @latest cache mirrors canonical generation v${desired?.version}`
+      : cache?.installed && cache.installed !== desired?.version
+        ? `canonical generation v${desired?.version} overrides stale OpenCode cache v${cache.installed}`
+        : canonicalHostBridge ? "canonical immutable generation" : "host bridge and cache fallback are not yet attested",
   )
 
   const state = desired?.root ? await readJson(join(runtimeRootForPackage(desired.root, options.env), "selfpatch-state.json")) : null
@@ -214,13 +293,19 @@ export async function reconcileDeployment(packageRoot, options = {}) {
   // to a deployment whose host boundary was never examined.
   let host = null
   if (typeof options.reconcileHost === "function") host = await options.reconcileHost(generation.root)
+  // The verified fallback cache must exist before the public @latest declaration
+  // becomes active. If cache staging fails, user configuration remains on the
+  // previous deployment and cannot expose stale OpenCode package bytes.
+  const cache = configSpecs.server === PACKAGE_SPEC
+    ? await reconcileOpenCodePackageCache(generation, { ...options, spec: configSpecs.server })
+    : null
   const activation = await activatePackageGeneration(generation, { ...options, configSpecs })
   if (typeof options.reconcileHost === "function") {
     const state = await readJson(join(runtimeRootForPackage(generation.root, options.env), "selfpatch-state.json"))
     if (state) await writeHostDeployment(generation.root, state, options)
   }
   const status = await deploymentStatus(options)
-  return { generation, activation, host, status }
+  return { generation, activation, cache, host, status }
 }
 
 export async function developmentDeployment(packageRoot, options = {}) {

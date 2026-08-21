@@ -1,17 +1,19 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { defaultState, readState, sanitizeStoredState, sha256File, stateSummary, writeState } from "../lib/state.js"
+import { defaultState, patchedBinaryPath, readState, sanitizeStoredState, sha256File, stateSummary, writeState } from "../lib/state.js"
 import {
   applyManifest,
   manifestCompatible,
   manifestSha256,
   patchFileContent,
+  promoteExtractedSource,
   resolvePatchProfile,
+  reuseVerifiedPatchedArtifact,
   resolveBun,
   sourceReady,
 } from "../lib/pipeline.js"
@@ -20,6 +22,8 @@ import { controllerRetryDelay, SelfPatchPlugin } from "../index.js"
 import { manifest as patchManifest } from "../patches/1.18.13/manifest.mjs"
 import { manifest as patchManifest11815 } from "../patches/1.18.15/manifest.mjs"
 import { manifest as patchManifest11816 } from "../patches/1.18.16/manifest.mjs"
+import { manifest as patchManifest11819 } from "../patches/1.18.19/manifest.mjs"
+import { manifest as patchManifest11821 } from "../patches/1.18.21/manifest.mjs"
 
 test("controller retries only a transient updater swap miss", () => {
   assert.equal(controllerRetryDelay({ status: "no-opencode" }), 45_000)
@@ -318,6 +322,76 @@ test("changed OpenCode host boundaries stay official and cannot reuse a profile"
   }
 })
 
+test("candidate promotion reuses only an exactly attested checkout host artifact", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-artifact-reuse-"))
+  try {
+    const toolchain = join(root, "toolchain")
+    const candidate = join(root, "candidate")
+    const version = "1.2.3"
+    const manifestSha256 = "manifest-sha"
+    const source = patchedBinaryPath(toolchain, version)
+    mkdirSync(join(source, ".."), { recursive: true })
+    writeFileSync(source, "verified binary")
+    const binarySha256 = await sha256File(source)
+    writeFileSync(`${source}.manifest.json`, JSON.stringify({ version, manifestSha256, binarySha256 }))
+
+    assert.equal(await reuseVerifiedPatchedArtifact(candidate, toolchain, version, manifestSha256), true)
+    const destination = patchedBinaryPath(candidate, version)
+    assert.equal(readFileSync(destination, "utf8"), "verified binary")
+    const marker = JSON.parse(readFileSync(`${destination}.manifest.json`, "utf8"))
+    assert.equal(marker.binarySha256, binarySha256)
+    assert.equal(marker.manifestSha256, manifestSha256)
+    assert.equal(marker.reusedFrom, toolchain)
+
+    writeFileSync(source, "tampered binary")
+    rmSync(join(candidate, "runtime"), { recursive: true, force: true })
+    assert.equal(await reuseVerifiedPatchedArtifact(candidate, toolchain, version, manifestSha256), false)
+    assert.equal(existsSync(patchedBinaryPath(candidate, version)), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("source extraction promotion retries transient Windows filesystem locks", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-source-promotion-"))
+  try {
+    const extracted = join(root, "extracted")
+    const destination = join(root, "source")
+    mkdirSync(extracted)
+    writeFileSync(join(extracted, "sentinel.txt"), "complete\n")
+    const waits = []
+    let attempts = 0
+    await promoteExtractedSource(extracted, destination, {
+      attempts: 4,
+      wait: async (ms) => { waits.push(ms) },
+      rename: async (source, target) => {
+        attempts += 1
+        if (attempts < 3) throw Object.assign(new Error("temporarily locked"), { code: "EPERM" })
+        renameSync(source, target)
+      },
+    })
+    assert.equal(attempts, 3)
+    assert.deepEqual(waits, [50, 100])
+    assert.equal(readFileSync(join(destination, "sentinel.txt"), "utf8"), "complete\n")
+    assert.equal(existsSync(extracted), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("source extraction promotion does not retry structural failures", async () => {
+  const waits = []
+  await assert.rejects(
+    () => promoteExtractedSource("missing", "destination", {
+      attempts: 4,
+      wait: async (ms) => { waits.push(ms) },
+      rename: async () => { throw Object.assign(new Error("missing source"), { code: "ENOENT" }) },
+    }),
+    /missing source/,
+  )
+  assert.deepEqual(waits, [])
+})
+
 test("an existing but partial source cache is not considered ready", async () => {
   const root = mkdtempSync(join(tmpdir(), "alonix-toolings-source-"))
   try {
@@ -590,6 +664,30 @@ test("v1.18.16 exact profile preserves every reviewed v1.18.15 host fingerprint"
     patchManifest11815.files.map((entry) => [entry.path, entry.beforeSha256]),
   )
   assert.deepEqual(patchManifest11816.create, patchManifest11815.create)
+})
+
+test("v1.18.19 exact profile preserves reviewed boundaries and binds the changed session route", () => {
+  const previous = new Map(patchManifest11816.files.map((entry) => [entry.path, entry.beforeSha256]))
+  const current = new Map(patchManifest11819.files.map((entry) => [entry.path, entry.beforeSha256]))
+  assert.equal(patchManifest11819.version, "1.18.19")
+  assert.equal(current.get("packages/tui/src/routes/session/index.tsx"), "f938131c6cf84459c67e83a3936584717f00b6dfaf8c3398a2233ed18308b002")
+  for (const [path, fingerprint] of previous) {
+    if (path === "packages/tui/src/routes/session/index.tsx") continue
+    assert.equal(current.get(path), fingerprint, `${path} must remain byte-bound to the reviewed profile`)
+  }
+  assert.deepEqual(patchManifest11819.create, patchManifest11816.create)
+})
+
+test("v1.18.21 exact profile preserves reviewed boundaries and binds the changed session prompt", () => {
+  const previous = new Map(patchManifest11819.files.map((entry) => [entry.path, entry.beforeSha256]))
+  const current = new Map(patchManifest11821.files.map((entry) => [entry.path, entry.beforeSha256]))
+  assert.equal(patchManifest11821.version, "1.18.21")
+  assert.equal(current.get("packages/opencode/src/session/prompt.ts"), "f0c5bc64c0f0e966693d4a57f7ede1e9d6e188b396152f04b55303dc75b9b768")
+  for (const [path, fingerprint] of previous) {
+    if (path === "packages/opencode/src/session/prompt.ts") continue
+    assert.equal(current.get(path), fingerprint, `${path} must remain byte-bound to the reviewed profile`)
+  }
+  assert.deepEqual(patchManifest11821.create, patchManifest11819.create)
 })
 
 test("self-patch separates immutable deployment identity from the local build toolchain", () => {

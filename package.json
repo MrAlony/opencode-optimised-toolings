@@ -1,6 +1,6 @@
 {
   "name": "opencode-optimised-toolings",
-  "version": "6.5.1",
+  "version": "6.5.2",
   "private": false,
   "type": "module",
   "main": "./index.js",

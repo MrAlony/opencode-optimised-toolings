@@ -161,6 +161,33 @@ async function readPatchedArtifactMarker(root, version) {
   return readJsonMarker(patchedArtifactMarkerFile(root, version))
 }
 
+export async function reuseVerifiedPatchedArtifact(root, toolchainRoot, version, manifestSha256) {
+  const source = patchedBinaryPath(toolchainRoot, version)
+  const destination = patchedBinaryPath(root, version)
+  if (path.resolve(source) === path.resolve(destination) || !(await exists(source))) return false
+  const marker = await readPatchedArtifactMarker(toolchainRoot, version)
+  if (marker?.manifestSha256 !== manifestSha256 || typeof marker?.binarySha256 !== "string") return false
+  const sourceSha256 = await sha256File(source)
+  if (sourceSha256 !== marker.binarySha256) return false
+
+  await fs.mkdir(path.dirname(destination), { recursive: true })
+  const staged = `${destination}.reuse-${process.pid}-${Date.now()}`
+  try {
+    await fs.copyFile(source, staged)
+    if (await sha256File(staged) !== sourceSha256) throw new Error("reused host artifact changed while being staged")
+    await fs.rm(destination, { force: true })
+    await fs.rename(staged, destination)
+    await fs.writeFile(
+      patchedArtifactMarkerFile(root, version),
+      JSON.stringify({ ...marker, reusedFrom: path.resolve(toolchainRoot), binarySha256: sourceSha256 }, null, 2),
+      "utf8",
+    )
+    return true
+  } finally {
+    await fs.rm(staged, { force: true }).catch(() => {})
+  }
+}
+
 export async function manifestSha256(manifest) {
   return createHash("sha256").update(JSON.stringify(manifest)).digest("hex")
 }
@@ -284,6 +311,29 @@ export async function sourceReady(dir) {
   return true
 }
 
+const SOURCE_PROMOTION_RETRY_CODES = new Set(["EACCES", "EBUSY", "EPERM"])
+
+export async function promoteExtractedSource(extracted, destination, options = {}) {
+  const rename = options.rename ?? fs.rename
+  const wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
+  const attempts = Math.max(1, options.attempts ?? 8)
+  let lastError = null
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await rename(extracted, destination)
+      return
+    } catch (error) {
+      lastError = error
+      if (!SOURCE_PROMOTION_RETRY_CODES.has(error?.code) || attempt === attempts - 1) throw error
+      // Antivirus and indexers can briefly retain a handle after archive
+      // extraction on Windows. Keep the verified extraction intact and retry
+      // the atomic promotion with bounded exponential backoff.
+      await wait(Math.min(1_000, 50 * (2 ** attempt)))
+    }
+  }
+  throw lastError
+}
+
 export async function ensureSource(root, version) {
   const dir = sourceDir(root, version)
   if (await sourceReady(dir)) return dir
@@ -335,7 +385,7 @@ export async function ensureSource(root, version) {
   const extracted = path.join(extractDir, match)
   if (path.resolve(extracted) !== path.resolve(dir)) {
     await fs.mkdir(path.dirname(dir), { recursive: true })
-    await fs.rename(extracted, dir)
+    await promoteExtractedSource(extracted, dir)
   }
   if (!(await sourceReady(dir))) {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
@@ -697,6 +747,7 @@ export async function runSelfPatch(root, options = {}) {
     const manifestSha = await manifestSha256(manifest)
     await reconcileHostRuntime(root, { version: bin.version, manifestSha256: manifestSha, binaryPath: bin.path })
     const sourceMarker = await readPatchMarker(sourceRootForMarker)
+    await reuseVerifiedPatchedArtifact(root, toolchainRoot, bin.version, manifestSha)
     const artifactMarker = await readPatchedArtifactMarker(root, bin.version)
     if (await exists(patchedPath)) {
       const patchedSha = await sha256File(patchedPath)

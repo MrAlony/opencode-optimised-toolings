@@ -329,6 +329,74 @@ test("live runtime diagnostics ignore dead receipts and report only alive stale 
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
+test("public deployment leaves config untouched when cache fallback staging fails", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-cache-failure-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    const blockedCache = join(directory, "cache-blocker")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(blockedCache, "not a directory")
+    const serverBefore = JSON.stringify({ plugin: ["previous-server", "personal"] }, null, 2)
+    const tuiBefore = JSON.stringify({ plugin: ["other-tui"] }, null, 2)
+    writeFileSync(join(configDir, "opencode.json"), serverBefore)
+    writeFileSync(join(configDir, "tui.json"), tuiBefore)
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime"), OPENCODE_PACKAGE_CACHE_DIR: blockedCache }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    await assert.rejects(() => reconcileDeployment(generation.root, { configDir, env, generation, publicPackage: true }))
+    assert.equal(readFileSync(join(configDir, "opencode.json"), "utf8"), serverBefore)
+    assert.equal(readFileSync(join(configDir, "tui.json"), "utf8"), tuiBefore)
+    assert.equal(existsSync(deploymentRecordPath(configDir)), false)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("public deployment creates an exact OpenCode cache fallback on a clean machine", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-clean-cache-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "4.0.2")
+    const configDir = join(directory, "config")
+    const cacheDir = join(directory, "cache")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: [] }))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime"), OPENCODE_PACKAGE_CACHE_DIR: cacheDir }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    const reconciled = await reconcileDeployment(generation.root, { configDir, env, generation, publicPackage: true })
+    const wrapper = join(cacheDir, "opencode-optimised-toolings@latest")
+    assert.equal(JSON.parse(readFileSync(join(wrapper, "package.json"), "utf8")).dependencies["opencode-optimised-toolings"], generation.version)
+    assert.equal(JSON.parse(readFileSync(join(wrapper, "node_modules", "opencode-optimised-toolings", "package.json"), "utf8")).version, generation.version)
+    assert.equal(JSON.parse(readFileSync(join(wrapper, ".alonix-cache-authority.json"), "utf8")).fingerprint, generation.fingerprint)
+    assert.equal(reconciled.cache.changed, true)
+    assert.equal(reconciled.status.checks.find((check) => check.name === "runtime package authority")?.ok, true)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("public deployment replaces a stale OpenCode cache without leaving old package bytes", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-stale-cache-"))
+  try {
+    const packageRoot = createInstallation(join(directory, "source"), "6.5.1")
+    const configDir = join(directory, "config")
+    const cacheDir = join(directory, "cache")
+    const wrapper = join(cacheDir, "opencode-optimised-toolings@latest")
+    const staleRoot = join(wrapper, "node_modules", "opencode-optimised-toolings")
+    mkdirSync(staleRoot, { recursive: true })
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(wrapper, "package.json"), JSON.stringify({ dependencies: { "opencode-optimised-toolings": "4.0.0" } }))
+    writeFileSync(join(staleRoot, "package.json"), JSON.stringify({ name: "opencode-optimised-toolings", version: "4.0.0" }))
+    writeFileSync(join(staleRoot, "index.js"), "export default 'stale'\n")
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: [] }))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }))
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime"), OPENCODE_PACKAGE_CACHE_DIR: cacheDir }
+    const generation = await ensurePackageGeneration(packageRoot, { env })
+    const reconciled = await reconcileDeployment(generation.root, { configDir, env, generation, publicPackage: true })
+    assert.equal(JSON.parse(readFileSync(join(wrapper, "package.json"), "utf8")).dependencies["opencode-optimised-toolings"], "6.5.1")
+    assert.equal(JSON.parse(readFileSync(join(wrapper, "node_modules", "opencode-optimised-toolings", "package.json"), "utf8")).version, "6.5.1")
+    assert.doesNotMatch(readFileSync(join(wrapper, "node_modules", "opencode-optimised-toolings", "index.js"), "utf8"), /export default 'stale'/)
+    assert.equal(reconciled.cache.changed, true)
+    assert.match(reconciled.status.checks.find((check) => check.name === "runtime package authority")?.detail ?? "", /cache mirrors canonical generation/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
 test("deployment status validates public specs against hidden immutable identity", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-public-status-"))
   try {
@@ -337,7 +405,7 @@ test("deployment status validates public specs against hidden immutable identity
     mkdirSync(configDir, { recursive: true })
     writeFileSync(join(configDir, "opencode.json"), JSON.stringify({ plugin: [] }))
     writeFileSync(join(configDir, "tui.json"), JSON.stringify({ plugin: [] }))
-    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime") }
+    const env = { ...process.env, OPENCODE_TOOLINGS_PACKAGE_MODE: "installed", OPENCODE_TOOLINGS_GENERATIONS_DIR: join(directory, "generations"), OPENCODE_TOOLINGS_DATA_DIR: join(directory, "runtime"), OPENCODE_PACKAGE_CACHE_DIR: join(directory, "cache") }
     const generation = await ensurePackageGeneration(packageRoot, { env })
     const reconcileHost = async () => {
       mkdirSync(env.OPENCODE_TOOLINGS_DATA_DIR, { recursive: true })
