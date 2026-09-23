@@ -93,15 +93,19 @@ export function parseCbm(text) {
   return { status: failed ? "FAILED" : partial ? "PARTIAL SUCCESS" : "SUCCESS", summary: failed ? (field(source, "What happened") || "CBM operation failed") : outcome || projectSummary || `${sectionNames.length} evidence sections returned`, sections: sectionNames, sectionBodies, raw: source }
 }
 
+function asList(value) {
+  return Array.isArray(value) ? value : []
+}
+
 export function inputItems(tool, input) {
-  if (tool === "alonix-web-fetch" || tool === "alonix-stealth-fetch") return (input?.requests ?? []).map((item) => ({ status: "PENDING", label: item.url, meta: item.format ?? "" }))
-  if (tool === "alonix-web-search" || tool === "alonix-stealth-search") return (input?.queries ?? []).map((item) => ({ status: "PENDING", label: item.query, meta: item.backend ?? "" }))
-  if (tool === "alonix-shell") return (input?.commands ?? []).map((item) => ({ status: "PENDING", label: item.label || item.command, meta: "queued" }))
-  if (tool === "alonix-background-process") return (input?.operations ?? []).map((item, index) => ({ status: "PENDING", label: item.label || item.action || `operation ${index + 1}`, meta: item.action ?? "" }))
-  if (tool === "alonix-read") return [...new Set([...(input?.paths ?? []), ...(input?.requests ?? []).map((item) => item.path)])].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
+  if (tool === "alonix-web-fetch" || tool === "alonix-stealth-fetch") return asList(input?.requests).map((item) => ({ status: "PENDING", label: item.url, meta: item.format ?? "" }))
+  if (tool === "alonix-web-search" || tool === "alonix-stealth-search") return asList(input?.queries).map((item) => ({ status: "PENDING", label: item.query, meta: item.backend ?? "" }))
+  if (tool === "alonix-shell") return asList(input?.commands).map((item) => ({ status: "PENDING", label: item.label || item.command, meta: "queued" }))
+  if (tool === "alonix-background-process") return asList(input?.operations).map((item, index) => ({ status: "PENDING", label: item.label || item.action || `operation ${index + 1}`, meta: item.action ?? "" }))
+  if (tool === "alonix-read") return [...new Set([...asList(input?.paths), ...asList(input?.requests).map((item) => item.path)])].map((path) => ({ status: "PENDING", label: path, meta: "requested" }))
   if (tool === "alonix-edit") {
     const transactions = new Map()
-    for (const item of input?.actions ?? []) {
+    for (const item of asList(input?.actions)) {
       const current = transactions.get(item.path) ?? []
       current.push(item.operation)
       transactions.set(item.path, current)

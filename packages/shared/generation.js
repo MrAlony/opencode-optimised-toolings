@@ -90,7 +90,7 @@ function withoutBom(text) {
   return String(text ?? "").replace(/^\uFEFF/, "")
 }
 
-function parseDocument(text, label) {
+export function parseDocument(text, label) {
   const errors = []
   const data = parse(withoutBom(text) || "{}", errors, { allowTrailingComma: true, disallowComments: false })
   if (errors.length) {
@@ -100,23 +100,23 @@ function parseDocument(text, label) {
   return data && typeof data === "object" && !Array.isArray(data) ? data : {}
 }
 
-function setJsonc(text, path, value) {
+export function setJsonc(text, path, value) {
   const bom = String(text ?? "").startsWith("\uFEFF") ? "\uFEFF" : ""
   const body = withoutBom(text)
   const eol = body.includes("\r\n") ? "\r\n" : "\n"
   return `${bom}${applyEdits(body, modify(body, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol } }))}`
 }
 
-function entrySpec(entry) {
+export function entrySpec(entry) {
   return String(Array.isArray(entry) ? entry[0] : entry ?? "")
 }
 
-function isManagedEntry(entry) {
+export function isManagedEntry(entry) {
   const spec = entrySpec(entry).replaceAll("\\", "/")
-  return new RegExp(`^(?:npm:)?${PACKAGE_NAME}(?:@|$)`, "i").test(spec)
+  return new RegExp(`^(?:npm:)?(?:@[^/]+/)?${PACKAGE_NAME}(?:@|$)`, "i").test(spec)
     || spec.toLowerCase().replace(/\/$/, "").endsWith(`/${PACKAGE_NAME.toLowerCase()}`)
     || spec.toLowerCase().includes(`/${PACKAGE_NAME.toLowerCase()}/index.js`)
-    || new RegExp(`/${PACKAGE_NAME.toLowerCase()}(?:-[^/]+)?/packages/tui/index\\.tsx(?:$|[?#])`, "i").test(spec)
+    || new RegExp(`/(?:@[^/]+/)?${PACKAGE_NAME.toLowerCase()}(?:-[^/]+)?/packages/tui/index\\.tsx(?:$|[?#])`, "i").test(spec)
     || spec.toLowerCase().includes("/alonix/runtime/tui-loader.mjs")
 }
 
@@ -771,7 +771,7 @@ export async function activatePackageGeneration(generation, options = {}) {
       await fs.rm(journal, { force: true }).catch(() => {})
       throw error
     }
-    return { changed: true, generation: generation.root, version: generation.version, restartRequired: true, files: planned.map((item) => item.file), backups: planned.map((item) => item.backup) }
+    return { changed: true, generation: generation.root, version: generation.version, restartRequired: false, automaticForNewProcesses: true, files: planned.map((item) => item.file), backups: planned.map((item) => item.backup) }
   } finally {
     await fs.rm(lock, { force: true }).catch(() => {})
   }
@@ -785,9 +785,11 @@ export async function ensureAndActivateGeneration(packageRoot, options = {}) {
 
 function writeRuntimeRecord(packageRoot, role, status, detail = {}, options = {}) {
   const runtime = userDataRoot(options.env)
-  const file = options.file ?? join(runtime, `${role}-activation-${process.pid}.json`)
+  const instanceId = String(options.instanceId ?? "").replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 80)
+  const suffix = instanceId ? `-${instanceId}` : ""
+  const file = options.file ?? join(runtime, `${role}-activation-${process.pid}${suffix}.json`)
   const processStartedAt = new Date(Date.now() - (process.uptime() * 1000)).toISOString()
-  const body = { status, role, pid: process.pid, processStartedAt, at: new Date().toISOString(), root: resolve(packageRoot), ...detail }
+  const body = { status, role, pid: process.pid, processStartedAt, at: new Date().toISOString(), root: resolve(packageRoot), ...(instanceId ? { instanceId } : {}), ...detail }
   mkdirSync(dirname(file), { recursive: true })
   const temporary = join(dirname(file), `.${basename(file)}.${process.pid}.${randomUUID()}.tmp`)
   writeFileSync(temporary, `${JSON.stringify(body, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
@@ -824,6 +826,7 @@ export function liveRuntimeProcesses(env = process.env, options = {}) {
   const latest = new Map()
   for (const record of runtimeRecords(env)) {
     if (!Number.isInteger(record.pid) || !alive(record.pid)) continue
+    if (["disposed", "failed"].includes(record.status)) continue
     const key = `${record.pid}:${record.role}`
     const previous = latest.get(key)
     if (!previous || record.atMs > previous.atMs) latest.set(key, record)
@@ -850,6 +853,7 @@ function newestRecord(role, env = process.env, expectedRoot = null) {
     if (!name.startsWith(prefix) || !name.endsWith(".json")) continue
     try {
       const value = JSON.parse(readFileSync(join(runtime, name), "utf8"))
+      if (["disposed", "failed"].includes(value?.status)) continue
       if (expected && normalize(value?.root) !== expected) continue
       const at = Date.parse(String(value?.at ?? ""))
       if (Number.isFinite(at) && (!newest || at > newest.atMs)) newest = { ...value, atMs: at, file: join(runtime, name) }

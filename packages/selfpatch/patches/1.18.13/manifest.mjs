@@ -1090,6 +1090,56 @@ export type TuiDispose = () => void | Promise<void>`,
     },
     slots,`,
         },
+        {
+          name: "generation-safe TUI runtime disposal",
+          search: `export async function dispose() {
+  const task = loaded
+  loaded = undefined
+  dir = ""
+  if (task) await task.catch((error) => fail("failed to finish loading tui plugins during disposal", { error }))
+  const state = runtime
+  runtime = undefined
+  if (!state) return
+  const queue = [...state.plugins].reverse()
+  for (const plugin of queue) {
+    await deactivatePluginEntry(state, plugin, false).catch((error) =>
+      fail("failed to dispose tui plugin", { id: plugin.id, error }),
+    )
+  }
+  try {
+    state.dispose?.()
+  } finally {
+    state.slots.dispose()
+    state.view.clear()
+  }
+}`,
+          replace: `export async function dispose() {
+  const task = loaded
+  const state = runtime
+  loaded = undefined
+  dir = ""
+  if (runtime === state) runtime = undefined
+  if (task) await task.catch((error) => fail("failed to finish loading tui plugins during disposal", { error }))
+  if (!state) return
+  const queue = [...state.plugins].reverse()
+  for (const plugin of queue) {
+    await deactivatePluginEntry(state, plugin, false).catch((error) =>
+      fail("failed to dispose tui plugin", { id: plugin.id, error }),
+    )
+  }
+  // A replacement runtime may start while the previous generation is awaiting
+  // asynchronous plugin cleanup. Release resources owned by the old adapter,
+  // but never let it clear the replacement's shared slot or command view.
+  try {
+    state.dispose?.()
+  } finally {
+    if (!runtime) {
+      state.slots.dispose()
+      state.view.clear()
+    }
+  }
+}`,
+        },
       ],
     },
     {

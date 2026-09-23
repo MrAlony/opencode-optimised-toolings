@@ -113,7 +113,7 @@ try {
     changedFiles: changed.map((line) => line.slice(3)),
   }
   console.log(JSON.stringify(summary, null, 2))
-  console.log("LOCAL CANDIDATE READY: one package-root declaration is active; fully quit and restart OpenCode to validate the immutable candidate.")
+  console.log("LOCAL CANDIDATE READY: one package-root declaration is active; newly opened OpenCode processes use the immutable candidate automatically.")
 } finally {
   if (process.env.ALONIX_KEEP_CANDIDATE_TEMP !== "1") rmSync(temporary, { recursive: true, force: true })
 }

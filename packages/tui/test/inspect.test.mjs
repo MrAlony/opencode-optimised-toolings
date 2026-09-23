@@ -45,3 +45,16 @@ test("discovery and pending previews remain informative with zero matches", () =
   assert.match(search.items[0].label, /0 content matches/)
   assert.deepEqual(inputItems("alonix-web-fetch", { requests: [{ url: "https://one.test" }, { url: "https://two.test" }] }).map((item) => item.status), ["PENDING", "PENDING"])
 })
+
+test("inputItems never throws on non-array tool inputs", () => {
+  assert.deepEqual(inputItems("alonix-shell", { commands: "echo hi" }), [])
+  assert.deepEqual(inputItems("alonix-shell", { commands: { run: "echo hi" } }), [])
+  assert.deepEqual(inputItems("alonix-shell", { commands: null }), [])
+  assert.deepEqual(inputItems("alonix-web-fetch", { requests: "https://one.test" }), [])
+  assert.deepEqual(inputItems("alonix-web-search", { queries: null }), [])
+  assert.deepEqual(inputItems("alonix-background-process", { operations: "run" }), [])
+  assert.deepEqual(inputItems("alonix-read", { paths: "packages/tui/index.tsx" }), [])
+  assert.deepEqual(inputItems("alonix-edit", { actions: { path: "a.txt", operation: "create" } }), [])
+  assert.deepEqual(inputItems("alonix-shell", null), [])
+  assert.deepEqual(inputItems("alonix-shell", undefined), [])
+})

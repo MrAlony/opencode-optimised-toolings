@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { activatePackageGeneration, candidatePackageSpecs, deploymentRecordPath, directDependencyAttestation, ensurePackageGeneration, generationPackageRoot, liveRuntimeProcesses, publicPackageSpecs, resolveNpmCommand, runtimeAttestation, runtimeHealth, tuiCoordinationPath, validateGeneration, writeServerLifecycle, writeTuiLifecycle } from "../packages/shared/generation.js"
-import { deploymentStatus, discoverConfiguredDeployment, reconcileDeployment } from "../packages/shared/deployment.js"
+import { deploymentStatus, detachDeployment, discoverConfiguredDeployment, reconcileDeployment } from "../packages/shared/deployment.js"
 
 function createInstallation(root, version) {
   const packageRoot = join(root, "node_modules", "opencode-optimised-toolings")
@@ -329,6 +329,25 @@ test("live runtime diagnostics ignore dead receipts and report only alive stale 
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
+test("live runtime diagnostics retain an active TUI instance after an older scope disposes", () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-live-runtime-overlap-"))
+  try {
+    const runtime = join(directory, "runtime")
+    const env = { ...process.env, OPENCODE_TOOLINGS_DATA_DIR: runtime }
+    const root = join(directory, "generation", "opencode-optimised-toolings")
+    const processStartedAt = new Date(Date.now() - 1000).toISOString()
+    writeServerLifecycle(root, "active", { processStartedAt, version: "6.5.2", sourceFingerprint: "exact" }, { env })
+    writeTuiLifecycle(root, "disposed", { processStartedAt, version: "6.5.2", sourceFingerprint: "exact", stage: "lifecycle-disposed" }, { env, instanceId: "old" })
+    writeTuiLifecycle(root, "active", { processStartedAt, version: "6.5.2", sourceFingerprint: "exact", stage: "complete" }, { env, instanceId: "replacement" })
+
+    const live = liveRuntimeProcesses(env, { pidAlive: (pid) => pid === process.pid })
+    assert.equal(live.length, 1)
+    assert.equal(live[0].tui.instanceId, "replacement")
+    assert.equal(live[0].tui.status, "active")
+    assert.match(live[0].tui.file, /tui-activation-\d+-replacement\.json$/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
 test("public deployment leaves config untouched when cache fallback staging fails", async () => {
   const directory = mkdtempSync(join(tmpdir(), "alonix-deployment-cache-failure-"))
   try {
@@ -562,3 +581,39 @@ test("malformed companion config prevents activation without changing either fil
     assert.equal(readFileSync(join(configDir, "tui.json"), "utf8"), "{broken")
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
+
+test("detachDeployment cleanly strips server, TUI, coordination pointer, deployment record, and AGENTS block", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "alonix-detach-"))
+  try {
+    const configDir = join(directory, "config")
+    mkdirSync(configDir, { recursive: true })
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({
+      plugin: ["opencode-optimised-toolings@latest", "other-plugin"],
+      theme: "dark"
+    }, null, 2))
+    writeFileSync(join(configDir, "tui.json"), JSON.stringify({
+      plugin: ["file:///C:/path/opencode-optimised-toolings/packages/tui/index.tsx", "other-tui"]
+    }, null, 2))
+    writeFileSync(tuiCoordinationPath(configDir), JSON.stringify({ schemaVersion: 1 }))
+    mkdirSync(join(configDir, "alonix"), { recursive: true })
+    writeFileSync(deploymentRecordPath(configDir), JSON.stringify({ authority: "opencode-optimised-toolings-control-plane" }))
+    writeFileSync(join(configDir, "AGENTS.md"), "# Instructions\n\n<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: START -->\nAlonix tools...\n<!-- ALONIX OPTIMIZED TOOL INSTRUCTIONS: END -->\n\nUser instructions here.\n")
+
+    const result = await detachDeployment({ configDir })
+    assert.equal(result.ok, true)
+    assert.equal(existsSync(tuiCoordinationPath(configDir)), false)
+    assert.equal(existsSync(deploymentRecordPath(configDir)), false)
+
+    const serverAfter = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8"))
+    assert.deepEqual(serverAfter.plugin, ["other-plugin"])
+    assert.equal(serverAfter.theme, "dark")
+
+    const tuiAfter = JSON.parse(readFileSync(join(configDir, "tui.json"), "utf8"))
+    assert.deepEqual(tuiAfter.plugin, ["other-tui"])
+
+    const agentsAfter = readFileSync(join(configDir, "AGENTS.md"), "utf8")
+    assert.equal(agentsAfter.includes("ALONIX OPTIMIZED TOOL INSTRUCTIONS"), false)
+    assert.equal(agentsAfter.includes("User instructions here."), true)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+

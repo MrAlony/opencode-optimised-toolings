@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { deploymentStatus, deploymentSummary, developmentDeployment, discoverConfiguredDeployment, readDeployment, reconcileDeployment } from "../packages/shared/deployment.js"
+import { deploymentStatus, deploymentSummary, developmentDeployment, discoverConfiguredDeployment, readDeployment, reconcileDeployment, detachDeployment } from "../packages/shared/deployment.js"
 import { runSelfPatch } from "../packages/selfpatch/lib/pipeline.js"
 
 const checkout = resolve(fileURLToPath(new URL("..", import.meta.url)))
@@ -37,8 +37,16 @@ try {
         })
     console.log(json ? JSON.stringify(result, null, 2) : deploymentSummary(result.status))
     if (!result.status.ok) process.exitCode = 1
+  } else if (command === "detach") {
+    const purgeCache = args.includes("--purge-cache")
+    const result = await detachDeployment({ purgeCache })
+    console.log(
+      json
+        ? JSON.stringify(result, null, 2)
+        : `DETACH SUCCESS: Alonix removed from OpenCode (modified ${result.modified.length} files, removed ${result.removed.length} files${result.purged.length ? `, purged ${result.purged.length} cache paths` : ""}). Restart OpenCode.`
+    )
   } else {
-    throw new Error(`Unknown command ${command}. Use: toolings status|doctor|reconcile [--source=checkout|desired] [--json]`)
+    throw new Error(`Unknown command ${command}. Use: toolings status|doctor|reconcile|detach [--source=checkout|desired] [--purge-cache] [--json]`)
   }
 } catch (error) {
   console.error(`TOOLINGS ${command.toUpperCase()} FAILED: ${error?.message ?? error}`)

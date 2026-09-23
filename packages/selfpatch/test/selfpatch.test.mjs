@@ -24,10 +24,12 @@ import { manifest as patchManifest11815 } from "../patches/1.18.15/manifest.mjs"
 import { manifest as patchManifest11816 } from "../patches/1.18.16/manifest.mjs"
 import { manifest as patchManifest11819 } from "../patches/1.18.19/manifest.mjs"
 import { manifest as patchManifest11821 } from "../patches/1.18.21/manifest.mjs"
+import { manifest as patchManifest11829 } from "../patches/1.18.29/manifest.mjs"
+import { manifest as patchManifest11832 } from "../patches/1.18.32/manifest.mjs"
 
 test("controller retries only a transient updater swap miss", () => {
   assert.equal(controllerRetryDelay({ status: "no-opencode" }), 45_000)
-  for (const status of ["installed", "portable", "unsupported-version", "error", "dev-mode", "ok"]) {
+  for (const status of ["installed", "built", "portable", "unsupported-version", "error", "dev-mode", "ok"]) {
     assert.equal(controllerRetryDelay({ status }), null)
   }
 })
@@ -432,6 +434,15 @@ test("v1.18.15 has a dedicated strict profile for changed upstream files", () =>
   assert.equal(upstreamChanges.get("packages/opencode/src/session/prompt.ts"), "0ef73c460d46619cd3e75d4b790a22a3c4c999b311a43e7887b634ff7a3fa06d")
 })
 
+test("v1.18.13 TUI runtime disposal cannot tear down a replacement generation", () => {
+  const runtime = patchManifest.files.find((file) => file.path === "packages/opencode/src/plugin/tui/runtime.ts")
+  assert.ok(runtime, "the host TUI runtime must be patched")
+  const replacement = runtime.replacements.find((item) => item.name === "generation-safe TUI runtime disposal")?.replace ?? ""
+  assert.match(replacement, /const state = runtime[\s\S]*if \(runtime === state\) runtime = undefined/)
+  assert.ok(replacement.indexOf("const state = runtime") < replacement.indexOf("if (task) await task.catch"), "the retiring generation must be captured before asynchronous cleanup")
+  assert.match(replacement, /state\.dispose\?\.\(\)[\s\S]*if \(!runtime\)[\s\S]*state\.slots\.dispose\(\)[\s\S]*state\.view\.clear\(\)/, "old adapter resources must be released without clearing a replacement's shared view")
+})
+
 test("v1.18.13 patch carries tool renderers through every TUI API boundary", () => {
   const files = new Map(patchManifest.files.map((file) => [file.path, file]))
   const pluginTypes = files.get("packages/plugin/src/tui.ts")
@@ -690,6 +701,78 @@ test("v1.18.21 exact profile preserves reviewed boundaries and binds the changed
   assert.deepEqual(patchManifest11821.create, patchManifest11819.create)
 })
 
+test("v1.18.29 exact profile rebinds verified boundaries and the three changed host files", () => {
+  const previous = new Map(patchManifest11821.files.map((entry) => [entry.path, entry.beforeSha256]))
+  const current = new Map(patchManifest11829.files.map((entry) => [entry.path, entry.beforeSha256]))
+  assert.equal(patchManifest11829.version, "1.18.29")
+  const changed = [
+    ["packages/tui/src/routes/session/index.tsx", "bf7706ae0c8f1841cadf70aab74bd102ceae7d1597ba6f839f35cd073fbc17eb"],
+    ["packages/tui/src/component/prompt/index.tsx", "e8c0153b5b9dcf5b00e334d6063126dfffe5cb41333b55621d92f54e8d18639c"],
+    ["packages/tui/src/app.tsx", "a3c1c44346e6e1fc25d43dddc7b7053c6b1b840bed94e409def6351a9033e649"],
+  ]
+  for (const [path, fingerprint] of changed) {
+    assert.equal(current.get(path), fingerprint, `${path} must bind the verified v1.18.29 fingerprint`)
+    assert.notEqual(previous.get(path), fingerprint, `${path} must actually have changed upstream`)
+  }
+  for (const [path, fingerprint] of previous) {
+    if (changed.some(([changedPath]) => changedPath === path)) continue
+    assert.equal(current.get(path), fingerprint, `${path} must remain byte-bound to the verified v1.18.21 profile`)
+  }
+  assert.deepEqual(patchManifest11829.create, patchManifest11821.create, "created enhancement files must be preserved")
+  assert.equal(patchManifest11829.files.length, patchManifest11821.files.length)
+})
+
+test("v1.18.32 exact profile rebinds verified boundaries and the changed app.tsx", () => {
+  const previous = new Map(patchManifest11829.files.map((entry) => [entry.path, entry.beforeSha256]))
+  const current = new Map(patchManifest11832.files.map((entry) => [entry.path, entry.beforeSha256]))
+  assert.equal(patchManifest11832.version, "1.18.32")
+  const changed = [
+    ["packages/tui/src/app.tsx", "c99db2d432450e34cbd2b101a4414e075a510679e1e065cc3d4245c3d3170e5f"],
+  ]
+  for (const [path, fingerprint] of changed) {
+    assert.equal(current.get(path), fingerprint, `${path} must bind the verified v1.18.32 fingerprint`)
+    assert.notEqual(previous.get(path), fingerprint, `${path} must actually have changed upstream`)
+  }
+  for (const [path, fingerprint] of previous) {
+    if (changed.some(([changedPath]) => changedPath === path)) continue
+    assert.equal(current.get(path), fingerprint, `${path} must remain byte-bound to the verified v1.18.29 profile`)
+  }
+  assert.deepEqual(patchManifest11832.create, patchManifest11829.create, "created enhancement files must be preserved")
+  assert.equal(patchManifest11832.files.length, patchManifest11829.files.length)
+})
+
+test("future OpenCode versions auto-adapt when replacement anchors match cleanly", async () => {
+  const root = mkdtempSync(join(tmpdir(), "alonix-toolings-auto-adapt-"))
+  try {
+    const source = join(root, "source")
+    const patches = join(root, "packages", "selfpatch", "patches", "1.18.29")
+    mkdirSync(source, { recursive: true })
+    mkdirSync(patches, { recursive: true })
+    const modifiedFile = "unrelated upstream change\nconst layout = true\n"
+    writeFileSync(join(source, "host.ts"), modifiedFile)
+    writeFileSync(
+      join(patches, "manifest.mjs"),
+      `export const manifest = ${JSON.stringify({
+        version: "1.18.29",
+        files: [{
+          path: "host.ts",
+          beforeSha256: "old-sha-that-changed-upstream",
+          replacements: [{ search: "const layout = true", replace: "const layout = false" }],
+        }],
+      })}`,
+    )
+
+    const profile = await resolvePatchProfile(root, "1.18.99", source)
+    assert.ok(profile, "future version with clean anchors must automatically adapt")
+    assert.equal(profile.profileVersion, "1.18.29")
+    assert.equal(profile.manifest.version, "1.18.99")
+    const expectedSha = createHash("sha256").update(modifiedFile).digest("hex")
+    assert.equal(profile.manifest.files[0].beforeSha256, expectedSha)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("self-patch separates immutable deployment identity from the local build toolchain", () => {
   const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
   assert.match(source, /runSelfPatch\(root, options = \{\}\)/)
@@ -735,12 +818,21 @@ test("self-patch rejects a missing relative detector result before opening it", 
   assert.match(source, /!bin \|\| !\(await exists\(bin\.path\)\)/)
 })
 
+test("self-patch installs atomically without requiring a manual restart", () => {
+  const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
+  assert.doesNotMatch(source, /restart OpenCode/i)
+  assert.doesNotMatch(source, /installPending/)
+  assert.doesNotMatch(source, /installed\.installed \? "built"/)
+  assert.match(source, /status: "installed"/)
+  assert.match(source, /new OpenCode processes use them automatically/)
+})
+
 test("self-patch activation is gated by the current manifest fingerprint", () => {
   const source = readFileSync(new URL("../lib/pipeline.js", import.meta.url), "utf8")
   assert.match(source, /patchedSha === officialSha && artifactMarker\?\.manifestSha256 === manifestSha/)
   assert.match(source, /artifactMarker\?\.binarySha256 === patchedSha/)
   assert.match(source, /patchedArtifactMarkerFile\(root, bin\.version\)/)
-  assert.match(source, /installPending\(freshState, Date\.now\(\)\) && artifactMarker\?\.manifestSha256 === manifestSha/)
+
 })
 
 test("OpenCode updates are never blocked or replaced without verified source compatibility", () => {

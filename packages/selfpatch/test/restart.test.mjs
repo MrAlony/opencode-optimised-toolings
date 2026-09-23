@@ -5,7 +5,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { installPatchedBinary } from "../lib/restart.js"
 import { isDedicatedOpenCodeServer, reconcileHostRuntime } from "../lib/host-recovery.js"
-import { installPending } from "../lib/pipeline.js"
 import { patchedBinaryPath } from "../lib/state.js"
 
 function fixture() {
@@ -58,15 +57,6 @@ test("installPatchedBinary is idempotent: an already-patched binary is reported 
   } finally {
     rmSync(f.dir, { recursive: true, force: true })
   }
-})
-
-test("installPending treats a fresh install as pending and stale records as retryable", () => {
-  const now = Date.now()
-  assert.equal(installPending({ status: "idle" }), false)
-  assert.equal(installPending({ status: "building", updatedAt: now }), false)
-  assert.equal(installPending({ status: "built", updatedAt: now - 10_000 }), true)
-  assert.equal(installPending({ status: "built", updatedAt: now - 5 * 60 * 1000 }), false)
-  assert.equal(installPending({ status: "built" }), true)
 })
 
 test("dedicated-server detection never selects interactive OpenCode processes", () => {

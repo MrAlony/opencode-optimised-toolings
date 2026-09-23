@@ -31,7 +31,8 @@ export async function ensureTuiCompanion(root, options = {}) {
     configPath: result.activation.files.find((file) => /tui\.json$/i.test(file)) ?? path.join(options.configDirectory ?? openCodeConfigDirectory(options.env), "tui.json"),
     spec: result.status.desired.tuiSpec,
     generation: result.generation.root,
-    restartRequired: result.activation.changed,
+    restartRequired: false,
+    automaticForNewProcesses: result.activation.changed,
     replaced: null,
     deployment: result.status,
   }

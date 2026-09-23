@@ -107,7 +107,7 @@ export function isStale(state, now = Date.now()) {
  */
 export function indicatorFor(state, evidence = {}) {
   const renderersRegistered = Number(evidence.renderersRegistered ?? 0) > 0
-  if (renderersRegistered && state?.status !== "built") {
+  if (renderersRegistered) {
     return state?.status === "error"
       ? { level: "warn", text: "Patched binary active", detail: "Rich renderers are active; a later background maintenance check failed" }
       : { level: "ok", text: "Patched binary active", detail: "Rich tool renderers active" }
@@ -148,14 +148,17 @@ export function indicatorFor(state, evidence = {}) {
     case "error":
       return { level: "error", text: state.lastError ?? "Tooling self-patch failed" }
     case "built":
+      // Legacy records from older controllers mean the on-disk swap completed.
+      // Never instruct the user to restart: subsequent processes automatically
+      // use the installed host, while this process reports its live capability.
       return {
         level: "info",
-        text: "Patched binary installed — restart OpenCode to activate",
-        detail: "Running instances keep the original binary until you restart",
+        text: "Host enhancements installed",
+        detail: "New OpenCode processes use the corrected host automatically",
       }
     case "restarting":
     case "swapping":
-      return { level: "info", text: "Restart OpenCode to activate the patched binary" }
+      return { level: "info", text: "Installing host enhancements atomically" }
     default:
       return { level: "warn", text: `${state?.stepLabel ?? state?.status ?? "unknown"}${state?.progressPercent ? ` (${state.progressPercent}%)` : ""}` }
   }
@@ -164,7 +167,7 @@ export function indicatorFor(state, evidence = {}) {
 export function toastForTransition(prev, next, evidence = {}) {
   if (!prev) return null
   if (next?.status === "built" && prev?.status !== "built" && Number(evidence.renderersRegistered ?? 0) <= 0) {
-    return { variant: "info", title: "OpenCode patched", message: "Patched binary installed — restart OpenCode to activate rich tool renderers." }
+    return { variant: "info", title: "OpenCode host updated", message: "New OpenCode processes use the corrected host automatically." }
   }
   if (next?.status === "ok" && prev?.status === "built") {
     return { variant: "success", title: "Tooling active", message: "Patched binary loaded — rich renderers enabled for all custom tools." }

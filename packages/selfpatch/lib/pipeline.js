@@ -249,6 +249,87 @@ export async function manifestCompatible(sourceRoot, manifest) {
   return true
 }
 
+/**
+ * Adapt a capability manifest to a new OpenCode version whose touched files
+ * differ in hash from the reference profile, but whose replacement anchors
+ * all match uniquely in pristine source. This allows seamless auto-enhancement
+ * across future OpenCode releases without unsafe broad ranges.
+ */
+export async function adaptManifestForSource(sourceRoot, manifest, version) {
+  for (const entry of manifest.create ?? []) {
+    const file = path.join(sourceRoot, entry.path)
+    if (await exists(file)) {
+      const current = await fs.readFile(file, "utf8").catch(() => null)
+      if (current !== entry.content) return null
+    }
+  }
+
+  const adaptedFiles = []
+  for (const entry of manifest.files ?? []) {
+    const file = path.join(sourceRoot, entry.path)
+    if (!(await exists(file))) return null
+    const current = await fs.readFile(file, "utf8")
+    const sha = createHash("sha256").update(current).digest("hex")
+    if (sha === entry.beforeSha256) {
+      adaptedFiles.push(entry)
+      continue
+    }
+
+    // Check if the current file is pristine upstream matching all replacement anchors
+    let isPristine = true
+    for (const item of entry.replacements) {
+      const count = item.count ?? 1
+      if (current.split(item.search).length - 1 !== count) {
+        isPristine = false
+        break
+      }
+    }
+
+    if (isPristine) {
+      adaptedFiles.push({ ...entry, beforeSha256: sha })
+      continue
+    }
+
+    // Check if the file is already patched and restores cleanly
+    let restored = current
+    let canRestore = true
+    try {
+      for (const item of [...entry.replacements].reverse()) {
+        const count = item.count ?? 1
+        if (restored.split(item.replace).length - 1 !== count) {
+          canRestore = false
+          break
+        }
+        restored = restored.split(item.replace).join(item.search)
+      }
+    } catch {
+      canRestore = false
+    }
+
+    if (!canRestore) return null
+
+    for (const item of entry.replacements) {
+      const count = item.count ?? 1
+      if (restored.split(item.search).length - 1 !== count) {
+        canRestore = false
+        break
+      }
+    }
+
+    if (!canRestore) return null
+
+    const restoredSha = createHash("sha256").update(restored).digest("hex")
+    adaptedFiles.push({ ...entry, beforeSha256: restoredSha })
+  }
+
+  return {
+    ...manifest,
+    version,
+    compatibleProfile: manifest.version,
+    files: adaptedFiles,
+  }
+}
+
 async function loadManifest(file) {
   const module = await import(`${pathToFileURL(file).href}?profile=${encodeURIComponent(file)}`)
   return module.manifest
@@ -284,11 +365,20 @@ export async function resolvePatchProfile(root, version, sourceRoot) {
     const file = manifestFileFor(root, profileVersion)
     if (!(await exists(file))) continue
     const manifest = await loadManifest(file)
-    if (!(await manifestCompatible(sourceRoot, manifest))) continue
-    return {
-      manifest: { ...manifest, version, compatibleProfile: profileVersion },
-      profileVersion,
-      exact: false,
+    if (await manifestCompatible(sourceRoot, manifest)) {
+      return {
+        manifest: { ...manifest, version, compatibleProfile: profileVersion },
+        profileVersion,
+        exact: false,
+      }
+    }
+    const adapted = await adaptManifestForSource(sourceRoot, manifest, version)
+    if (adapted) {
+      return {
+        manifest: adapted,
+        profileVersion,
+        exact: false,
+      }
     }
   }
   return null
@@ -645,20 +735,6 @@ async function acquireLock(lock) {
   await fs.writeFile(lock, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
 }
 
-// A freshly completed in-place install ("built") must not be re-triggered by a
-// concurrent launch. Once the record goes stale the next launch retries, so a
-// failed install self-heals instead of wedging forever.
-const INSTALL_PENDING_STALE_MS = 120_000
-
-export function installPending(state, now = Date.now()) {
-  if (!state) return false
-  if (state.status !== "built") return false
-  const value = state.updatedAt
-  const ts = typeof value === "number" ? value : Date.parse(String(value ?? ""))
-  if (!Number.isFinite(ts)) return true
-  return now - ts <= INSTALL_PENDING_STALE_MS
-}
-
 export async function runSelfPatch(root, options = {}) {
   const toolchainRoot = path.resolve(options.toolchainRoot ?? root)
   const lock = lockFile(root)
@@ -769,9 +845,6 @@ export async function runSelfPatch(root, options = {}) {
         return null
       }
     }
-    const freshState = await readState(root)
-    if (installPending(freshState, Date.now()) && artifactMarker?.manifestSha256 === manifestSha) return null
-
     // A previously built patched binary that still matches the current
     // manifest can be installed directly: skip download/patch/build entirely
     // and replace the official binary in place (no process interaction).
@@ -785,11 +858,11 @@ export async function runSelfPatch(root, options = {}) {
         const patchedSha = await sha256File(patchedPath)
         const installed = await installPatchedBinary({ officialPath: bin.path, patchedPath })
         await writeState(root, {
-          status: installed.installed ? "built" : "installed",
+          status: "installed",
           progressPercent: 100,
           stepLabel: installed.installed
-            ? "Patched binary installed — restart OpenCode to activate"
-            : "Patched binary already installed; current-process activation is verified by the TUI",
+            ? "Host enhancements installed atomically; new OpenCode processes use them automatically"
+            : "Host enhancements already installed; current-process capability is verified by the TUI",
           version: bin.version,
           binaryPath: bin.path,
           officialSha256: installed.officialSha,
@@ -868,11 +941,11 @@ export async function runSelfPatch(root, options = {}) {
     })
     const installed = await installPatchedBinary({ officialPath: bin.path, patchedPath })
     await writeState(root, {
-      status: installed.installed ? "built" : "installed",
+      status: "installed",
       progressPercent: 100,
       stepLabel: installed.installed
-        ? "Patched binary installed — restart OpenCode to activate"
-        : "Patched binary already installed; current-process activation is verified by the TUI",
+        ? "Host enhancements installed atomically; new OpenCode processes use them automatically"
+        : "Host enhancements already installed; current-process capability is verified by the TUI",
       version: bin.version,
       binaryPath: bin.path,
       officialSha256: installed.officialSha,

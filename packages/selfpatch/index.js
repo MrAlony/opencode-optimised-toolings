@@ -42,7 +42,7 @@ export async function SelfPatchPlugin() {
     // Maintenance diagnostics belong in structured status, never painted over
     // the active terminal. Portable tools remain available and the next launch
     // retries registration.
-    tuiRegistration = { error: error?.message ?? String(error), changed: false, restartRequired: false }
+    tuiRegistration = { error: error?.message ?? String(error), changed: false, restartRequired: false, automaticForNewProcesses: false }
   }
 
   function ensureStarted() {
@@ -114,7 +114,7 @@ export async function SelfPatchPlugin() {
             state.compatibilityProfile ? `Compatibility profile: v${state.compatibilityProfile} (${state.compatibilityMode ?? "verified"})` : null,
             tuiRegistration.error
               ? `TUI companion registration: failed — ${tuiRegistration.error}`
-              : `TUI companion registration: ${tuiRegistration.changed ? "added; restart required" : "present"}${tuiRegistration.configPath ? ` (${tuiRegistration.configPath})` : ""}`,
+              : `TUI companion registration: ${tuiRegistration.changed ? "installed for new OpenCode processes" : "present"}${tuiRegistration.configPath ? ` (${tuiRegistration.configPath})` : ""}`,
             state.progressPercent > 0 ? `Progress: ${state.progressPercent}% — ${state.stepLabel}` : `Step: ${state.stepLabel}`,
             state.lastError ? `Last error: ${state.lastError}` : null,
           ]

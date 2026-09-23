@@ -51,7 +51,7 @@ if (bin && !bin.devMode && bin.path) {
         {
           status: "built",
           progressPercent: 100,
-          stepLabel: "Patched binary installed — restart OpenCode to activate",
+          stepLabel: "Patched binary installed atomically — newly opened OpenCode processes use it automatically",
           version: bin.version,
           binaryPath: bin.path,
           patchedSha256: result.patchedSha,

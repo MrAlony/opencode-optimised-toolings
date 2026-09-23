@@ -46,6 +46,8 @@ test("installed update provisions the complete next generation while preserving 
     const pointer = JSON.parse(readFileSync(join(f.configDir, ".sparkly-toolings-tui.json"), "utf8"))
     const deployment = JSON.parse(readFileSync(join(f.configDir, "alonix", "deployment.json"), "utf8"))
     assert.equal(result.changed, true)
+    assert.equal(result.restartRequired, false)
+    assert.equal(result.automaticForNewProcesses, true)
     assert.equal(config.plugin[0], "opencode-optimised-toolings@latest")
     assert.deepEqual(tui.plugin, ["old-tui", "other-tui"])
     assert.equal(pointer.spec, "opencode-optimised-toolings@latest")

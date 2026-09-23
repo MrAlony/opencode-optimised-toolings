@@ -8,7 +8,7 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)))
 try {
   const result = await developmentDeployment(root, { reconcileHost: runSelfPatch })
   if (!result.status.ok) throw new Error(`deployment remains inconsistent: ${JSON.stringify(result.status.checks)}`)
-  console.log(`INSTALL SUCCESS: direct checkout reconciled through ${result.status.files.deployment}. Fully quit and restart OpenCode.`)
+  console.log(`INSTALL SUCCESS: direct checkout reconciled through ${result.status.files.deployment}. Newly opened OpenCode processes use it automatically.`)
 } catch (error) {
   console.error(`INSTALL FAILED: ${error?.message ?? error}`)
   process.exitCode = 1

@@ -70,7 +70,8 @@ export async function stagePackageUpdate(packageRoot, options = {}) {
     generation: generation.root,
     serverSpec: generation.specs.server,
     tuiSpec: generation.specs.tui,
-    restartRequired: activation.changed,
+    restartRequired: false,
+    automaticForNewProcesses: activation.changed,
     files: activation.files,
     backups: activation.backups ?? [],
   }

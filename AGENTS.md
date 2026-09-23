@@ -2,7 +2,7 @@
 
 ## Deployment control plane
 
-The only supported deployment-management interface is `npm run toolings -- status|doctor|reconcile`. Installed users declare only `opencode-optimised-toolings@latest` in `opencode.json`; `tui.json` must contain no Alonix entry. The canonical internal desired state is `~/.config/opencode/alonix/deployment.json`; the TUI bridge, `.sparkly-toolings-tui.json`, immutable generations, and host-patch state are derived implementation details. Never edit or activate those outputs independently. Use `reconcile --source=checkout` for direct-local validation; candidate/update/release tooling must call the same reconciler.
+The only supported deployment-management interface is `npm run toolings -- status|doctor|reconcile|detach`. Installed users declare only `opencode-optimised-toolings@latest` in `opencode.json`; `tui.json` must contain no Alonix entry. The canonical internal desired state is `~/.config/opencode/alonix/deployment.json`; the TUI bridge, `.sparkly-toolings-tui.json`, immutable generations, and host-patch state are derived implementation details. Never edit or activate those outputs independently. Use `reconcile --source=checkout` for direct-local validation; candidate/update/release tooling must call the same reconciler.
 
 ## Release policy: local-only, no runners
 

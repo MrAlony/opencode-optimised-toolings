@@ -22,7 +22,8 @@ function executeTui(root, options = {}) {
   const runtime = mkdtempSync(join(tmpdir(), "alonix-tui-runtime-"))
   const script = `
     import { pathToFileURL } from "node:url";
-    import { resolve } from "node:path";
+    import { readFileSync, readdirSync } from "node:fs";
+    import { join, resolve } from "node:path";
     import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support/configure";
     ensureRuntimePluginSupport();
     const options=${JSON.stringify(options)};
@@ -55,12 +56,18 @@ function executeTui(root, options = {}) {
     setTimeout(()=>setKvReady(true),100);
     try{await loaded.default.tui(api,{animations:false})}catch(error){callbackError=error?.stack??String(error)}
     await new Promise(done=>setTimeout(done,5_300));
+    let lifecycleBeforeDispose=null;
+    try{
+      const runtime=process.env.OPENCODE_TOOLINGS_DATA_DIR;
+      const file=readdirSync(runtime).find(name=>name.startsWith("tui-activation-")&&name.endsWith(".json"));
+      if(file)lifecycleBeforeDispose=JSON.parse(readFileSync(join(runtime,file),"utf8"));
+    }catch{}
     for(const dispose of calls.disposes.reverse()){try{dispose()}catch{}}
-    console.log(JSON.stringify({callbackError,uncaught,calls:{...calls,disposes:calls.disposes.length},kv:Object.fromEntries(initialKv)}));
+    console.log(JSON.stringify({callbackError,uncaught,lifecycleBeforeDispose,calls:{...calls,disposes:calls.disposes.length},kv:Object.fromEntries(initialKv)}));
     if(callbackError||uncaught)process.exitCode=2;
   `
   return new Promise((done) => {
-    const child = spawn(bun, ["--eval", script], { cwd: repositoryRoot, env: { ...process.env, OPENCODE_TOOLINGS_DATA_DIR: runtime }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    const child = spawn(bun, ["--eval", script], { cwd: repositoryRoot, env: { ...process.env, OPENCODE_TOOLINGS_DATA_DIR: runtime, OPENCODE_CONFIG_DIR: join(runtime, "config") }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
     let stdout = ""
     let stderr = ""
     child.stdout.setEncoding("utf8")
@@ -88,9 +95,11 @@ test("complete TUI callback remains healthy after its first status poll and inte
   assert.equal(outcome.code, 0, outcome.stderr || outcome.stdout)
   assert.equal(outcome.value?.callbackError, null)
   assert.equal(outcome.value?.uncaught, null)
-  assert.equal(outcome.lifecycle?.status, "active", JSON.stringify(outcome.lifecycle))
-  assert.equal(outcome.lifecycle?.stage, "complete", JSON.stringify(outcome.lifecycle))
-  assert.equal(outcome.lifecycle?.pollError, undefined, JSON.stringify(outcome.lifecycle))
+  assert.equal(outcome.value?.lifecycleBeforeDispose?.status, "active", JSON.stringify(outcome.value?.lifecycleBeforeDispose))
+  assert.equal(outcome.value?.lifecycleBeforeDispose?.stage, "complete", JSON.stringify(outcome.value?.lifecycleBeforeDispose))
+  assert.equal(outcome.value?.lifecycleBeforeDispose?.pollError, undefined, JSON.stringify(outcome.value?.lifecycleBeforeDispose))
+  assert.equal(outcome.lifecycle?.status, "disposed", JSON.stringify(outcome.lifecycle))
+  assert.equal(outcome.lifecycle?.stage, "lifecycle-disposed", JSON.stringify(outcome.lifecycle))
   assert.deepEqual(outcome.value?.calls.routes, ["alonix-settings", "alonix-workbench"])
   assert.equal(outcome.value?.calls.renderers.length, 16)
   assert.ok(outcome.value?.calls.slots.includes("app_left"))
@@ -126,11 +135,14 @@ test("missing host renderer capability is lifecycle-degraded rather than falsely
   const outcome = await executeTui(repositoryRoot, { renderers: false })
   assert.equal(outcome.code, 0, outcome.stderr || outcome.stdout)
   assert.equal(outcome.value?.callbackError, null)
-  assert.equal(outcome.lifecycle?.status, "degraded", JSON.stringify(outcome.lifecycle))
-  assert.equal(outcome.lifecycle?.stage, "complete-portable", JSON.stringify(outcome.lifecycle))
-  assert.equal(outcome.lifecycle?.renderersAvailable, false)
-  assert.equal(outcome.lifecycle?.renderersRegistered, 0)
-  assert.equal(outcome.lifecycle?.missingCapability, "api.toolRenderers")
+  const active = outcome.value?.lifecycleBeforeDispose
+  assert.equal(active?.status, "degraded", JSON.stringify(active))
+  assert.equal(active?.stage, "complete-portable", JSON.stringify(active))
+  assert.equal(active?.renderersAvailable, false)
+  assert.equal(active?.renderersRegistered, 0)
+  assert.equal(active?.missingCapability, "api.toolRenderers")
+  assert.equal(outcome.lifecycle?.status, "disposed", JSON.stringify(outcome.lifecycle))
+  assert.equal(outcome.lifecycle?.stage, "lifecycle-disposed", JSON.stringify(outcome.lifecycle))
 })
 
 test("checkout and staged generation restore the same delayed-KV state and registration transcript", async (context) => {
@@ -143,5 +155,7 @@ test("checkout and staged generation restore the same delayed-KV state and regis
     assert.deepEqual(installed.value?.calls?.[key], checkout.value?.calls?.[key], `${key} must match exactly`)
   }
   assert.deepEqual(semanticKv(installed.value?.kv), semanticKv(checkout.value?.kv), "restored and migrated IDE state must match semantically")
-  assert.equal(installed.lifecycle?.stage, checkout.lifecycle?.stage)
+  assert.equal(installed.value?.lifecycleBeforeDispose?.stage, checkout.value?.lifecycleBeforeDispose?.stage)
+  assert.equal(installed.lifecycle?.stage, "lifecycle-disposed")
+  assert.equal(checkout.lifecycle?.stage, "lifecycle-disposed")
 })

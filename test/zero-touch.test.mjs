@@ -36,9 +36,11 @@ test("root aggregator preserves config hooks and registers every tool family", a
 test("transport provisioning failures degrade without rejecting tool registration or printing over the TUI", async () => {
   const previousMode = process.env.OPENCODE_TOOLINGS_PACKAGE_MODE
   const previousData = process.env.OPENCODE_TOOLINGS_DATA_DIR
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
   const configDir = mkdtempSync(join(tmpdir(), "alonix-transport-degraded-"))
   try {
     process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = "development"
+    process.env.OPENCODE_CONFIG_DIR = configDir
     process.env.OPENCODE_TOOLINGS_DATA_DIR = join(configDir, "runtime")
     const hooks = await plugin({})
     assert.equal(Object.keys(hooks.tool ?? {}).length, 17)
@@ -48,6 +50,8 @@ test("transport provisioning failures degrade without rejecting tool registratio
     else process.env.OPENCODE_TOOLINGS_PACKAGE_MODE = previousMode
     if (previousData === undefined) delete process.env.OPENCODE_TOOLINGS_DATA_DIR
     else process.env.OPENCODE_TOOLINGS_DATA_DIR = previousData
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
     rmSync(configDir, { recursive: true, force: true })
   }
 })

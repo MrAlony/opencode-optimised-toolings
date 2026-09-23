@@ -10,14 +10,18 @@ import {
   deploymentRecordPath,
   ensurePackageGeneration,
   generationSpecs,
+  generationsRoot,
+  isManagedEntry,
   liveRuntimeProcesses,
   packageFingerprint,
   publicPackageSpecs,
   runtimeAttestation,
+  setJsonc,
   tuiCoordinationPath,
   validateGeneration,
 } from "./generation.js"
 import { PACKAGE_NAME, PACKAGE_SPEC, openCodeConfigDir, packageVersion, runtimeRootForPackage } from "./paths.js"
+import { AGENTS_BLOCK_START, AGENTS_BLOCK_END } from "../bootstrap/index.js"
 
 function normalize(value) {
   const result = resolve(String(value ?? ""))
@@ -228,17 +232,35 @@ export async function writeHostDeployment(packageRoot, state, options = {}) {
 export async function deploymentStatus(options = {}) {
   const configDir = resolve(options.configDir ?? openCodeConfigDir(options.env))
   const files = configFiles(configDir)
-  const record = await readJson(files.deployment)
+  const [record, server, tui, pointer] = await Promise.all([
+    readJson(files.deployment),
+    configuredSpec(files.server),
+    configuredSpec(files.tui),
+    readJson(files.pointer),
+  ])
   const desired = record?.desired ?? null
+  const detached = !record && !server.spec && !tui.spec && !pointer?.spec
   const checks = []
   const add = (name, ok, detail) => checks.push({ name, ok: Boolean(ok), detail })
+
+  if (detached) {
+    add("canonical deployment record", true, "cleanly detached (none declared)")
+    add("desired package root", true, "cleanly detached")
+    add("server config derived", true, "cleanly detached (no plugin declared)")
+    add("TUI config derived", true, "cleanly detached (no plugin declared)")
+    add("coordination pointer derived", true, "cleanly detached")
+    add("runtime package authority", true, "cleanly detached")
+    add("host runtime reconciled", true, "cleanly detached")
+    add("live plugin generation", true, "no live Alonix process observed")
+    return { ok: true, detached: true, configDir, desired: null, files, checks, host: { state: null, actualSha256: null, expectedSha256: null }, runtime: { live: [], stale: [], matching: [] } }
+  }
+
   add("canonical deployment record", record?.authority === "opencode-optimised-toolings-control-plane" && desired?.package === PACKAGE_NAME, files.deployment)
 
   let generation = null
   if (desired?.root && desired?.version) generation = await validateGeneration(desired.root, desired.version)
   add("desired package root", generation?.valid === true, generation?.valid ? desired.root : generation?.reason ?? "missing desired deployment")
 
-  const [server, tui, pointer] = await Promise.all([configuredSpec(files.server), configuredSpec(files.tui), readJson(files.pointer)])
   add("server config derived", server.valid && server.spec === desired?.serverSpec, server.spec ?? "missing")
   const expectedTuiConfigSpec = Object.hasOwn(desired ?? {}, "tuiConfigSpec") ? desired.tuiConfigSpec : desired?.tuiSpec
   add("TUI config derived", tui.valid && tui.spec === expectedTuiConfigSpec, tui.spec ?? (expectedTuiConfigSpec === null ? "not declared (server package bridge)" : "missing"))
@@ -323,7 +345,139 @@ export async function developmentDeployment(packageRoot, options = {}) {
 }
 
 export function deploymentSummary(status) {
-  const lines = [`Deployment: ${status.ok ? "consistent" : "DRIFTED"}`, `Desired: ${status.desired ? `v${status.desired.version} · ${status.desired.root}` : "not declared"}`]
+  const stateLabel = status.detached ? "DETACHED" : status.ok ? "consistent" : "DRIFTED"
+  const desiredLabel = status.desired ? `v${status.desired.version} · ${status.desired.root}` : "not declared (cleanly detached)"
+  const lines = [`Deployment: ${stateLabel}`, `Desired: ${desiredLabel}`]
   for (const check of status.checks) lines.push(`- [${check.ok ? "PASS" : "FAIL"}] ${check.name}: ${check.detail}`)
   return lines.join("\n")
 }
+
+export async function detachDeployment(options = {}) {
+  const configDir = resolve(options.configDir ?? openCodeConfigDir(options.env))
+  const files = configFiles(configDir)
+  const modified = []
+  const removed = []
+  const backupDir = join(configDir, "alonix", "backups")
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+
+  // 1. Clean server configs: check both opencode.jsonc and opencode.json
+  const candidateServerFiles = [
+    join(configDir, "opencode.jsonc"),
+    join(configDir, "opencode.json"),
+  ]
+  for (const file of candidateServerFiles) {
+    if (!existsSync(file)) continue
+    const text = await fs.readFile(file, "utf8").catch(() => null)
+    if (!text) continue
+    const doc = parseConfig(text)
+    if (!doc) continue
+    const plugins = Array.isArray(doc.plugin) ? doc.plugin : []
+    const hasManaged = plugins.some((p) => isManagedEntry(p))
+    if (hasManaged) {
+      const nextPlugins = plugins.filter((p) => !isManagedEntry(p))
+      const after = setJsonc(text, ["plugin"], nextPlugins)
+      if (after !== text) {
+        await fs.mkdir(backupDir, { recursive: true })
+        await fs.writeFile(join(backupDir, `${stamp}-detach-${basename(file)}`), text, { encoding: "utf8", mode: 0o600 })
+        await atomicWrite(file, after)
+        modified.push(file)
+      }
+    }
+  }
+
+  // 2. Clean TUI config: tui.json
+  if (existsSync(files.tui)) {
+    const text = await fs.readFile(files.tui, "utf8").catch(() => null)
+    if (text) {
+      const doc = parseConfig(text)
+      if (doc) {
+        const plugins = Array.isArray(doc.plugin) ? doc.plugin : []
+        const hasManaged = plugins.some((p) => isManagedEntry(p))
+        if (hasManaged) {
+          const nextPlugins = plugins.filter((p) => !isManagedEntry(p))
+          const after = setJsonc(text, ["plugin"], nextPlugins)
+          if (after !== text) {
+            await fs.mkdir(backupDir, { recursive: true })
+            await fs.writeFile(join(backupDir, `${stamp}-detach-${basename(files.tui)}`), text, { encoding: "utf8", mode: 0o600 })
+            await atomicWrite(files.tui, after)
+            modified.push(files.tui)
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Remove coordination pointer (.sparkly-toolings-tui.json)
+  if (existsSync(files.pointer)) {
+    await fs.rm(files.pointer, { force: true }).catch(() => {})
+    removed.push(files.pointer)
+  }
+
+  // 4. Clean deployment record (alonix/deployment.json)
+  if (existsSync(files.deployment)) {
+    await fs.mkdir(backupDir, { recursive: true })
+    const deploymentText = await fs.readFile(files.deployment, "utf8").catch(() => null)
+    if (deploymentText) {
+      await fs.writeFile(join(backupDir, `${stamp}-detach-deployment.json`), deploymentText, { encoding: "utf8", mode: 0o600 })
+    }
+    await fs.rm(files.deployment, { force: true }).catch(() => {})
+    removed.push(files.deployment)
+  }
+
+  // 5. Clean AGENTS.md instructions block
+  const agentsFile = join(configDir, "AGENTS.md")
+  if (existsSync(agentsFile)) {
+    const text = await fs.readFile(agentsFile, "utf8").catch(() => null)
+    if (text) {
+      const start = text.indexOf(AGENTS_BLOCK_START)
+      const end = text.indexOf(AGENTS_BLOCK_END)
+      if (start >= 0 && end > start) {
+        await fs.mkdir(backupDir, { recursive: true })
+        await fs.writeFile(join(backupDir, `${stamp}-detach-AGENTS.md`), text, { encoding: "utf8", mode: 0o600 })
+        const beforeBlock = text.slice(0, start).replace(/\s*$/, "")
+        const afterBlock = text.slice(end + AGENTS_BLOCK_END.length).replace(/^\s*/, "")
+        const eol = text.includes("\r\n") ? "\r\n" : "\n"
+        const nextAgents = beforeBlock && afterBlock ? `${beforeBlock}${eol}${eol}${afterBlock}` : beforeBlock || afterBlock
+        await atomicWrite(agentsFile, nextAgents ? `${nextAgents}${eol}` : "")
+        modified.push(agentsFile)
+      }
+    }
+  }
+
+  // 6. If purgeCache is requested, clean up package cache and runtime generations
+  const purged = []
+  if (options.purgeCache === true) {
+    const cacheRoot = openCodePackageCacheRoot(options.env)
+    if (existsSync(cacheRoot)) {
+      const entries = await fs.readdir(cacheRoot).catch(() => [])
+      for (const entry of entries) {
+        const target = join(cacheRoot, entry)
+        if (entry.toLowerCase().startsWith(PACKAGE_NAME.toLowerCase())) {
+          await fs.rm(target, { recursive: true, force: true }).catch(() => {})
+          purged.push(target)
+        } else if (entry.startsWith("@")) {
+          const scopedEntries = await fs.readdir(target).catch(() => [])
+          for (const scoped of scopedEntries) {
+            if (scoped.toLowerCase().startsWith(PACKAGE_NAME.toLowerCase())) {
+              const scopedTarget = join(target, scoped)
+              await fs.rm(scopedTarget, { recursive: true, force: true }).catch(() => {})
+              purged.push(scopedTarget)
+            }
+          }
+          const remaining = await fs.readdir(target).catch(() => [])
+          if (remaining.length === 0) {
+            await fs.rm(target, { recursive: true, force: true }).catch(() => {})
+          }
+        }
+      }
+    }
+    const genRoot = generationsRoot(options.env)
+    if (existsSync(genRoot)) {
+      await fs.rm(genRoot, { recursive: true, force: true }).catch(() => {})
+      purged.push(genRoot)
+    }
+  }
+
+  return { ok: true, configDir, modified, removed, purged }
+}
+

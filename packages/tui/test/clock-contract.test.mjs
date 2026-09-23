@@ -37,6 +37,15 @@ test("createClock exposes a controller object, not a callable tick", async () =>
   }
 })
 
+test("TUI lifecycle uses a renewable per-instance lease and records disposal", async () => {
+  const entry = await source("index.tsx")
+  assert.match(entry, /lifecycleInstance/)
+  assert.match(entry, /writeTuiLifecycle\([\s\S]*\{ instanceId: lifecycleInstance \}\)/)
+  assert.match(entry, /setInterval\(\(\) => \{[\s\S]*heartbeat: true[\s\S]*\}, 10_000\)/)
+  assert.match(entry, /clearInterval\(lifecycleHeartbeat\)/)
+  assert.match(entry, /record\("disposed", "lifecycle-disposed"/)
+})
+
 test("Windows focus-in restores terminal modes without consuming native input", async () => {
   const entry = await source("index.tsx")
   const recovery = await source("lib/terminal-recovery.js")

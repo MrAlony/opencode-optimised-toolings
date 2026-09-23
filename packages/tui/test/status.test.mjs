@@ -41,7 +41,8 @@ test("indicatorFor maps statuses to visible levels", () => {
   assert.equal(indicatorFor({ status: "building", progressPercent: 40, stepLabel: "Rebuilding" }).level, "warn")
   assert.equal(indicatorFor({ status: "built" }).level, "info")
   assert.equal(indicatorFor({ status: "installed" }).text, "Host enhancements installed")
-  assert.match(indicatorFor({ status: "built" }).text, /restart OpenCode/i)
+  assert.equal(indicatorFor({ status: "built" }).text, "Host enhancements installed")
+  assert.doesNotMatch(indicatorFor({ status: "built" }).detail, /restart/i)
 })
 
 test("live renderer registration outranks a stale or dev-host state record", () => {
@@ -58,7 +59,8 @@ test("live renderer registration outranks a stale or dev-host state record", () 
   // but keeps it visible as a warning rather than a false fatal state.
   assert.equal(indicatorFor({ status: "error", lastError: "boom" }, evidence).level, "warn")
   assert.match(indicatorFor({ status: "error", lastError: "boom" }, evidence).detail, /maintenance check failed/i)
-  assert.match(indicatorFor({ status: "built" }, evidence).text, /restart OpenCode/i)
+  assert.match(indicatorFor({ status: "built" }, evidence).text, /Patched binary active/)
+  assert.doesNotMatch(indicatorFor({ status: "built" }, evidence).text, /restart/i)
   // With no renderers the state file remains authoritative.
   assert.equal(indicatorFor({ status: "dev-mode" }, { renderersRegistered: 0 }).level, "info")
   assert.equal(indicatorFor({ status: "dev-mode" }).level, "info")
@@ -93,7 +95,8 @@ test("toastForTransition only fires on meaningful transitions", () => {
   assert.equal(toastForTransition(null, { status: "building" }), null)
   assert.equal(toastForTransition({ status: "building" }, { status: "building" }), null)
   assert.ok(toastForTransition({ status: "building" }, { status: "built" }))
-  assert.match(toastForTransition({ status: "building" }, { status: "built" }).message, /restart OpenCode/i)
+  assert.match(toastForTransition({ status: "building" }, { status: "built" }).message, /automatically/i)
+  assert.doesNotMatch(toastForTransition({ status: "building" }, { status: "built" }).message, /restart/i)
   assert.equal(toastForTransition({ status: "built" }, { status: "built" }), null)
   assert.equal(toastForTransition({ status: "building" }, { status: "built" }, { renderersRegistered: 16 }), null)
   assert.ok(toastForTransition({ status: "built" }, { status: "ok" }))

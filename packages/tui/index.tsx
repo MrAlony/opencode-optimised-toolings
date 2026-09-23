@@ -2,9 +2,11 @@
 import type { JSX } from "@opentui/solid"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { basename, join } from "node:path"
 import { createMemo, createRoot, createSignal } from "solid-js"
-import { runtimeAttestation, writeTuiLifecycle } from "../shared/generation.js"
-import { packageRootFrom } from "../shared/paths.js"
+import { isManagedEntry, parseDocument, runtimeAttestation, setJsonc, tuiCoordinationPath, writeTuiLifecycle } from "../shared/generation.js"
+import { openCodeConfigDir, packageRootFrom } from "../shared/paths.js"
 import {
   customTools,
   formatStateLog,
@@ -106,8 +108,49 @@ function toolSkin(tokens: Tokens) {
   }
 }
 
+function shouldBailGhostTui(options?: Record<string, unknown>): boolean {
+  if (options?.standalone === true || options?.force === true) return false
+  if (process.env.OPENCODE_TOOLINGS_DATA_DIR && !process.env.OPENCODE_CONFIG_DIR) return false
+  try {
+    const configDir = openCodeConfigDir()
+    const jsonc = join(configDir, "opencode.jsonc")
+    const json = join(configDir, "opencode.json")
+    const serverFile = existsSync(jsonc) ? jsonc : existsSync(json) ? json : null
+    if (!serverFile) return false
+    const text = readFileSync(serverFile, "utf8")
+    const doc = parseDocument(text, basename(serverFile))
+    const plugins = Array.isArray(doc.plugin) ? doc.plugin : []
+    const hasServerPlugin = plugins.some((entry: unknown) => isManagedEntry(entry))
+    if (hasServerPlugin) return false
+
+    // Server config exists but has NO Alonix entry.
+    // Clean up orphaned tui.json entry and coordination pointer.
+    const tuiFile = join(configDir, "tui.json")
+    if (existsSync(tuiFile)) {
+      try {
+        const tuiText = readFileSync(tuiFile, "utf8")
+        const tuiDoc = parseDocument(tuiText, "tui.json")
+        const tuiPlugins = Array.isArray(tuiDoc.plugin) ? tuiDoc.plugin : []
+        if (tuiPlugins.some((entry: unknown) => isManagedEntry(entry))) {
+          const nextTuiPlugins = tuiPlugins.filter((entry: unknown) => !isManagedEntry(entry))
+          const after = setJsonc(tuiText, ["plugin"], nextTuiPlugins)
+          if (after !== tuiText) writeFileSync(tuiFile, after, "utf8")
+        }
+      } catch {}
+    }
+    const pointerFile = tuiCoordinationPath(configDir)
+    if (existsSync(pointerFile)) {
+      try { rmSync(pointerFile, { force: true }) } catch {}
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 const tui: TuiPlugin = async (api, options) => {
   if (options?.enabled === false) return
+  if (shouldBailGhostTui(options as Record<string, unknown> | undefined)) return
 
   // Server and TUI are direct files from one immutable generation root. This is
   // intentionally identical to the known-good direct-checkout topology.
@@ -115,7 +158,9 @@ const tui: TuiPlugin = async (api, options) => {
   const statePath = statePathForRoot(root)
   const motion = options?.animations !== false
   const attestation = await runtimeAttestation(root, { role: "tui" })
+  const lifecycleInstance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
   const lifecycle = {
+    instanceId: lifecycleInstance,
     version: attestation.version ?? undefined,
     root,
     directGeneration: true,
@@ -132,9 +177,11 @@ const tui: TuiPlugin = async (api, options) => {
     slotsRegistered: false,
     keymapRegistered: false,
   }
+  let lifecycleStatus = "initializing"
   const record = (status: string, stage: string, detail: Record<string, unknown> = {}) => {
+    lifecycleStatus = status
     lifecycle.stage = stage
-    try { writeTuiLifecycle(root, status, { ...lifecycle, ...detail }) } catch {}
+    try { writeTuiLifecycle(root, status, { ...lifecycle, ...detail }, { instanceId: lifecycleInstance }) } catch {}
   }
   record("initializing", "runtime-attested")
   if (attestation.sourceMatchesMarker === false) {
@@ -781,6 +828,14 @@ const tui: TuiPlugin = async (api, options) => {
     throw error
   }
 
+  // Keep a per-instance lease current so deployment diagnostics can distinguish
+  // a live TUI scope from a stale PID or a scope that the host explicitly
+  // disposed. The timer is intentionally coarse and never drives rendering.
+  const lifecycleHeartbeat = setInterval(() => {
+    record(lifecycleStatus, lifecycle.stage, { heartbeat: true })
+  }, 10_000)
+  lifecycleHeartbeat.unref?.()
+
   // Live patch-progress toasts, one per transition, from the same poller.
   let previous: unknown = null
   let toolingStateFingerprint = JSON.stringify(toolingState())
@@ -807,6 +862,8 @@ const tui: TuiPlugin = async (api, options) => {
   }, 750)
   api.lifecycle.onDispose(() => {
     clearInterval(poll)
+    clearInterval(lifecycleHeartbeat)
+    record("disposed", "lifecycle-disposed", { disposedAt: new Date().toISOString() })
     scope.stopDockHydration()
     scope.disposeRoot()
   })
